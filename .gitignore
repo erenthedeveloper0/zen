@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.zen/
+*.tsbuildinfo
+coverage/
+.turbo/
+.DS_Store
+.env
+.env.*
+!.env.example
+benchmarks/results/local/
+*.log
+benchmarks/typecheck/.generated/
+HANDOFF.md
+npm-registry.md
+TASKS.md

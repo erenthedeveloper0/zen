@@ -1,0 +1,243 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.x', '24.x']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # Builds every package, then type-checks the examples against the built
+      # declarations. An example that does not compile is worse than no
+      # example, and this is how one stayed broken (§8.2.1).
+      - name: Typecheck & build
+        run: npm run typecheck
+
+      # 611 tests: unit, integration, differential (compiled ≡ interpreted —
+      # random hook plans crossed with random middleware chains, and random
+      # chains where the deadline blows at a random position, which must agree
+      # on *which* boundary abandoned the request), type-level, the
+      # monomorphism assertion (I2, §20.7), and the §29.1 drift check:
+      # documented response fields must equal the fields the compiled
+      # serializer actually emits, and 11.4's coercion fuzzer, which asserts
+      # three things beyond compiled-equals-interpreted: coercing twice equals
+      # coercing once, no key is invented, and a position whose schema accepts
+      # a string is never converted. §16's config suite has no differential twin
+      # and should not — it compiles nothing — so its fuzzer is a *property*
+      # suite over random layer stacks: the fold is total, deterministic,
+      # invents no path, freezes to the leaves, and never lets a secret reach a
+      # projection. It is the suite that caught the scalar/branch collision that
+      # the hand-written test passed against.
+      - name: Test
+        run: npm test
+
+      # Real sockets, real HTTP — proves the adapter and wire format, which
+      # inject() deliberately bypasses. Includes the §13.3 leak check (a route
+      # whose handler returns a passwordHash must not put it on the wire), the
+      # §29.2 endpoints including that the viewer makes no external request, the
+      # §9.4 stage-10 contract (`onResponse` runs after the adapter has flushed,
+      # so a real socket is the only place it is honestly under test), §4.4:
+      # a handler that never returns must give its *socket* back on time, which
+      # is a claim only a real connection can falsify, and §4.5 step 1: readiness
+      # must report `draining` while the server is still accepting — which needs
+      # an open socket and a shutting-down process at the same moment, and was
+      # running in the wrong order for as long as nothing could ask.
+      - name: Smoke test
+        run: node scripts/smoke.ts
+
+      # §29.7 — the generated document is diffed against the committed baseline
+      # and a breaking change fails the build. An API change should be reviewed
+      # as an API change, not as a diff in a routes file.
+      - name: API compatibility gate
+        run: npm run openapi:check
+
+  type-performance:
+    name: type-check performance gate (M2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+      # §28.2 — a type-level performance regression is as user-visible as a
+      # runtime one and is normally noticed far too late. Numbers are printed on
+      # every run so the trend is inspectable, not just the pass/fail.
+      - name: Type-check performance matrix
+        run: node benchmarks/typecheck/run.ts
+
+      # §13.3.2 — the serializer benchmark asserts byte-equality with
+      # JSON.stringify and between the two engines *before* it times anything,
+      # so a "win" produced by emitting something different fails the job rather
+      # than printing a good number.
+      - name: Serializer throughput
+        run: node benchmarks/serializer/run.ts
+
+      - name: String-escape crossover
+        run: node benchmarks/serializer/escape.ts
+
+      # §29.8 — generation cost at 100/250/500 routes, what $ref dedup saves,
+      # and the assertion that matters most: registering the OpenAPI plugin must
+      # not change per-request cost beyond the measurement noise. The document is
+      # built once, at boot; a regression here means something started running
+      # per request.
+      - name: OpenAPI generation cost
+        run: node benchmarks/openapi/run.ts
+
+      # §9.4 — the claim is that a phase you do not use costs nothing, and the
+      # step that enforces it is not the timing: the benchmark fails the job if
+      # the generated pipeline for a hookless route stops being *byte identical*
+      # to one compiled in an app with eight phases registered elsewhere. It
+      # also fails if hooks and phase middleware stop compiling to the same call
+      # site, which is what makes "pick whichever fits the concern" true.
+      - name: Hook system cost
+        run: node benchmarks/hooks/run.ts
+
+      # §4.4 — the same discipline for deadlines, and it gates in both
+      # directions. The job fails if a route that declared no timeout stops
+      # being byte-identical to one compiled in an app that never heard of the
+      # feature; and it fails if a route that *did* declare one stops emitting
+      # every §4.1 stage boundary, because losing a boundary would remove
+      # cancellation silently — the arm would still answer on time and the
+      # abandoned request would simply keep working behind it.
+      - name: Deadline cost
+        run: node benchmarks/deadlines/run.ts
+
+      # §31.4 — three gates, and only the first is the familiar zero-cost one.
+      # The job fails if registering the health plugin changes an application
+      # route's generated pipeline by a byte; if a stampede of simultaneous
+      # polls produces more than one probe, because collapsing them is the
+      # whole feature and it protects the component least able to absorb load
+      # at the exact moment it is least able to; and if a wedged dependency
+      # escapes its own budget or hides a healthy sibling's answer, which is
+      # the failure that takes hand-written health endpoints down.
+      - name: Health & readiness cost
+        run: node benchmarks/health/run.ts
+
+      # 11.4 — two gates, and the second is a correctness one that lives in a
+      # benchmark on purpose. The job fails if a route whose schema declares
+      # only strings stops compiling to a byte-identical pipeline or starts
+      # emitting a coercer; and it fails if a declared string is ever converted,
+      # because "?zip=01234 becomes 1234" is the failure this design exists to
+      # make impossible and it is exactly the property a later optimisation
+      # would be tempted to trade for a faster path.
+      - name: Coercion cost
+        run: node benchmarks/coercion/run.ts
+
+      # §16 — two gates, and the second is a security one that lives in a
+      # benchmark for the same reason §11.4's does: it is the property a later
+      # optimisation would be most tempted to trade away, because building the
+      # snapshot twice (once with secrets, once without) is the obvious way to
+      # make `explainConfig` cheaper. The job fails if a route that never reads
+      # configuration stops compiling to a byte-identical pipeline *or a
+      # byte-identical context class* — the second is the one that matters,
+      # because it is what stops `ctx.config` from becoming a field on the
+      # context — and it fails if a secret reaches the AppGraph snapshot,
+      # `explainConfig`, or `JSON.stringify(app.config)`.
+      - name: Configuration cost
+        run: node benchmarks/config/run.ts
+
+      # §32 — two gates, and the second is a security one, in a benchmark for
+      # the same reason §11.4's and §16's are: it is the property a later
+      # optimisation is most tempted to trade away. The job fails if importing
+      # the middleware pack changes the generated pipeline of a route that does
+      # not use it; and it fails if an origin outside the allowlist is ever
+      # reflected, under any of six shapes of allowlist crossed with eight
+      # hostile origins. Reflecting whatever arrives is the fastest possible
+      # CORS, which is exactly why it needs a gate rather than a test.
+      #
+      # It also fails if the rate limiter's store retains a window that has
+      # ended, or takes more than a millisecond to release one — a limiter
+      # keyed on something the client chooses is a memory DoS unless eviction
+      # is O(1), and a sweep under load is the failure that looks like a leak.
+      - name: Middleware pack cost
+        run: node benchmarks/middleware/run.ts
+
+      # §13.4 — three gates, and the middle one is the security gate this
+      # subsystem needs. The job fails if a route that declares one
+      # representation stops compiling to a byte-identical pipeline or starts
+      # emitting a negotiation step; if a representation the client explicitly
+      # refused with `q=0` is ever served, over five shapes of offer list
+      # crossed with eight hostile Accept headers; and if the per-route Accept
+      # cache stops being bounded or starts answering incorrectly once full.
+      #
+      # The refusal gate is the important one and it is subtle in a way a test
+      # is not built to catch. Scoring an offer by the *highest* q among the
+      # ranges that match it — rather than by the most specific one, which is
+      # what RFC 9110 §12.5.1 requires — is both the obvious implementation and
+      # the faster one, and it silently serves the single format the client
+      # named and refused. It is the same class of shortcut as reflecting an
+      # origin, so it gets the same class of gate.
+      - name: Content negotiation cost
+        run: node benchmarks/negotiation/run.ts
+
+      # HANDOFF convention #3 — "a test that passes against the bug is not a
+      # test". Twelve known defects are patched into the source one at a time;
+      # each must make its named suite fail. A control that *passes* means the
+      # assertion it points at is not load-bearing, and the job fails.
+      #
+      # It caught three things on its first run, which is why it is a script and
+      # a CI step rather than something each pass does by hand: a property
+      # fuzzer whose generator never produced the input one of its own branches
+      # existed for, an assertion aimed at a code path that could not reach the
+      # behaviour it claimed to cover, and a control whose patch did not compile
+      # (which reads exactly like a passing control unless something checks).
+      - name: Negative controls
+        run: node scripts/negative-controls.ts
+
+  zero-dependencies:
+    name: '@zenjs/core has zero runtime dependencies'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      # §19.8 — "zero runtime dependencies" is a CI check, not a slogan.
+      - name: Assert core dependency set is empty
+        run: |
+          deps=$(node -p "JSON.stringify(require('./packages/core/package.json').dependencies || {})")
+          echo "core dependencies: $deps"
+          test "$deps" = "{}" || { echo "::error::@zenjs/core gained a runtime dependency: $deps"; exit 1; }
+
+      - name: Assert core imports nothing from node:
+        run: |
+          if grep -rn "from 'node:" packages/core/src; then
+            echo "::error::@zenjs/core must not import platform APIs — that is the adapter's job (§3.3 B2)"
+            exit 1
+          fi
+
+      # §24.3 — the dependency graph has no cycles and openapi is a leaf on core.
+      # Depending on the router would be the shortest way to reach param-type
+      # schemas, and the one where the two copies of that table drift (§5.2).
+      - name: Assert @zenjs/openapi depends on core alone
+        run: |
+          deps=$(node -p "Object.keys(require('./packages/openapi/package.json').dependencies || {}).join(',')")
+          echo "openapi dependencies: $deps"
+          test "$deps" = "@zenjs/core" || { echo "::error::@zenjs/openapi must depend on @zenjs/core alone, got: $deps"; exit 1; }

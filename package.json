@@ -1,0 +1,57 @@
+{
+  "name": "zen-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zen — a compiler-first web framework for Node, Bun, Deno and the edge.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b tsconfig.json && npm run typecheck:examples",
+    "typecheck:examples": "tsc --noEmit -p examples/hello-world && tsc --noEmit -p examples/rest-api && tsc --noEmit -p examples/openapi && tsc --noEmit -p examples/observability && tsc --noEmit -p examples/deadlines && tsc --noEmit -p examples/health && tsc --noEmit -p examples/coercion && tsc --noEmit -p examples/config && tsc --noEmit -p examples/middleware && tsc --noEmit -p examples/negotiation",
+    "typecheck:watch": "tsc -b tsconfig.json --watch",
+    "test": "node --test --test-reporter=spec \"packages/**/test/**/*.test.ts\" \"examples/**/test/**/*.test.ts\" \"examples/**/src/**/*.test.ts\"",
+    "test:watch": "node --test --watch \"packages/**/test/**/*.test.ts\"",
+    "example": "node examples/hello-world/src/main.ts",
+    "example:rest": "node examples/rest-api/src/main.ts",
+    "example:inspect": "node examples/rest-api/src/inspect.ts",
+    "example:openapi": "node examples/openapi/src/main.ts",
+    "example:observability": "node examples/observability/src/main.ts",
+    "example:deadlines": "node examples/deadlines/src/main.ts",
+    "example:health": "node examples/health/src/main.ts",
+    "example:coercion": "node examples/coercion/src/main.ts",
+    "example:config": "node examples/config/src/main.ts",
+    "example:middleware": "node examples/middleware/src/main.ts",
+    "openapi:emit": "node examples/openapi/scripts/emit.ts",
+    "openapi:check": "node examples/openapi/scripts/check-api.ts",
+    "explain": "node examples/observability/src/inspect.ts",
+    "explain:deadlines": "node examples/deadlines/src/inspect.ts",
+    "health:explain": "node examples/health/src/inspect.ts",
+    "config:explain": "node examples/config/src/inspect.ts",
+    "middleware:explain": "node examples/middleware/src/inspect.ts",
+    "bench": "node benchmarks/serializer/run.ts",
+    "bench:openapi": "node benchmarks/openapi/run.ts",
+    "bench:hooks": "node benchmarks/hooks/run.ts",
+    "bench:deadlines": "node benchmarks/deadlines/run.ts",
+    "bench:health": "node benchmarks/health/run.ts",
+    "bench:coercion": "node benchmarks/coercion/run.ts",
+    "bench:config": "node benchmarks/config/run.ts",
+    "bench:middleware": "node benchmarks/middleware/run.ts",
+    "bench:types": "node benchmarks/typecheck/run.ts",
+    "clean": "node scripts/clean.ts",
+    "example:negotiation": "node examples/negotiation/src/main.ts",
+    "negotiation:explain": "node examples/negotiation/src/inspect.ts",
+    "bench:negotiation": "node benchmarks/negotiation/run.ts",
+    "controls": "node scripts/negative-controls.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.2"
+  }
+}

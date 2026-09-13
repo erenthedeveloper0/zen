@@ -1,0 +1,14 @@
+{
+  "name": "@zenjs-example/health",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zen": "0.1.0"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "explain": "node src/inspect.ts",
+    "test": "node --test \"test/**/*.test.ts\""
+  }
+}

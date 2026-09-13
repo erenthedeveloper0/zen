@@ -1,0 +1,25 @@
+{
+  "name": "zen",
+  "version": "0.1.0",
+  "description": "Zen — a compiler-first web framework for Node, Bun, Deno and the edge.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=22.6.0" },
+  "dependencies": {
+    "@zenjs/adapter-node": "0.1.0",
+    "@zenjs/core": "0.1.0",
+    "@zenjs/middleware": "0.1.0",
+    "@zenjs/router": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}

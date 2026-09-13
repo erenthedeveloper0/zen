@@ -1,0 +1,17 @@
+{
+  "name": "@zenjs-example/openapi",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@zenjs/openapi": "0.1.0",
+    "zen": "0.1.0",
+    "zod": "^4.4.3"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "emit": "node scripts/emit.ts",
+    "check-api": "node scripts/check-api.ts",
+    "test": "node --test \"test/**/*.test.ts\" \"src/**/*.test.ts\""
+  }
+}

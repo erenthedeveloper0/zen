@@ -1,0 +1,788 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Zen Commerce API",
+    "version": "1.0.0",
+    "summary": "A two-feature example generated entirely from the application graph.",
+    "description": "Every path, parameter, schema and status below is a projection of the AppGraph — nothing here is written twice, so nothing here can drift."
+  },
+  "paths": {
+    "/orders": {
+      "get": {
+        "operationId": "orders.list",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Order"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List orders",
+        "tags": [
+          "orders"
+        ]
+      },
+      "post": {
+        "operationId": "orders.create",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Place an order",
+        "tags": [
+          "orders"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrder"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orders/{id}": {
+      "get": {
+        "operationId": "orders.show",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch one order",
+        "tags": [
+          "orders"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/users": {
+      "get": {
+        "operationId": "users.list",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserList"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List users",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "admin",
+                "member"
+              ],
+              "description": "Authorisation level.",
+              "type": "string"
+            },
+            "description": "Authorisation level."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100,
+              "type": "integer"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "users.create",
+        "responses": {
+          "201": {
+            "description": "A user, as the API is willing to describe one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUser"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Register a user",
+        "tags": [
+          "users"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "operationId": "users.show",
+        "responses": {
+          "200": {
+            "description": "A user, as the API is willing to describe one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUser"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Fetch one user",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "users.update",
+        "responses": {
+          "200": {
+            "description": "A user, as the API is willing to describe one.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicUser"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update a user",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchUser"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "users.destroy",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "4XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "RFC 9457 problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete a user",
+        "tags": [
+          "users"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local"
+    }
+  ],
+  "tags": [
+    {
+      "name": "orders",
+      "description": "Placed orders and their line items."
+    },
+    {
+      "name": "users",
+      "description": "The user directory."
+    }
+  ],
+  "components": {
+    "schemas": {
+      "NewOrder": {
+        "title": "NewOrder",
+        "type": "object",
+        "properties": {
+          "customerId": {
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "lines": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLineInput"
+            }
+          }
+        },
+        "required": [
+          "customerId",
+          "lines"
+        ]
+      },
+      "NewUser": {
+        "title": "NewUser",
+        "type": "object",
+        "properties": {
+          "email": {
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+            "type": "string"
+          },
+          "name": {
+            "minLength": 1,
+            "maxLength": 120,
+            "type": "string"
+          },
+          "role": {
+            "default": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Authorisation level.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "name"
+        ]
+      },
+      "Order": {
+        "title": "Order",
+        "type": "object",
+        "properties": {
+          "id": {
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "paid",
+              "shipped",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/PublicUser"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderLine"
+            }
+          },
+          "totalCents": {
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "placedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "customer",
+          "lines",
+          "totalCents",
+          "placedAt"
+        ],
+        "additionalProperties": false
+      },
+      "OrderLine": {
+        "title": "OrderLine",
+        "type": "object",
+        "properties": {
+          "sku": {
+            "description": "Stock-keeping unit.",
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "unitPriceCents": {
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sku",
+          "quantity",
+          "unitPriceCents"
+        ],
+        "additionalProperties": false
+      },
+      "OrderLineInput": {
+        "title": "OrderLine",
+        "type": "object",
+        "properties": {
+          "sku": {
+            "description": "Stock-keeping unit.",
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "unitPriceCents": {
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sku",
+          "quantity",
+          "unitPriceCents"
+        ]
+      },
+      "PageInfo": {
+        "description": "Cursor pagination envelope.",
+        "type": "object",
+        "properties": {
+          "total": {
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Total matching records, ignoring pagination.",
+            "type": "integer"
+          },
+          "cursor": {
+            "description": "Pass as `cursor` to fetch the next page.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "total",
+          "cursor"
+        ],
+        "additionalProperties": false
+      },
+      "PatchUser": {
+        "title": "PatchUser",
+        "type": "object",
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "maxLength": 120,
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Authorisation level.",
+            "type": "string"
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "title": "ProblemDetails",
+        "description": "RFC 9457 problem document. Every Zen error response has this shape.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri",
+            "description": "Stable documentation URL for the error code."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable summary. Never leaks internals for non-exposed errors."
+          },
+          "status": {
+            "type": "integer"
+          },
+          "instance": {
+            "type": "string",
+            "description": "The request path this occurred on."
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable Zen error code — rfcs/0001 Annex B."
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "array",
+            "description": "Present on validation failures: one entry per failing field.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": [
+                      "string",
+                      "integer"
+                    ]
+                  }
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "expected": {
+                  "type": "string"
+                },
+                "received": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "debug": {
+            "type": "object",
+            "description": "Development mode only — stack and cause.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "instance",
+          "code",
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "PublicUser": {
+        "title": "PublicUser",
+        "description": "A user, as the API is willing to describe one.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "email": {
+            "format": "email",
+            "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Authorisation level.",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+            "description": "RFC 3339, always UTC.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "UserList": {
+        "title": "UserList",
+        "type": "object",
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicUser"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        },
+        "required": [
+          "users",
+          "page"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

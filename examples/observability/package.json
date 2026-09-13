@@ -1,0 +1,15 @@
+{
+  "name": "@zenjs-example/observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zen": "0.1.0",
+    "zod": "^4.4.3"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "explain": "node src/inspect.ts",
+    "test": "node --test \"test/**/*.test.ts\""
+  }
+}

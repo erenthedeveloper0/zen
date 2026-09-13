@@ -1,0 +1,4 @@
+# Kept alongside npm `workspaces` so contributors can use either package manager.
+packages:
+  - 'packages/*'
+  - 'examples/*'

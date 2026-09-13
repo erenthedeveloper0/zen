@@ -1,0 +1,23 @@
+{
+  "name": "@zenjs/openapi",
+  "version": "0.1.0",
+  "description": "Zen OpenAPI: AppGraph → OAS 3.1, $ref dedup, breaking-change detection.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=22.6.0" },
+  "dependencies": {
+    "@zenjs/core": "0.1.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "node --test \"test/**/*.test.ts\""
+  }
+}

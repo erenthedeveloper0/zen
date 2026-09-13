@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/router" },
+    { "path": "./packages/adapter-node" },
+    { "path": "./packages/openapi" },
+    { "path": "./packages/middleware" },
+    { "path": "./packages/zen" }
+  ]
+}
