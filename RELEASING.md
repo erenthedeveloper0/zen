@@ -100,6 +100,20 @@ npm install @erenthedeveloper0/zen@alpha    # what a user types
 npm audit signatures                        # provenance verifies (from 0.1.0-alpha.2 on)
 ```
 
+**`latest` follows the first publish, then stays put.** npm points `latest` at a
+package's first version whatever `--tag` says, because every package must have
+one — so `0.1.0-alpha.1` went out as both `alpha` and `latest`, and
+`npm install @erenthedeveloper0/zen` with no tag installs it. Later prereleases
+move `alpha` only, which leaves the bare name on `0.1.0-alpha.1` until something
+moves it. To have it follow the alphas, run
+`npm dist-tag add @erenthedeveloper0/<package>@<version> latest` for all six
+after a release; to keep the bare name on a version you chose, do nothing.
+
+The registry's package document can also lag a first publish by several
+minutes — the tarballs download, while `npm view` still answers 404 from a
+cached miss. Wait for it before pushing the tag: the workflow's "already
+published?" check reads that document.
+
 A bad version is deprecated, never unpublished:
 
 ```bash
