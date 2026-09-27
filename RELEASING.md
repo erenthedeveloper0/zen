@@ -41,6 +41,13 @@ for p in core router adapter-node openapi middleware zen; do
 done
 ```
 
+**npm refuses a publish from an account without two-factor authentication**
+(`E403 … Two-factor authentication or granular access token with bypass 2fa
+enabled is required to publish packages`), so 2FA comes first — npmjs.com →
+Account → Two-Factor Authentication — and each publish then asks for it, in the
+browser or as a code from an authenticator app. Run the loop in an interactive
+terminal for that reason.
+
 A local publish has no **provenance** — only a CI run can attest to where a
 tarball was built — so the first version carries none. Every later release goes
 through the workflow below and does.
@@ -50,12 +57,10 @@ through the workflow below and does.
 npm can only attach a trusted publisher to a package that already exists, which
 is why the first release is published by hand. Once all six exist:
 
-1. **2FA on the npm account** that owns the organisation:
-   `npm profile enable-2fa auth-and-writes`.
-2. **A protected environment.** Repository → Settings → Environments → new
+1. **A protected environment.** Repository → Settings → Environments → new
    environment `npm-publish`, with yourself (or the release team) as a
    required reviewer. Every publish then waits for a human.
-3. **Trusted publishing.** For each of the six packages: npmjs.com → the
+2. **Trusted publishing.** For each of the six packages: npmjs.com → the
    package → Settings → Trusted Publisher → GitHub Actions, with
    organisation or user `erenthedeveloper0`, repository `zen`, workflow
    `release.yml`, environment `npm-publish`. Then, on the same page, set
