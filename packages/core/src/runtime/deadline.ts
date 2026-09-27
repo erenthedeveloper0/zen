@@ -206,11 +206,26 @@ export class Deadline {
     }
   }
 
+  /**
+   * The report `onTimeout` hooks and `ZEN_TIMEOUT` carry — asked for only once
+   * the deadline has expired.
+   *
+   * `elapsedMs` has the budget as its floor because two clocks are involved
+   * and they do not agree. The timer runs on the event loop's clock, which
+   * libuv caches for a whole iteration and keeps in whole milliseconds;
+   * `performance.now()` does neither. So the timer can fire while
+   * `performance.now()` still shows a sliver of budget left — Windows CI caught
+   * 19.85 ms against a 20 ms budget — and "exceeded its 20 ms budget (19.9 ms
+   * elapsed)" breaks `TimeoutInfo`'s "always ≥ `budgetMs`" and reads as
+   * nonsense. The shortfall is skew between the clocks, not time the request
+   * had left.
+   */
   info(startTime: number, route: string | null): TimeoutInfo {
+    const elapsed = performance.now() - startTime
     return {
       stage: this.stage,
       budgetMs: this.budgetMs,
-      elapsedMs: performance.now() - startTime,
+      elapsedMs: elapsed < this.budgetMs ? this.budgetMs : elapsed,
       route,
     }
   }

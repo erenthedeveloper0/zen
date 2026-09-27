@@ -769,9 +769,9 @@ stack frame, or if an application's error stops keeping its own.
 git clone https://github.com/erenthedeveloper0/zen.git && cd Zen.js
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 972 tests
+npm test                           # 973 tests
 node scripts/smoke.ts              # 71 checks over a real socket
-node scripts/negative-controls.ts  # break 43 things on purpose; every suite must notice
+node scripts/negative-controls.ts  # break 44 things on purpose; every suite must notice
 node scripts/check-pack.ts         # what each npm tarball contains — installed and run outside the repo
 node benchmarks/typecheck/run.ts   # the M2 gate
 node benchmarks/serializer/run.ts  # serializer throughput
@@ -839,7 +839,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `lifecycle.test.ts` (meta-package) | A real child process: `SIGTERM` drains and exits 0, an uncaught exception or unhandled rejection drains and exits 1, and nothing is installed on the process until `listen()` |
 | `error-docs.test.ts` | Every error code any package can produce has its entry in [docs/errors.md](./docs/errors.md) — the page every problem document links to |
 | `logger.test.ts` | The default logger never throws — a cycle or a `bigint` in an error's metadata still produces the log line *and* the error response — and metadata cannot overwrite a line's `code` or `status` |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. Forty-three known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. Forty-four known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">

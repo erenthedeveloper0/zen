@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BootError, explainRoute, markSync, slot, steps,
+  BootError, Deadline, explainRoute, markSync, slot, steps,
   type Reply, type TimeoutInfo,
 } from '@erenthedeveloper0/zen-core'
 import { makeApp, uniqueName } from './helpers.ts'
@@ -319,6 +319,22 @@ describe('onTimeout (§9.2 phase 12)', () => {
     assert.equal(info.budgetMs, BUDGET)
     assert.equal(info.route, '/hang')
     assert.ok(info.elapsedMs >= BUDGET, `elapsed ${info.elapsedMs} should be at least the budget`)
+  })
+
+  test('elapsedMs is never below the budget, whichever clock fired the timer', () => {
+    // The test above is the real path and is only *usually* a check: the
+    // timer runs on the event loop's millisecond clock and elapsedMs on
+    // performance.now(), so an expiry can measure a hair under the budget —
+    // Windows CI saw 19.85 ms of 20 on this repository's first push. Asking a
+    // deadline that has barely started for its report is that skew, every time.
+    const deadline = new Deadline(BUDGET, new AbortController().signal)
+    try {
+      const info = deadline.info(performance.now(), '/hang')
+      assert.equal(info.budgetMs, BUDGET)
+      assert.equal(info.elapsedMs, BUDGET)
+    } finally {
+      deadline.disarm()
+    }
   })
 
   test('a hook may answer the request itself', async () => {

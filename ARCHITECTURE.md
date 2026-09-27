@@ -3393,7 +3393,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 
    Shutdown ordering belongs in this list too, and it lives in `scripts/smoke.ts` rather than here, because "readiness went red before the socket stopped accepting" needs a real socket to be open while the process is shutting down. It was unfalsifiable before §31.4 existed, and it was wrong for exactly that long.
 
-6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Forty-three controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
+6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Forty-four controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
 
    This is a different property from every other entry in this list, and it is the one nothing else in the repo checks. Correctness tests answer "is the code right"; this answers "would we find out if it stopped being right", and the two come apart constantly and invisibly. Every pass of this codebase had run some version of it by hand and written down that it was worth automating; §13.4 was the pass that did.
 

@@ -385,6 +385,16 @@ const CONTROLS: readonly Control[] = [
     caughtBy: '"each request disposes the instance it created, once, after the response"',
   },
 
+  // ── §4.4: what a blown deadline reports ──────────────────────────────────
+  {
+    name: 'report a deadline as blown in less time than its budget',
+    file: `${CORE}/runtime/deadline.ts`,
+    find: '      elapsedMs: elapsed < this.budgetMs ? this.budgetMs : elapsed,',
+    replace: '      elapsedMs: elapsed,',
+    suite: 'packages/core/test/timeouts.test.ts',
+    caughtBy: '"elapsedMs is never below the budget, whichever clock fired the timer"',
+  },
+
   // ── the edges of a request ───────────────────────────────────────────────
   {
     name: 'let the default logger throw on a line JSON.stringify refuses',

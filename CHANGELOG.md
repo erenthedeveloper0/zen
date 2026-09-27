@@ -71,8 +71,8 @@ this entry records what changed in preparing it for release.
 - `benchmarks/request-path` — what these fixes cost on the request path, with
   structural gates: a route without `around` stays byte-identical, and the
   `next()` wrapper appears only where the downstream compiled synchronous.
-- Seventeen negative controls, one for each fix under **Fixed** below that a
-  regression could undo silently — 43 in all.
+- Eighteen negative controls, one for each fix under **Fixed** below that a
+  regression could undo silently — 44 in all.
 
 ### Fixed
 
@@ -165,6 +165,14 @@ before fixing it:
 - A client disconnecting mid-upload was logged as an application 500.
 - Error metadata could overwrite a log line's `code` and `status`; the
   last-resort 500 interpolated the request id into JSON unescaped.
+
+Found by the first push to CI, on Windows:
+
+- `TimeoutInfo.elapsedMs` could come out a fraction of a millisecond **below**
+  `budgetMs` — the deadline's timer runs on the event loop's millisecond clock,
+  `elapsedMs` on `performance.now()` — breaking its documented "always ≥
+  `budgetMs`" and producing `ZEN_TIMEOUT` messages such as "exceeded its 20 ms
+  budget (19.9 ms elapsed)". The budget is now its floor.
 
 ### Changed
 
