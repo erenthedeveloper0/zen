@@ -69,7 +69,7 @@ const third = new Ctx(rawRequest('/c'), null, {}, env, signal)
  * other means the compiled app and the CSP-locked app disagree about the shape
  * of every context, and nothing else in the repo would notice.
  *
- * The HANDOFF has claimed this file asserts that for three passes. It did not;
+ * This file claimed to assert that for three passes. It did not;
  * it compared the generated class against itself. Added when §13.4 put
  * `$negotiated` on both.
  */

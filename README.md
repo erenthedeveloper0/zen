@@ -16,7 +16,7 @@ Express-simple. Fastify-fast. Typed end to end. No magic.
 [![Core dependencies](https://img.shields.io/badge/core%20dependencies-0-7c5cff)](./packages/core/package.json)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-[Architecture RFC](./ARCHITECTURE.md) · [Roadmap](./TASKS.md) · [Trade-offs](./ARCHITECTURE.md#27-architectural-trade-offs) · [Error codes](./docs/errors.md) · [Changelog](./CHANGELOG.md) · [Contributing](./CONTRIBUTING.md)
+[Architecture RFC](./ARCHITECTURE.md) · [Roadmap](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) · [Trade-offs](./ARCHITECTURE.md#27-architectural-trade-offs) · [Error codes](./docs/errors.md) · [Changelog](./CHANGELOG.md) · [Contributing](./CONTRIBUTING.md)
 
 </div>
 
@@ -149,8 +149,7 @@ Full reasoning, including the arguments that lost, is in [ARCHITECTURE.md](./ARC
 working vertical slice, published on npm's `alpha` tag for feedback. Do not put this in
 production: the API will change, and several subsystems the RFC describes are not built
 (below). What *is* built has been through two pre-release audit passes that reproduced
-each defect before fixing it — [CHANGELOG.md](./CHANGELOG.md) lists every one — and
-[TASKS.md](./TASKS.md) is the full account of what is and is not done.
+each defect before fixing it, and [CHANGELOG.md](./CHANGELOG.md) lists every one.
 
 | Package | |
 | --- | --- |
@@ -194,7 +193,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 
 ### Designed, not yet built
 
-CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · `app.url()` · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). [TASKS.md](./TASKS.md) ranks them, with effort estimates and the reasoning.
+CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · `app.url()` · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
 
 ## In depth
 
@@ -873,9 +872,7 @@ scripts/           smoke test, negative controls, codegen inspectors, and releas
                    tooling: version.ts, check-release.ts, check-pack.ts
 docs/errors.md     every error code — where each problem document's `type` points
 ARCHITECTURE.md    RFC 0001 — the full design
-TASKS.md           what is built, what is not, ranked by ROI
-HANDOFF.md         start here if you are picking this up: conventions, traps, next steps
-RELEASING.md       how the packages get to npm; npm-registry.md has the reasoning
+RELEASING.md       how the packages get to npm, and why that way
 CONTRIBUTING.md    conventions, setup, sign-off · SECURITY.md · CODE_OF_CONDUCT.md
 ```
 

@@ -10,8 +10,8 @@ import { Codes } from '../errors/codes.ts'
  *
  * §4.4 has promised since the first draft that "every `Ctx` carries a real
  * `AbortSignal`, wired to client disconnect *and to the handler timeout*". Half
- * of that was true. This is the other half, and it closes the hole item 1 of
- * TASKS.md names: without it a handler that never returns holds its connection,
+ * of that was true. This is the other half, and it closes a hole that once headed the
+ * roadmap: without it a handler that never returns holds its connection,
  * its socket and its slot in the event loop until the process restarts, and
  * nothing in the framework notices.
  *

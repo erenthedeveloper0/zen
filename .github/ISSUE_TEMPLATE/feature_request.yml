@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Zen's design is written down in [ARCHITECTURE.md](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md),
-        and TASKS.md ranks what is not built yet. Check both first — the thing you need may be specified
+        and the README's [Status](https://github.com/erenthedeveloper0/zen#status) section lists what is not built yet. Check both first — the thing you need may be specified
         and waiting for someone, which makes it a much easier pull request.
   - type: textarea
     id: problem

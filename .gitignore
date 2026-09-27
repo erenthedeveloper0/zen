@@ -11,3 +11,8 @@ coverage/
 benchmarks/results/local/
 *.log
 benchmarks/typecheck/.generated/
+
+# Maintainer notes, kept out of the repository
+HANDOFF.md
+npm-registry.md
+TASKS.md

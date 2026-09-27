@@ -1,6 +1,6 @@
 # One line ending everywhere. The negative-control script and every scripted
 # edit match exact strings, and a CRLF checkout on Windows makes those matches
-# silently fail (HANDOFF.md §8).
+# silently fail.
 * text=auto eol=lf
 
 *.png binary

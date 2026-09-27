@@ -1,6 +1,5 @@
 /**
- * What actually ships — npm-registry.md §2 and §8, as a check instead of a
- * checklist.
+ * What actually ships, as a check instead of a checklist.
  *
  * `node scripts/check-pack.ts [--typescript 5.0]`
  *

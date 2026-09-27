@@ -5,7 +5,7 @@ import { makeApp } from './app.ts'
  * `npm run explain -w @erenthedeveloper0/zen-example-coercion`
  *
  * The reader half of §11.4 — and the convention that has now found a defect in
- * the producer four times running (HANDOFF §3.2), so it is built alongside the
+ * the producer four times running (CONTRIBUTING.md convention 2), so it is built alongside the
  * writer rather than after it.
  *
  * What it prints is not the *profile* — `numbers: true` tells you a policy and

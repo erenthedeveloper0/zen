@@ -1,5 +1,5 @@
 /**
- * Negative controls — HANDOFF convention #3.
+ * Negative controls — CONTRIBUTING.md convention 3.
  *
  * `node scripts/negative-controls.ts [pattern]`
  *
@@ -474,7 +474,7 @@ const run = (args: readonly string[]): number =>
 const TSC = 'node_modules/typescript/bin/tsc'
 const build = (): boolean => run([TSC, '-b']) === 0
 
-console.log('\n  Negative controls — HANDOFF convention #3')
+console.log('\n  Negative controls — CONTRIBUTING.md convention 3')
 console.log(`  ${selected.length} control${selected.length === 1 ? '' : 's'}, each must make its suite fail\n`)
 
 if (!build()) {

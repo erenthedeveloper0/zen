@@ -6,9 +6,6 @@ exist because that premise is easy to erode one reasonable-looking change at a
 time. Please read this page, then [ARCHITECTURE.md](./ARCHITECTURE.md) §1.1 (the
 nine invariants) before opening a non-trivial pull request.
 
-[HANDOFF.md](./HANDOFF.md) is the long form: the conventions with their history,
-and the traps that have cost previous contributors the most time.
-
 ## Getting set up
 
 Requirements: **Node.js ≥ 22.18** and npm. The repository runs straight from
@@ -18,7 +15,7 @@ and need Node ≥ 22.6.) `.nvmrc` pins the 22 line; CI runs 22, 24 and 26.
 
 ```bash
 git clone https://github.com/erenthedeveloper0/zen.git
-cd Zen.js
+cd zen
 npm ci
 npm run typecheck      # builds all six packages, then type-checks the ten examples
 npm test               # ~970 tests: unit, integration, differential and property suites
@@ -75,7 +72,7 @@ argument in its description, not a workaround.
 - Match the comment density of the file you are in. Comments explain *why* —
   usually by naming the failure the code prevents — not what the next line does.
 - Do not write source files through shell heredocs or `echo -e`; escapes inside
-  string literals get mangled. See HANDOFF.md §8.
+  string literals get mangled.
 
 ## Commits and sign-off
 

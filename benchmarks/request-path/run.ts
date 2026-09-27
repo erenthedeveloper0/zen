@@ -4,8 +4,8 @@
  * `node benchmarks/request-path/run.ts`
  *
  * Five fixes landed on code every request runs through, and a correctness fix
- * that quietly costs every request is a trade nobody agreed to. HANDOFF
- * convention #4: *performance claims need numbers, and a structural assertion
+ * that quietly costs every request is a trade nobody agreed to. CONTRIBUTING.md
+ * convention 4: *performance claims need numbers, and a structural assertion
  * beats a timing inside the noise.* So the gates come first, and they are about
  * what is — and is not — in the generated source:
  *

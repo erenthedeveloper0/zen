@@ -6,7 +6,7 @@
 | --- | --- |
 | RFC | 0001 |
 | Title | Zen Core Architecture |
-| Status | **Draft** — the 0.1 alpha implements a large part of it; [TASKS.md](./TASKS.md) tracks what is built |
+| Status | **Draft** — the 0.1 alpha implements a large part of it; the README's [Status](./README.md#status) section tracks what is built |
 | Target | `@erenthedeveloper0/zen@1.0`, first MVP `@erenthedeveloper0/zen@0.1` |
 | Runtime floor | Node 22 LTS (built); Bun 1.1, Deno 2, Workerd (designed, §14.2) |
 | Language | TypeScript 5.0+ for consumers, checked in CI against the published declarations; 5.9 to build (`erasableSyntaxOnly`) |

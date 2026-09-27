@@ -23,8 +23,8 @@ export type LabelValues = Readonly<Record<string, string>>
  * composite key cannot be forged by a value with a comma in it. What it must not
  * be is a *literal* NUL in the source, which is what this file contained until
  * now: `file` reported the module as `data` rather than text, `grep` reported
- * "Binary file matches", and `tsc` accepted it silently. HANDOFF §8 has the same
- * mistake happening twice more since, in `config-store.ts` and `store.ts`.
+ * "Binary file matches", and `tsc` accepted it silently. The same
+ * mistake has happened twice more since, in `config-store.ts` and `store.ts`.
  *
  * Same bytes at runtime; one of them is reviewable.
  */

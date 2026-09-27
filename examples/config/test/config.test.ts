@@ -20,7 +20,7 @@ import { z } from '../src/shared/zod.ts'
  * are true because Zod emits what Zen reads, and only this file can check that.
  *
  * **Types.** Package tests are not type-checked and example tests are, so a
- * claim about types belongs here (HANDOFF §2). `ctx.config.pagination.pageSize`
+ * claim about types belongs here. `ctx.config.pagination.pageSize`
  * being a `number` is the entire content of "config is typed", and a test that
  * only asserted the runtime value would pass against a `ctx.config: any`.
  */

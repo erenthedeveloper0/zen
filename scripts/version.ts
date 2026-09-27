@@ -4,7 +4,7 @@
  * `node scripts/version.ts 0.1.0-alpha.2`
  *
  * The packages publish in lockstep and depend on each other by **exact**
- * version (npm-registry.md §4), which makes "which core does this adapter want"
+ * version, which makes "which core does this adapter want"
  * a question with one answer. `npm version --workspaces` bumps the `version`
  * fields and leaves every internal dependency pointing at the old one — five
  * files to fix by hand and the sort of thing to get wrong exactly once, on a

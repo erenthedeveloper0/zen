@@ -4,8 +4,8 @@
  * `defineConfig` and schema-validated environment (§16.2) do not exist yet, so
  * this is a plain module and the `PORT` read below is the hand-rolled
  * `process.env` access §16 is meant to replace. Recorded here rather than
- * hidden, because it is the fourth example to write these three lines and that
- * is the evidence TASKS.md ranks config at #3 on.
+ * hidden, because it is the fourth example to write these three lines, and that
+ * is the evidence that made §16 worth building next.
  */
 export const config = {
   port: Number(process.env['PORT'] ?? 3000),

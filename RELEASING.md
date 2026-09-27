@@ -1,7 +1,7 @@
 # Releasing
 
-How Zen's six packages get to npm. The background — why prereleases, why exact
-internal pins, why trusted publishing — is in [npm-registry.md](./npm-registry.md).
+How Zen's six packages get to npm. Why they get there this way — prereleases,
+exact internal pins, trusted publishing — is [at the end](#why-it-works-this-way).
 
 The packages, in the order they must be published:
 
@@ -123,3 +123,33 @@ done
 mkdir /tmp/zen-rehearsal && cd /tmp/zen-rehearsal && npm init -y
 npm install --registry http://localhost:4873 @erenthedeveloper0/zen@alpha
 ```
+
+## Why it works this way
+
+- **Prerelease versions.** `0.1.0-alpha.N` is a semver prerelease, so a range
+  such as `^0.1.0` never matches it and nobody receives one by accident. The
+  workflow derives the dist-tag from the version and refuses a prerelease it
+  does not recognise rather than defaulting it to `latest`.
+- **Lockstep versions, exact internal pins.** The six packages always release
+  together and depend on each other by exact version, so "which core does this
+  adapter want" has one answer. `npm version --workspaces` bumps the versions
+  and leaves every internal pin behind; `scripts/version.ts` bumps both, and
+  `scripts/check-release.ts` refuses a tag that disagrees with either.
+- **Dependency order.** `npm publish --workspaces` publishes in no particular
+  order, and a meta-package published before a dependency it pins installs
+  broken. So the loop is explicit, and the workflow waits for each version to
+  be visible on the registry before publishing the next.
+- **What ships is checked, not assumed.** `scripts/check-pack.ts` runs in CI:
+  no build cache (a `.tsbuildinfo` holds absolute paths from the build
+  machine), every source map ships with the source it points at, `README.md`
+  and `LICENSE` are present — then all six tarballs are installed outside the
+  workspace, serve a request, and a consumer is type-checked on TypeScript 5.0,
+  the oldest the manifests accept.
+- **Trusted publishing and a human gate.** GitHub Actions authenticates to npm
+  with OIDC, so no long-lived publish token exists to be stolen, and npm
+  records provenance — which workflow, repository and commit built each
+  tarball — for `npm audit signatures` to verify. The `npm-publish` environment
+  requires a reviewer: the one control that stops a compromised dependency in
+  the build from shipping a release on its own.
+- **Nothing is unpublished.** npm allows it only within 72 hours, and only if
+  nothing depends on the version. A bad version is deprecated instead (above).

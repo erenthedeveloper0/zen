@@ -254,7 +254,7 @@ describe('request-scoped disposal (§15.3, §4.2 stage 10)', () => {
     app.get('/', async (ctx) => { await ctx.resolveAsync(Tx); return 'too late' })
 
     // Deadline timers are unref'd; stand in for the socket that would hold the
-    // event loop in production, or Node 22 cancels the test (HANDOFF §8).
+    // event loop in production, or Node 22 cancels the test.
     const socket = setTimeout(() => {}, 5_000)
     try {
       assert.equal((await app.inject('GET', '/')).status, 504)
