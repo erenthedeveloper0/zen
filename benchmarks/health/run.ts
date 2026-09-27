@@ -31,8 +31,8 @@
  *      themselves fan out in parallel, so ten dependencies cost the slowest
  *      one rather than the sum.
  */
-import { createApp, healthPlugin, markSync, type ZenApp } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+import { createApp, healthPlugin, markSync, type ZenApp } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 const pathParser = {
   parse: (path: string) => {

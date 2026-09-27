@@ -1,5 +1,5 @@
-import type { ParamType, PathSegment, RouteDiagnostic, RouteRecord } from '@visionpilot/zen-core'
-import { Codes } from '@visionpilot/zen-core'
+import type { ParamType, PathSegment, RouteDiagnostic, RouteRecord } from '@erenthedeveloper0/zen-core'
+import { Codes } from '@erenthedeveloper0/zen-core'
 import { BUILTIN_PARAM_TYPES } from './param-types.ts'
 
 /**

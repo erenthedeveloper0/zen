@@ -1,4 +1,4 @@
-import type { HostControl, HostLifecycle } from '@visionpilot/zen-core'
+import type { HostControl, HostLifecycle } from '@erenthedeveloper0/zen-core'
 
 export interface ProcessLifecycleOptions {
   /**

@@ -1,21 +1,21 @@
 <p align="center">
-  <img alt="zen.js — a compiler-first web framework" src="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/banner-dark.png" width="100%">
+  <img alt="zen.js — a compiler-first web framework" src="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/banner-dark.png" width="100%">
 </p>
 
-# @visionpilot/zen
+# @erenthedeveloper0/zen
 
 **A compiler-first web framework for Node.js.** Express-simple, Fastify-fast,
 typed end to end.
 
 > **Alpha.** The API will change before `1.0`. Do not put this in production yet — see
-> [the status section](https://github.com/VisionPilot/Zen.js#status).
+> [the status section](https://github.com/erenthedeveloper0/zen#status).
 
 ```bash
-npm install @visionpilot/zen@alpha
+npm install @erenthedeveloper0/zen@alpha
 ```
 
 ```ts
-import { zen } from '@visionpilot/zen'
+import { zen } from '@erenthedeveloper0/zen'
 
 const app = zen()
 
@@ -46,7 +46,7 @@ JavaScript. Stages a route does not use are not emitted at all.
   each with a fix.
 
 ```ts
-import { zen } from '@visionpilot/zen'
+import { zen } from '@erenthedeveloper0/zen'
 import { z } from 'zod'
 
 const app = zen({ timeout: '30s' })
@@ -63,14 +63,14 @@ await app.listen()                                  // address from config.serve
 
 ## This package
 
-`@visionpilot/zen` wires together:
+`@erenthedeveloper0/zen` wires together:
 
 | Package | Role |
 | --- | --- |
-| [`@visionpilot/zen-core`](https://www.npmjs.com/package/@visionpilot/zen-core) | registries, compilers, runtime, errors — zero dependencies |
-| [`@visionpilot/zen-router`](https://www.npmjs.com/package/@visionpilot/zen-router) | the compiled radix router |
-| [`@visionpilot/zen-adapter-node`](https://www.npmjs.com/package/@visionpilot/zen-adapter-node) | Node's `http` server |
-| [`@visionpilot/zen-middleware`](https://www.npmjs.com/package/@visionpilot/zen-middleware) | CORS, security headers, request ids, rate limiting |
+| [`@erenthedeveloper0/zen-core`](https://www.npmjs.com/package/@erenthedeveloper0/zen-core) | registries, compilers, runtime, errors — zero dependencies |
+| [`@erenthedeveloper0/zen-router`](https://www.npmjs.com/package/@erenthedeveloper0/zen-router) | the compiled radix router |
+| [`@erenthedeveloper0/zen-adapter-node`](https://www.npmjs.com/package/@erenthedeveloper0/zen-adapter-node) | Node's `http` server |
+| [`@erenthedeveloper0/zen-middleware`](https://www.npmjs.com/package/@erenthedeveloper0/zen-middleware) | CORS, security headers, request ids, rate limiting |
 
 and re-exports all of them, so one import is enough. It also supplies the two
 things only a Node process has: `process.env` as the configuration environment,
@@ -79,7 +79,7 @@ an uncaught exception is logged and does the same with exit code 1. Pass
 `lifecycle: false` if something else manages the process.
 
 OpenAPI generation is a separate install:
-[`@visionpilot/zen-openapi`](https://www.npmjs.com/package/@visionpilot/zen-openapi).
+[`@erenthedeveloper0/zen-openapi`](https://www.npmjs.com/package/@erenthedeveloper0/zen-openapi).
 
 ## Requirements
 
@@ -88,9 +88,9 @@ OpenAPI generation is a separate install:
 
 ## Documentation
 
-- [README](https://github.com/VisionPilot/Zen.js#readme) — the tour
-- [ARCHITECTURE.md](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md) — the design, and the arguments that lost
-- [Error codes](https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md)
-- [Examples](https://github.com/VisionPilot/Zen.js/tree/main/examples)
+- [README](https://github.com/erenthedeveloper0/zen#readme) — the tour
+- [ARCHITECTURE.md](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md) — the design, and the arguments that lost
+- [Error codes](https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md)
+- [Examples](https://github.com/erenthedeveloper0/zen/tree/main/examples)
 
-[MIT](https://github.com/VisionPilot/Zen.js/blob/main/LICENSE) © [VisionPilot](https://github.com/VisionPilot) · created by [Eren Sümer](https://github.com/ErenSumer) · [contributors](https://github.com/VisionPilot/Zen.js/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

@@ -1,4 +1,4 @@
-import { Conflict, token } from '@visionpilot/zen'
+import { Conflict, token } from '@erenthedeveloper0/zen'
 import type { CheckoutInput, Order } from './schemas.ts'
 import type { CatalogService } from '../catalog/index.ts'
 

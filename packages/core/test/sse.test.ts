@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   createSseChannel, isSseChannel, frameOf, finalize, PlainContext, CodeGen, compileContext,
   NoopLogger, ZenContainer, DEFAULT_CAPABILITIES, type SseChannel, type RawRequest,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { makeApp } from './helpers.ts'
 
 const decoder = new TextDecoder()

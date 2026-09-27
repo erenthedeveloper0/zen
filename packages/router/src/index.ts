@@ -1,8 +1,8 @@
 import type {
   CompiledRouter, MatchResult, ParamType, ParamsObject, RouteDiagnostic, RouteRecord, Router,
   RouterOptions, RouterStats, HttpMethod,
-} from '@visionpilot/zen-core'
-import { CodeGen, ZenError, Codes, DEFAULT_CAPABILITIES } from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
+import { CodeGen, ZenError, Codes, DEFAULT_CAPABILITIES } from '@erenthedeveloper0/zen-core'
 import { BUILTIN_PARAM_TYPES } from './param-types.ts'
 import { analyzeRoutes } from './conflicts.ts'
 import {

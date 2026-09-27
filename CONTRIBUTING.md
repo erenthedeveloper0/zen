@@ -17,7 +17,7 @@ the first 22.x where that needs no flag. (The *published* packages are compiled
 and need Node ≥ 22.6.) `.nvmrc` pins the 22 line; CI runs 22, 24 and 26.
 
 ```bash
-git clone https://github.com/VisionPilot/Zen.js.git
+git clone https://github.com/erenthedeveloper0/zen.git
 cd Zen.js
 npm ci
 npm run typecheck      # builds all six packages, then type-checks the ten examples
@@ -59,7 +59,7 @@ argument in its description, not a workaround.
 4. **Performance claims need numbers**, and losses are published as prominently
    as wins. Prefer a structural assertion ("the generated source is byte
    identical") to a timing ("the difference was inside the noise").
-5. **`@visionpilot/zen-core` imports nothing from `node:` and has zero runtime
+5. **`@erenthedeveloper0/zen-core` imports nothing from `node:` and has zero runtime
    dependencies.** Both are CI checks. Platform code belongs in an adapter.
 6. **Boot diagnostics are aggregated, and each has a fix.** A `Diagnostic` has a
    `hint` (rendered `fix:`) and, where it helps, a `consequence` (`also:`).

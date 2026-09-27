@@ -1,5 +1,5 @@
-import { zen } from '@visionpilot/zen'
-import type { ZenApp } from '@visionpilot/zen'
+import { zen } from '@erenthedeveloper0/zen'
+import type { ZenApp } from '@erenthedeveloper0/zen'
 import { z } from './shared/zod.ts'
 import { config } from './config/coercion.config.ts'
 import { catalogRoutes } from './features/catalog/index.ts'

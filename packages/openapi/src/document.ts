@@ -1,8 +1,8 @@
 import type {
   AppGraph, CoercePlan, CollectionId, CollectionRecord, JsonSchema, ParamType, PathSegment,
   RouteRecord,
-} from '@visionpilot/zen-core'
-import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem } from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
+import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem } from '@erenthedeveloper0/zen-core'
 import {
   Components, canonical, declaredName, projectSchema, sanitizeName,
   type DocDiagnostic,

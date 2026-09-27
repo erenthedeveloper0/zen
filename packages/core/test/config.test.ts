@@ -4,7 +4,7 @@ import {
   BootError, REDACTED, defineConfig, definePlugin, explainConfig, parseDotenv, dotenvChain,
   resolveConfig, foldEnv, describeConstraint, toJsonSchema,
   type EnvSource, type Plugin,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { makeApp } from './helpers.ts'
 
 /**
@@ -48,7 +48,7 @@ type Json = Record<string, unknown>
 /**
  * The env-schema shape, hand-written: convert per the declared type, then check.
  *
- * `@visionpilot/zen-core` has no runtime dependencies and its tests keep that honest
+ * `@erenthedeveloper0/zen-core` has no runtime dependencies and its tests keep that honest
  * (§19.8), so real Zod lives in `examples/config`. What this needs to be is
  * *representative* rather than complete: an object schema that coerces strings
  * the way `z.coerce.number()` does, applies defaults, reports issues with a

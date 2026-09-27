@@ -16,7 +16,7 @@ const converters = new Map<string, SchemaConverter>()
 /**
  * Teach Zen how to convert one vendor's schemas.
  *
- * This is the seam that keeps `@visionpilot/zen-core` at zero dependencies while still
+ * This is the seam that keeps `@erenthedeveloper0/zen-core` at zero dependencies while still
  * supporting Zod and Valibot, whose converters are free functions in separate
  * packages rather than methods on the schema:
  *
@@ -111,7 +111,7 @@ export function isDescribeOnly(schema: unknown): boolean {
  * contract still holds, the runtime one does not) or fatal.
  *
  * `io` defaults to `'output'` because the serializer — the only caller in core —
- * is describing what leaves the process. `@visionpilot/zen-openapi` passes `'input'` for
+ * is describing what leaves the process. `@erenthedeveloper0/zen-openapi` passes `'input'` for
  * request sources.
  */
 export function toJsonSchema(schema: unknown, io: SchemaIo = 'output'): JsonSchema | null {

@@ -8,9 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 import {
   zen, slot, NotFound, jsonSchema, healthPlugin, nodeAdapter, defineConfig, registerMediaEncoder,
-} from '@visionpilot/zen'
-import { cors, rateLimit, requestId, securityHeaders } from '@visionpilot/zen-middleware'
-import { openapiPlugin } from '@visionpilot/zen-openapi'
+} from '@erenthedeveloper0/zen'
+import { cors, rateLimit, requestId, securityHeaders } from '@erenthedeveloper0/zen-middleware'
+import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
 
 const CurrentUser = slot<{ id: number; name: string }>('smoke.user')
 
@@ -516,7 +516,7 @@ await check('GET /report-json-only (never varies on Accept)', '/report-json-only
  * through `ctx.res.appendHeader`, both are applied by `prepareForWire`, and the
  * adapter has to emit both values. A reader of `entries()` that assigns instead
  * of accumulating drops one of them — which is exactly the defect §32.5 found
- * in `@visionpilot/zen-adapter-node`, and the only place it was visible was here.
+ * in `@erenthedeveloper0/zen-adapter-node`, and the only place it was visible was here.
  *
  * A cache that sees only `Vary: Origin` will serve a CSV body to a client that
  * asked for JSON from the same origin.

@@ -1,11 +1,11 @@
 import { z } from 'zod'
-import { registerSchemaConverter } from '@visionpilot/zen'
+import { registerSchemaConverter } from '@erenthedeveloper0/zen'
 
 /**
  * Teach Zen how to read Zod's shape — rfcs/0001 §11.1, §13.3.
  *
  * This is the whole integration. Four lines, in application code, and neither
- * `@visionpilot/zen-core` nor `@visionpilot/zen-openapi` has ever heard of Zod: they ask a Standard
+ * `@erenthedeveloper0/zen-core` nor `@erenthedeveloper0/zen-openapi` has ever heard of Zod: they ask a Standard
  * Schema for `~standard.vendor` and look up a converter that userland
  * registered. Swapping to Valibot or ArkType changes this file and nothing else.
  *

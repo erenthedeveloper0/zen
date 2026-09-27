@@ -7,7 +7,7 @@ import {
   registerMediaEncoder, __resetMediaEncoders, jsonSchema, explainRoute,
   NotAcceptable, Codes, jsonReply, replacePayload, encodeBody,
   type Representation,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { makeApp, shaped } from './helpers.ts'
 
 /**

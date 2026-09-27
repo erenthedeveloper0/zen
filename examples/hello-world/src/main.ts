@@ -1,4 +1,4 @@
-import { zen, slot, NotFound, type Context } from '@visionpilot/zen'
+import { zen, slot, NotFound, type Context } from '@erenthedeveloper0/zen'
 
 // ─── A slot: the typed replacement for `req.user = x` (rfcs/0001 §7.4) ───────
 interface User {

@@ -62,7 +62,7 @@ Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement — the VisionPilot
 maintainers of this repository — confidentially, through the repository's
 private reporting form at
-<https://github.com/VisionPilot/Zen.js/security/advisories/new>, with
+<https://github.com/erenthedeveloper0/zen/security/advisories/new>, with
 "Code of Conduct" in the title.
 All complaints will be reviewed and investigated promptly and fairly.
 

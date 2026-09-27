@@ -9,8 +9,8 @@
 
 Express-simple. Fastify-fast. Typed end to end. No magic.
 
-[![CI](https://github.com/VisionPilot/Zen.js/actions/workflows/ci.yml/badge.svg)](https://github.com/VisionPilot/Zen.js/actions/workflows/ci.yml)
-[![npm (alpha)](https://img.shields.io/npm/v/%40visionpilot%2Fzen/alpha?label=npm%40alpha&color=7c5cff)](https://www.npmjs.com/package/@visionpilot/zen)
+[![CI](https://github.com/erenthedeveloper0/zen/actions/workflows/ci.yml/badge.svg)](https://github.com/erenthedeveloper0/zen/actions/workflows/ci.yml)
+[![npm (alpha)](https://img.shields.io/npm/v/%40erenthedeveloper0%2Fzen/alpha?label=npm%40alpha&color=7c5cff)](https://www.npmjs.com/package/@erenthedeveloper0/zen)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.6-3c873a)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-%E2%89%A5%205.0-3178c6)](https://www.typescriptlang.org)
 [![Core dependencies](https://img.shields.io/badge/core%20dependencies-0-7c5cff)](./packages/core/package.json)
@@ -30,11 +30,11 @@ Express-simple. Fastify-fast. Typed end to end. No magic.
 > production: the API will change before `1.0`. See [Status](#status).
 
 ```bash
-npm install @visionpilot/zen@alpha
+npm install @erenthedeveloper0/zen@alpha
 ```
 
 ```ts
-import { zen } from '@visionpilot/zen'
+import { zen } from '@erenthedeveloper0/zen'
 
 const app = zen()
 
@@ -50,7 +50,7 @@ A schema is the whole contract — validation, the handler's types, the response
 filter and the OpenAPI document all come from it:
 
 ```ts
-import { zen, NotFound } from '@visionpilot/zen'
+import { zen, NotFound } from '@erenthedeveloper0/zen'
 import { z } from 'zod'
 
 const User = z.object({ id: z.number().int(), email: z.email(), name: z.string() })
@@ -154,12 +154,12 @@ each defect before fixing it — [CHANGELOG.md](./CHANGELOG.md) lists every one 
 
 | Package | |
 | --- | --- |
-| [`@visionpilot/zen`](./packages/zen) | install this — everything below, wired together |
-| [`@visionpilot/zen-core`](./packages/core) | registries, compilers, runtime — zero dependencies |
-| [`@visionpilot/zen-router`](./packages/router) | compiled radix router |
-| [`@visionpilot/zen-adapter-node`](./packages/adapter-node) | Node `http` adapter |
-| [`@visionpilot/zen-middleware`](./packages/middleware) | CORS, security headers, request ids, rate limiting |
-| [`@visionpilot/zen-openapi`](./packages/openapi) | OpenAPI 3.1, `$ref` dedup, breaking-change detection |
+| [`@erenthedeveloper0/zen`](./packages/zen) | install this — everything below, wired together |
+| [`@erenthedeveloper0/zen-core`](./packages/core) | registries, compilers, runtime — zero dependencies |
+| [`@erenthedeveloper0/zen-router`](./packages/router) | compiled radix router |
+| [`@erenthedeveloper0/zen-adapter-node`](./packages/adapter-node) | Node `http` adapter |
+| [`@erenthedeveloper0/zen-middleware`](./packages/middleware) | CORS, security headers, request ids, rate limiting |
+| [`@erenthedeveloper0/zen-openapi`](./packages/openapi) | OpenAPI 3.1, `$ref` dedup, breaking-change detection |
 
 Requires Node ≥ 22.6, and TypeScript ≥ 5.0 if you use TypeScript. The packages run on
 Node today; the adapter boundary is designed for Bun, Deno and the edge
@@ -404,7 +404,7 @@ The sharpest case is precision: `?id=9007199254740993` is an ordinary Postgres
 not survive the round trip is left as a string so the schema reports it, because
 a visible 400 beats a silent off-by-one on a primary key.
 
-`npm run explain -w @visionpilot/zen-example-coercion` prints the derived **plan** rather
+`npm run explain -w @erenthedeveloper0/zen-example-coercion` prints the derived **plan** rather
 than the profile — an outcome, not a policy, because the question is never "is
 numeric coercion on" but "why did `?sku=00713` survive and `?page=2` not":
 
@@ -540,7 +540,7 @@ in the diagnostics, not in the hot path.
 
 ### CORS that runs on the request the browser actually sends
 
-`@visionpilot/zen-middleware` ships `cors`, `securityHeaders`, `requestId` and `rateLimit`.
+`@erenthedeveloper0/zen-middleware` ships `cors`, `securityHeaders`, `requestId` and `rateLimit`.
 The interesting thing about them is not that a framework has CORS — every
 framework does — but that building them started by measuring whether the usual
 shape works. It does not:
@@ -766,7 +766,7 @@ stack frame, or if an application's error stops keeping its own.
 ## Try it
 
 ```bash
-git clone https://github.com/VisionPilot/Zen.js.git && cd Zen.js
+git clone https://github.com/erenthedeveloper0/zen.git && cd Zen.js
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
 npm test                           # 972 tests
@@ -790,7 +790,7 @@ node scripts/show-serializer.ts    # read what the serializer compiler emitted
 npm run explain                    # print the resolved chain for every route
 npm run explain:deadlines          # every route's budget, and where it came from
 npm run health:explain             # which dependencies are probed, and by whom
-npm run explain -w @visionpilot/zen-example-coercion   # what each route converts, and what it leaves alone
+npm run explain -w @erenthedeveloper0/zen-example-coercion   # what each route converts, and what it leaves alone
 npm run config:explain             # where every configured value came from
 npm run middleware:explain         # which responses carry which headers, and why
 npm run negotiation:explain        # what each Accept header gets, and what the plain route paid
@@ -879,7 +879,7 @@ RELEASING.md       how the packages get to npm; npm-registry.md has the reasonin
 CONTRIBUTING.md    conventions, setup, sign-off · SECURITY.md · CODE_OF_CONDUCT.md
 ```
 
-`@visionpilot/zen-core` has **zero runtime dependencies**, and imports nothing from `node:`.
+`@erenthedeveloper0/zen-core` has **zero runtime dependencies**, and imports nothing from `node:`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-10.png">
@@ -943,7 +943,7 @@ document says    : properties: id, email, name, role, createdAt   additionalProp
 
 All three agree, and the suite proves it by making a real request for every
 documented response and comparing the keys. The Zod integration is four lines in
-application code; neither `@visionpilot/zen-core` nor `@visionpilot/zen-openapi` imports it.
+application code; neither `@erenthedeveloper0/zen-core` nor `@erenthedeveloper0/zen-openapi` imports it.
 
 It is also the first example laid out the way
 [§23.4](./ARCHITECTURE.md#234-recommended-application-structure) recommends —
@@ -1099,8 +1099,8 @@ Four rules worth knowing up front:
 
 ## Licence
 
-[MIT](./LICENSE) © [VisionPilot](https://github.com/VisionPilot). Zen was created by
-[Eren Sümer](https://github.com/ErenSumer); everyone who has contributed is listed in
+[MIT](./LICENSE) © VisionPilot. Zen was created by
+[Eren Sümer](https://github.com/erenthedeveloper0); everyone who has contributed is listed in
 [CONTRIBUTORS.md](./CONTRIBUTORS.md).
 
 <br>
@@ -1111,5 +1111,5 @@ Four rules worth knowing up front:
     <img alt="zen.js" src="./.github/images/logo-with-text-black.png" width="138">
   </picture>
   <br>
-  <sub>Built by <a href="https://github.com/VisionPilot">VisionPilot</a> · a web framework is a compiler with an HTTP server attached</sub>
+  <sub>Built by VisionPilot · a web framework is a compiler with an HTTP server attached</sub>
 </div>

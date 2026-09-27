@@ -12,10 +12,12 @@ this entry records what changed in preparing it for release.
 
 ### Packaging
 
-- **Published under `@visionpilot`.** The `@zenjs` npm scope belongs to someone
-  else, and `zen` and `zenjs` are taken, so the packages are
-  `@visionpilot/zen` (install this one), `@visionpilot/zen-core`,
-  `zen-router`, `zen-adapter-node`, `zen-openapi` and `zen-middleware`.
+- **Published under `@erenthedeveloper0`.** The `@zenjs` npm scope belongs to
+  someone else, and `zen` and `zenjs` are taken, so the packages are
+  `@erenthedeveloper0/zen` (install this one), `@erenthedeveloper0/zen-core`,
+  `zen-router`, `zen-adapter-node`, `zen-openapi` and `zen-middleware`, from the
+  repository at
+  [github.com/erenthedeveloper0/zen](https://github.com/erenthedeveloper0/zen).
 - Copyright and authorship moved to VisionPilot; Eren Sümer, Zen's creator, is
   credited in [CONTRIBUTORS.md](./CONTRIBUTORS.md) and in every package.
 - Every tarball now ships `README.md`, `LICENSE` and the TypeScript sources its
@@ -41,7 +43,7 @@ this entry records what changed in preparing it for release.
   missing file, refusal of any path resolving outside `root` (symlinks
   included), `Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, 304 on
   revalidation, 206 for a single byte range, and `HEAD`.
-- **Signal and crash handling** in `@visionpilot/zen` (§4.5, §12.8): `SIGTERM`
+- **Signal and crash handling** in `@erenthedeveloper0/zen` (§4.5, §12.8): `SIGTERM`
   and `SIGINT` run the graceful shutdown and exit; an uncaught exception or
   unhandled rejection is logged at `fatal` and shuts down with exit code 1.
   Installed at `listen()`; `lifecycle: false` opts out. Core gains the
@@ -59,13 +61,13 @@ this entry records what changed in preparing it for release.
   problem document's `type` and every diagnostic's `docs:` link.
 - `CONTEXT_MEMBERS`, `withoutStack`, `forwardedClient`, `forwardedProtocol`,
   `combineValidators`, `diagnoseUnknown`, `diagnoseMisplaced`, `createSseChannel`
-  and friends are exported from `@visionpilot/zen-core`.
+  and friends are exported from `@erenthedeveloper0/zen-core`.
 - `app.all()` and `Collection#all()` — one ordinary route per method (§22.1).
 - `Collection#head`, `#options`, `#around` and `#after`, which the app had and
   a collection did not; a collection handle also refuses middleware after boot
   instead of accepting it and never compiling it.
 - `decodeComponent`, `trackDisposal`, `requestUrl` and `ALL_METHODS` exported
-  from `@visionpilot/zen-core`.
+  from `@erenthedeveloper0/zen-core`.
 - `benchmarks/request-path` — what these fixes cost on the request path, with
   structural gates: a route without `around` stays byte-identical, and the
   `next()` wrapper appears only where the downstream compiled synchronous.
@@ -173,7 +175,7 @@ before fixing it:
   3.6×; an error a handler throws keeps its stack and got 30% cheaper.
   `benchmarks/refusals` gates it.
 - The problem-document `type` URI is
-  `https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#<code>`. It
+  `https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#<code>`. It
   was `https://zenjs.dev/errors/<CODE>`, a domain nobody had registered.
 - `ctx.params` for an application-registered param type is typed `unknown`
   rather than `string`, because its `parse` may return anything.

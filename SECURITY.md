@@ -7,11 +7,11 @@ are welcome and are handled as the first priority of the project.
 
 **Do not open a public issue.** Report privately through GitHub:
 
-<https://github.com/VisionPilot/Zen.js/security/advisories/new>
+<https://github.com/erenthedeveloper0/zen/security/advisories/new>
 
 Include what you can of the following — a partial report is still useful:
 
-- the package and version (`npm ls @visionpilot/zen-core`),
+- the package and version (`npm ls @erenthedeveloper0/zen-core`),
 - the Node.js version and operating system,
 - a minimal reproduction: the route definitions and the request that triggers it,
 - what you expected, what happened, and the impact you believe it has.
@@ -54,8 +54,11 @@ termination.
 
 ## Supply chain
 
-`@visionpilot/zen-core` has **zero runtime dependencies**, enforced in CI. Every
-release is published from GitHub Actions with
+`@erenthedeveloper0/zen-core` has **zero runtime dependencies**, enforced in
+CI. Releases are published from GitHub Actions with
 [npm provenance](https://docs.npmjs.com/generating-provenance-statements), so
 `npm audit signatures` can verify which workflow, commit and repository built
-the tarball you installed.
+the tarball you installed. The one exception is the first, `0.1.0-alpha.1`:
+npm can attach a trusted publisher only to a package that already exists, so it
+is published by the maintainer from the tagged commit and carries no
+provenance.

@@ -1,5 +1,5 @@
-import { createApp, ZenApp, type Logger, type ZenOptions } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+import { createApp, ZenApp, type Logger, type ZenOptions } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 export const pathParser = {
   parse(path: string) {
@@ -45,7 +45,7 @@ export function uniqueName(prefix: string): string {
  * describing; coercion is the first subsystem that needs both at once, because
  * the plan comes from the shape and the verdict comes from the validator. Zod
  * gives you both from one declaration, and `examples/coercion` proves the
- * feature against the real thing — but `@visionpilot/zen-core` has no runtime
+ * feature against the real thing — but `@erenthedeveloper0/zen-core` has no runtime
  * dependencies and its tests keep that honest (§19.8), so here the two halves
  * are supplied side by side.
  *

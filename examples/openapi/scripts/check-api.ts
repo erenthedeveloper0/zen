@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { diffDocuments, openapiDocument, type OpenApiDocument } from '@visionpilot/zen-openapi'
+import { diffDocuments, openapiDocument, type OpenApiDocument } from '@erenthedeveloper0/zen-openapi'
 import { build } from '../src/app.ts'
 import { openapiOptions } from '../src/config/zen.config.ts'
 

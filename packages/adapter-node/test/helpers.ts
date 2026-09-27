@@ -1,6 +1,6 @@
 import { request, type IncomingMessage } from 'node:http'
-import { createApp, NoopLogger, type Logger, type ZenApp } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+import { createApp, NoopLogger, type Logger, type ZenApp } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 import { nodeAdapter, type NodeAdapterOptions } from '../src/index.ts'
 
 /**

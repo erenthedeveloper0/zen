@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it, before } from 'node:test'
 
-import { openapiDocument } from '@visionpilot/zen-openapi'
-import type { OpenApiDocument, OpenApiSchema } from '@visionpilot/zen-openapi'
+import { openapiDocument } from '@erenthedeveloper0/zen-openapi'
+import type { OpenApiDocument, OpenApiSchema } from '@erenthedeveloper0/zen-openapi'
 
 import { build } from '../src/app.ts'
 import { openapiOptions } from '../src/config/zen.config.ts'
-import type { ZenApp } from '@visionpilot/zen'
+import type { ZenApp } from '@erenthedeveloper0/zen'
 
 let app: ZenApp
 let document: OpenApiDocument

@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { ZenContainer, token } from '@visionpilot/zen-core'
+import { ZenContainer, token } from '@erenthedeveloper0/zen-core'
 import { makeApp, uniqueName } from './helpers.ts'
 
 const t = <T,>(name: string) => token<T>(uniqueName(name))

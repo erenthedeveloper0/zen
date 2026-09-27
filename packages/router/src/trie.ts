@@ -1,7 +1,7 @@
 import type {
   HttpMethod, MatchResult, ParamType, ParamsObject, PathSegment, RouteRecord,
-} from '@visionpilot/zen-core'
-import { decodeComponent, splitSegments } from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
+import { decodeComponent, splitSegments } from '@erenthedeveloper0/zen-core'
 
 export interface RouteEntry {
   readonly route: RouteRecord

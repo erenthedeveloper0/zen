@@ -1,4 +1,4 @@
-import { explainConfig } from '@visionpilot/zen'
+import { explainConfig } from '@erenthedeveloper0/zen'
 import { makeApp } from './app.ts'
 
 /**

@@ -1,8 +1,8 @@
-import { explainConfig, explainRoute } from '@visionpilot/zen'
+import { explainConfig, explainRoute } from '@erenthedeveloper0/zen'
 import { makeApp } from './app.ts'
 
 /**
- * `npm run explain -w @visionpilot/zen-example-middleware` — rfcs/0001 §2.4, §8.5, §16.1.
+ * `npm run explain -w @erenthedeveloper0/zen-example-middleware` — rfcs/0001 §2.4, §8.5, §16.1.
  *
  * Four questions a service author asks about middleware, answered off the
  * frozen graph rather than by reading `app.ts` and hoping:

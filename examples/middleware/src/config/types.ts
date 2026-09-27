@@ -1,4 +1,4 @@
-import type { ConfigFrom, EnvFrom } from '@visionpilot/zen'
+import type { ConfigFrom, EnvFrom } from '@erenthedeveloper0/zen'
 import type config from './zen.config.ts'
 
 /**

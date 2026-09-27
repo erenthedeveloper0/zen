@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { dotenvChain, parseDotenv, type EnvSource } from '@visionpilot/zen'
+import { dotenvChain, parseDotenv, type EnvSource } from '@erenthedeveloper0/zen'
 
 /**
  * The four lines §3.2 says belong here rather than in the framework.
  *
- * `@visionpilot/zen-core` has no `node:` imports — a hard rule, and not a bureaucratic
+ * `@erenthedeveloper0/zen-core` has no `node:` imports — a hard rule, and not a bureaucratic
  * one: `process` and `fs` do not exist on workerd, where the environment
  * arrives as an argument to the fetch handler. So core owns the *policy*
  * (`dotenvChain` states the precedence, `parseDotenv` states the grammar and

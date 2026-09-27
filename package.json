@@ -3,19 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Zen — a compiler-first web framework for Node.js. Monorepo for the @visionpilot/zen packages.",
+  "description": "Zen — a compiler-first web framework for Node.js. Monorepo for the @erenthedeveloper0/zen packages.",
   "license": "MIT",
-  "author": {
-    "name": "VisionPilot",
-    "url": "https://github.com/VisionPilot"
-  },
-  "homepage": "https://github.com/VisionPilot/Zen.js#readme",
+  "author": "VisionPilot",
+  "homepage": "https://github.com/erenthedeveloper0/zen#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/VisionPilot/Zen.js.git"
+    "url": "git+https://github.com/erenthedeveloper0/zen.git"
   },
   "bugs": {
-    "url": "https://github.com/VisionPilot/Zen.js/issues"
+    "url": "https://github.com/erenthedeveloper0/zen/issues"
   },
   "engines": {
     "node": ">=22.18.0"

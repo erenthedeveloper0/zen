@@ -249,7 +249,7 @@ export interface RouteRecord {
    *
    * Non-null, it is here for the same reason `coercion` and `timeout` are: it
    * is a function of static registration, so the step the pipeline emits, the
-   * line `explainRoute` prints, and the `content` map `@visionpilot/zen-openapi` writes
+   * line `explainRoute` prints, and the `content` map `@erenthedeveloper0/zen-openapi` writes
    * all read one structure and cannot disagree about which media types this
    * route serves (§2.4).
    */

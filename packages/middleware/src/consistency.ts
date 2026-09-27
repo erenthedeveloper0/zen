@@ -1,4 +1,4 @@
-import { Codes, ZenError } from '@visionpilot/zen-core'
+import { Codes, ZenError } from '@erenthedeveloper0/zen-core'
 import type { CorsExports } from './cors.ts'
 
 /**

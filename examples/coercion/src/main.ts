@@ -46,7 +46,7 @@ import { config } from './config/coercion.config.ts'
  *
  * And the part that is not a curl command:
  *
- *   npm run explain -w @visionpilot/zen-example-coercion
+ *   npm run explain -w @erenthedeveloper0/zen-example-coercion
  *
  * which prints the plan the boot compiler derived, per route, from the same
  * structure the coercers were generated from — including which routes got no
@@ -65,7 +65,7 @@ console.log(`
 
   Not coerced, on purpose:  sku (declared string) · q (union with string)
 
-  npm run explain -w @visionpilot/zen-example-coercion   — the derived plan, per route
+  npm run explain -w @erenthedeveloper0/zen-example-coercion   — the derived plan, per route
 `)
 
 // SIGTERM and SIGINT drain and exit on their own: `zen()` installs the process

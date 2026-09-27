@@ -1,5 +1,5 @@
-import { definePlugin, Unauthorized, Forbidden } from '@visionpilot/zen'
-import type { Slot, Token } from '@visionpilot/zen'
+import { definePlugin, Unauthorized, Forbidden } from '@erenthedeveloper0/zen'
+import type { Slot, Token } from '@erenthedeveloper0/zen'
 import type { UserRow } from './domain.ts'
 import { UserRepoToken } from './services.ts'
 

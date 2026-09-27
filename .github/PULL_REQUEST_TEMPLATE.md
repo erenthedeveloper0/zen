@@ -15,7 +15,7 @@
 
 - [ ] A compiled subsystem changed → its interpreted twin changed the same way
 - [ ] A context field added → added to both twins, in the same position (I2)
-- [ ] `@visionpilot/zen-core` still imports nothing from `node:` and has no runtime dependency
+- [ ] `@erenthedeveloper0/zen-core` still imports nothing from `node:` and has no runtime dependency
 - [ ] Docs updated: ARCHITECTURE.md where the design changed, TASKS.md where status changed, CHANGELOG.md
 
 Commits are signed off (`git commit -s`) — see CONTRIBUTING.md.

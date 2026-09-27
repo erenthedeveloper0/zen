@@ -6,7 +6,7 @@
  * user's schema library never enters Zen's dependency tree and adding a new one
  * is a userland act rather than a framework release.
  *
- * Mirrored here (rather than depended upon) so that `@visionpilot/zen-core` keeps its
+ * Mirrored here (rather than depended upon) so that `@erenthedeveloper0/zen-core` keeps its
  * zero-runtime-dependency guarantee. The shape is spec-defined and stable.
  */
 export interface StandardSchemaV1<Input = unknown, Output = Input> {

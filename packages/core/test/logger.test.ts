@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { ConsoleLogger, ZenError } from '@visionpilot/zen-core'
+import { ConsoleLogger, ZenError } from '@erenthedeveloper0/zen-core'
 import { makeApp } from './helpers.ts'
 
 /**

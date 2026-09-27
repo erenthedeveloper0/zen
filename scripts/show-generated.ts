@@ -6,7 +6,7 @@
  *
  *     node scripts/show-generated.ts
  */
-import { zen, slot, markSync, type Context } from '@visionpilot/zen'
+import { zen, slot, markSync, type Context } from '@erenthedeveloper0/zen'
 
 const CurrentUser = slot<{ id: number }>('demo.user')
 

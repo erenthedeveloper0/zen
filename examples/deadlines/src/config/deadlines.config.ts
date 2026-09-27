@@ -1,4 +1,4 @@
-import type { Duration } from '@visionpilot/zen'
+import type { Duration } from '@erenthedeveloper0/zen'
 
 /**
  * Configuration — a plain module until §16 lands.

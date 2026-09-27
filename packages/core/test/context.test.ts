@@ -7,7 +7,7 @@ import {
   compileContext, CodeGen, DEFAULT_CAPABILITIES, PlainContext, ZenContainer, SmallHeaderBag,
   parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply,
   type RawRequest, type ContextEnv,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { silentLogger, uniqueName } from './helpers.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))

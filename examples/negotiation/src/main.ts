@@ -44,7 +44,7 @@ import { makeApp } from './app.ts'
  *   curl -si localhost:3000/api/sales/regions -H 'Accept: text/csv' | head -8
  *
  *   # 9. What actually runs, and where negotiation sits in the chain.
- *   npm run explain -w @visionpilot/zen-example-negotiation
+ *   npm run explain -w @erenthedeveloper0/zen-example-negotiation
  */
 const { app } = makeApp()
 const handle = await app.listen({ port: 3000 })

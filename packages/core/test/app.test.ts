@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { createApp, slot, markSync, NotFound, ZenApp, ALL_METHODS } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+import { createApp, slot, markSync, NotFound, ZenApp, ALL_METHODS } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 const pathParser = {
   parse(path: string) {
@@ -403,7 +403,7 @@ describe('repeated headers (§13.6)', () => {
   /**
    * `SmallHeaderBag` stores a multi-value header as an array and `entries()`
    * flattens it to one entry per value. Two readers disagreed with that
-   * contract for as long as nothing exercised it: `@visionpilot/zen-adapter-node` called
+   * contract for as long as nothing exercised it: `@erenthedeveloper0/zen-adapter-node` called
    * `setHeader` for every name but `set-cookie`, which discards all but the
    * last, and `InjectedResponse` used `Object.fromEntries`, which does the
    * same. Both looked complete because the only repeated header anyone had

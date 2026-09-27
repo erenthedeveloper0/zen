@@ -1,4 +1,4 @@
-import type { Collection, Reply, Token } from '@visionpilot/zen'
+import type { Collection, Reply, Token } from '@erenthedeveloper0/zen'
 import { PaymentsToken } from '../../plugins/payments.ts'
 import type { Dependencies } from '../../shared/dependencies.ts'
 

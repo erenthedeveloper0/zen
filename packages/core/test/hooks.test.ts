@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   BootError, UNAVAILABLE_PHASES, definePlugin, explainRoute, jsonSchema, steps, type Reply,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { makeApp, schema } from './helpers.ts'
 
 /**

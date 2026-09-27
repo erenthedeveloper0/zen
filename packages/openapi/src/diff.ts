@@ -1,4 +1,4 @@
-import type { JsonSchemaNode, JsonType } from '@visionpilot/zen-core'
+import type { JsonSchemaNode, JsonType } from '@erenthedeveloper0/zen-core'
 import type {
   HttpOperation, OpenApiDocument, OpenApiSchema, OperationObject, ParameterObject, ResponseObject,
 } from './types.ts'

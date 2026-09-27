@@ -41,7 +41,7 @@ import type { EnvEntry } from '../primitives/dotenv.ts'
  * ### What this module deliberately does not do
  *
  * It does not read files. §3.2 assigns that to the CLI or the adapter, and the
- * constraint is not bureaucratic: `@visionpilot/zen-core` has no `node:` imports (§3.3
+ * constraint is not bureaucratic: `@erenthedeveloper0/zen-core` has no `node:` imports (§3.3
  * B2), so a config store that read `.env` would be a core module that cannot
  * run on workerd. What core owns is the *policy* — which layer beats which,
  * what a `.env` line means, how provenance is recorded — and `parseDotenv`
@@ -167,7 +167,7 @@ export interface EnvValue {
    * Plugins that declared they read this variable, from their manifests.
    *
    * §16.2's `used by:` line. It turns "JWT_SECRET is missing" into "JWT_SECRET
-   * is missing, and `@visionpilot/zen-plugin-jwt` is what will not work", which is the
+   * is missing, and `@erenthedeveloper0/zen-plugin-jwt` is what will not work", which is the
    * difference between a message a developer can act on and one they have to
    * grep for.
    */
@@ -340,7 +340,7 @@ export const CONFIG_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze(
     // Loopback, not `0.0.0.0`. §19.2's rule is that the secure configuration is
     // the default and relaxing it is a visible line of code; a framework whose
     // default binds to every interface publishes a developer's laptop to the
-    // coffee shop's network. It also matches what `@visionpilot/zen-adapter-node` already
+    // coffee shop's network. It also matches what `@erenthedeveloper0/zen-adapter-node` already
     // did, so introducing config does not silently change where a running app
     // is reachable from.
     host: '127.0.0.1',

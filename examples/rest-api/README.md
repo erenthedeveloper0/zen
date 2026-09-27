@@ -140,7 +140,7 @@ real application you would delete it and write:
 
 ```ts
 import { z } from 'zod'
-import { registerSchemaConverter } from '@visionpilot/zen'
+import { registerSchemaConverter } from '@erenthedeveloper0/zen'
 
 registerSchemaConverter('zod', (schema) => z.toJSONSchema(schema as never, { io: 'output' }))
 
@@ -153,6 +153,6 @@ const PublicUser = z.object({
 })
 ```
 
-Nothing else in this example would change. `@visionpilot/zen-core` still has zero runtime
+Nothing else in this example would change. `@erenthedeveloper0/zen-core` still has zero runtime
 dependencies, and swapping Zod for Valibot or ArkType is a userland decision
 rather than a framework release.

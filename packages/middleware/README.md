@@ -1,26 +1,26 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-white.png">
-    <img alt="zen.js" src="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-black.png" width="220">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-white.png">
+    <img alt="zen.js" src="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-black.png" width="220">
   </picture>
 </p>
 
-# @visionpilot/zen-middleware
+# @erenthedeveloper0/zen-middleware
 
 CORS, security headers, request ids and rate limiting for
-[Zen](https://github.com/VisionPilot/Zen.js) — built so that they run on the
+[Zen](https://github.com/erenthedeveloper0/zen) — built so that they run on the
 requests that matter most, which are the ones most middleware never sees.
 
 > **Alpha.** Also re-exported by
-> [`@visionpilot/zen`](https://www.npmjs.com/package/@visionpilot/zen).
+> [`@erenthedeveloper0/zen`](https://www.npmjs.com/package/@erenthedeveloper0/zen).
 
 ```bash
-npm install @visionpilot/zen-middleware@alpha
+npm install @erenthedeveloper0/zen-middleware@alpha
 ```
 
 ```ts
-import { zen } from '@visionpilot/zen'
-import { cors, rateLimit, requestId, securityHeaders } from '@visionpilot/zen-middleware'
+import { zen } from '@erenthedeveloper0/zen'
+import { cors, rateLimit, requestId, securityHeaders } from '@erenthedeveloper0/zen-middleware'
 
 const app = zen({ trustProxy: 1 })          // one load balancer in front — see below
 
@@ -79,7 +79,7 @@ rotating a fake address gets a fresh rate-limit budget on every request.
 
 ## Documentation
 
-[ARCHITECTURE.md §32](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md#32-first-party-middleware) ·
-[`examples/middleware`](https://github.com/VisionPilot/Zen.js/tree/main/examples/middleware).
+[ARCHITECTURE.md §32](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md#32-first-party-middleware) ·
+[`examples/middleware`](https://github.com/erenthedeveloper0/zen/tree/main/examples/middleware).
 
-[MIT](https://github.com/VisionPilot/Zen.js/blob/main/LICENSE) © [VisionPilot](https://github.com/VisionPilot) · created by [Eren Sümer](https://github.com/ErenSumer) · [contributors](https://github.com/VisionPilot/Zen.js/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

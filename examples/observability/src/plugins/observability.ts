@@ -1,5 +1,5 @@
-import { definePlugin } from '@visionpilot/zen'
-import type { AppGraph, Reply, RouteInfo, Slot } from '@visionpilot/zen'
+import { definePlugin } from '@erenthedeveloper0/zen'
+import type { AppGraph, Reply, RouteInfo, Slot } from '@erenthedeveloper0/zen'
 import { Counter, Gauge, Histogram, Registry } from '../shared/metrics.ts'
 
 /**

@@ -17,9 +17,9 @@
  *      noise when it is within the run-to-run spread — the same discipline
  *      §28.2 applies to the type-check gate.
  */
-import { createApp, type JsonSchema } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
-import { openapiDocument, openapiPlugin } from '@visionpilot/zen-openapi'
+import { createApp, type JsonSchema } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
+import { openapiDocument, openapiPlugin } from '@erenthedeveloper0/zen-openapi'
 
 const pathParser = { parse: (path: string) => {
   const parsed = parsePath(path)
@@ -251,7 +251,7 @@ console.log('\n  Per-request cost of having the plugin registered — 100 routes
   // The document is built once and served as a pre-encoded string, so a
   // regression here would mean something started running per request.
   if (Math.abs(delta) > Math.max(noise, 0.05)) {
-    console.error('\n    ::error:: registering @visionpilot/zen-openapi changed request cost beyond the measurement noise')
+    console.error('\n    ::error:: registering @erenthedeveloper0/zen-openapi changed request cost beyond the measurement noise')
     process.exitCode = 1
   }
 }

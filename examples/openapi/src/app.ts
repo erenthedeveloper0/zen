@@ -3,8 +3,8 @@
 // that ordering is obvious.
 import './shared/zod.ts'
 
-import { zen, type ZenApp, type ZenAppOptions } from '@visionpilot/zen'
-import { openapiPlugin } from '@visionpilot/zen-openapi'
+import { zen, type ZenApp, type ZenAppOptions } from '@erenthedeveloper0/zen'
+import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
 
 import { loadConfig, openapiOptions, type AppConfig } from './config/zen.config.ts'
 import { ClockToken, fixedClock } from './shared/clock.ts'

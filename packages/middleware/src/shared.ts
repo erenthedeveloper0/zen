@@ -1,4 +1,4 @@
-import type { ReplyBuilder, Reply, LowercaseName } from '@visionpilot/zen-core'
+import type { ReplyBuilder, Reply, LowercaseName } from '@erenthedeveloper0/zen-core'
 
 /**
  * What this pack touches on a context, declared structurally — §10.4.

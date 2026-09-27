@@ -1,7 +1,7 @@
 import {
   definePlugin, parseDuration, Codes, TooManyRequests, ZenError,
   type Duration, type Plugin, type Reply,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { MemoryStore, type Store, type Tally } from './store.ts'
 import type { Answering, RawReading, Staging } from './shared.ts'
 
@@ -24,7 +24,7 @@ import type { Answering, RawReading, Staging } from './shared.ts'
  * ### `Codes.RATE_LIMITED` was already here
  *
  * `TooManyRequests` and `ZEN_RATE_LIMITED` have been exported from
- * `@visionpilot/zen-core` since 0.1 and read by nothing — the same state `COERCION_DEFAULTS`
+ * `@erenthedeveloper0/zen-core` since 0.1 and read by nothing — the same state `COERCION_DEFAULTS`
  * and `Codes.CONFIG_INVALID` were in before the two features that needed them.
  * Using it rather than inventing a 429 means the refusal is an ordinary
  * `HttpError`: it goes through the error engine, the RFC 9457 envelope, the

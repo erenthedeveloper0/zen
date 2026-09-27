@@ -1,4 +1,4 @@
-import { NotFound, type ZenApp } from '@visionpilot/zen'
+import { NotFound, type ZenApp } from '@erenthedeveloper0/zen'
 import { NewOrder, Order } from './schemas.ts'
 import { OrderRepoToken } from './service.ts'
 

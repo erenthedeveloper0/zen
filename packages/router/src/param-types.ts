@@ -1,4 +1,4 @@
-import type { ParamType } from '@visionpilot/zen-core'
+import type { ParamType } from '@erenthedeveloper0/zen-core'
 
 /**
  * Built-in path parameter types — rfcs/0001 §5.2.

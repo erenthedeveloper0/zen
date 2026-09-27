@@ -1,25 +1,25 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-white.png">
-    <img alt="zen.js" src="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-black.png" width="220">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-white.png">
+    <img alt="zen.js" src="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-black.png" width="220">
   </picture>
 </p>
 
-# @visionpilot/zen-openapi
+# @erenthedeveloper0/zen-openapi
 
-OpenAPI 3.1 for [Zen](https://github.com/VisionPilot/Zen.js), generated from the
+OpenAPI 3.1 for [Zen](https://github.com/erenthedeveloper0/zen), generated from the
 same schemas the framework validates requests and serializes responses with —
 so the document says exactly what the wire carries.
 
 > **Alpha.**
 
 ```bash
-npm install @visionpilot/zen-openapi@alpha
+npm install @erenthedeveloper0/zen-openapi@alpha
 ```
 
 ```ts
-import { zen, registerSchemaConverter } from '@visionpilot/zen'
-import { openapiPlugin } from '@visionpilot/zen-openapi'
+import { zen, registerSchemaConverter } from '@erenthedeveloper0/zen'
+import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
 import { z } from 'zod'
 
 // Once, before the app boots: how to read a Zod schema as JSON Schema.
@@ -50,7 +50,7 @@ in the server's preference order.
 ## Breaking-change detection
 
 ```ts
-import { diffDocuments } from '@visionpilot/zen-openapi'
+import { diffDocuments } from '@erenthedeveloper0/zen-openapi'
 
 const { breaking, compatible } = diffDocuments(committedBaseline, currentDocument)
 if (breaking.length > 0) process.exitCode = 1
@@ -70,7 +70,7 @@ API is public), and `onDocument` (receives the finished document at boot).
 
 ## Documentation
 
-[ARCHITECTURE.md §29](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md#29-openapi--code-generation) ·
-[`examples/openapi`](https://github.com/VisionPilot/Zen.js/tree/main/examples/openapi).
+[ARCHITECTURE.md §29](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md#29-openapi--code-generation) ·
+[`examples/openapi`](https://github.com/erenthedeveloper0/zen/tree/main/examples/openapi).
 
-[MIT](https://github.com/VisionPilot/Zen.js/blob/main/LICENSE) © [VisionPilot](https://github.com/VisionPilot) · created by [Eren Sümer](https://github.com/ErenSumer) · [contributors](https://github.com/VisionPilot/Zen.js/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

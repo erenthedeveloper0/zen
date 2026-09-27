@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Codes, docsUrl, NotFound } from '@visionpilot/zen-core'
+import { Codes, docsUrl, NotFound } from '@erenthedeveloper0/zen-core'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const catalogue = readFileSync(join(root, 'docs', 'errors.md'), 'utf8')
@@ -42,6 +42,6 @@ describe('docs/errors.md is the documentation every error links to (I7)', () => 
   it('links a problem document and a diagnostic to that entry', () => {
     const problem = new NotFound('x').toProblem('/x', 'req')
     assert.equal(problem['type'], docsUrl('ZEN_NOT_FOUND'))
-    assert.equal(docsUrl('ZEN_NOT_FOUND'), 'https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_not_found')
+    assert.equal(docsUrl('ZEN_NOT_FOUND'), 'https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#zen_not_found')
   })
 })

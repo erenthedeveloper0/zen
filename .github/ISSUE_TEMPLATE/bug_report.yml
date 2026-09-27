@@ -6,13 +6,13 @@ body:
     attributes:
       value: |
         Thanks for taking the time. **Security issues go to
-        [a private advisory](https://github.com/VisionPilot/Zen.js/security/advisories/new), not here.**
+        [a private advisory](https://github.com/erenthedeveloper0/zen/security/advisories/new), not here.**
   - type: input
     id: version
     attributes:
       label: Package and version
-      description: Output of `npm ls @visionpilot/zen @visionpilot/zen-core`
-      placeholder: "@visionpilot/zen@0.1.0-alpha.1"
+      description: Output of `npm ls @erenthedeveloper0/zen @erenthedeveloper0/zen-core`
+      placeholder: "@erenthedeveloper0/zen@0.1.0-alpha.1"
     validations:
       required: true
   - type: input

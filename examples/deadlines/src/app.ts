@@ -1,5 +1,5 @@
-import { zen } from '@visionpilot/zen'
-import type { Duration, ZenApp } from '@visionpilot/zen'
+import { zen } from '@erenthedeveloper0/zen'
+import type { Duration, ZenApp } from '@erenthedeveloper0/zen'
 import { deadlines, type DeadlineReport } from './plugins/deadlines.ts'
 import { QuoteToken, makeQuotes, quoteRoutes } from './features/quotes/index.ts'
 import { reportRoutes } from './features/reports/index.ts'

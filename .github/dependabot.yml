@@ -15,7 +15,7 @@ updates:
     # `scripts/version.ts` (RELEASING.md). A bot bumping one pin would publish
     # a set that disagrees with itself, which `check-release.ts` then refuses.
     ignore:
-      - dependency-name: '@visionpilot/*'
+      - dependency-name: '@erenthedeveloper0/*'
     groups:
       dev-dependencies:
         patterns: ['*']

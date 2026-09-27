@@ -144,7 +144,7 @@ export interface ZenOptions<C = unknown> {
    * Where environment variables come from — §16.1 layers 5–7.
    *
    * A plain record is the common case and is what the `zen` meta-package fills
-   * in with `process.env`. `@visionpilot/zen-core` does not read it itself, and that is
+   * in with `process.env`. `@erenthedeveloper0/zen-core` does not read it itself, and that is
    * not pedantry: `process` does not exist on workerd, where the environment
    * arrives as an argument to the fetch handler, so a core that reached for a
    * global would be a core that cannot run there (§3.3 B2).
@@ -845,7 +845,7 @@ export class ZenApp<X = {}> {
    *
    * One declaration, three consumers: `test` is compiled into the router, so a
    * malformed id 404s instead of reaching the handler; `parse` builds the value
-   * `ctx.params` carries; `jsonSchema` is what `@visionpilot/zen-openapi` documents. The
+   * `ctx.params` carries; `jsonSchema` is what `@erenthedeveloper0/zen-openapi` documents. The
    * router's "unknown parameter type" diagnostic has always named this method —
    * it now exists.
    *
@@ -1081,7 +1081,7 @@ export class ZenApp<X = {}> {
 
       // §13.4 — and the same treatment again, for the same reason. What lands
       // on the record is the *offer list in preference order*, which is what
-      // `explainRoute` prints and what @visionpilot/zen-openapi turns into a `content`
+      // `explainRoute` prints and what @erenthedeveloper0/zen-openapi turns into a `content`
       // map; the representations it also produces are the compiled half and
       // stay out of the graph, exactly as the compiled serializers do.
       const negotiated = buildNegotiation(pending.schema.response, {
@@ -1131,7 +1131,7 @@ export class ZenApp<X = {}> {
           `${shown}${rest > 0 ? `, and ${rest} more` : ''}. ` +
           'fix: register a converter — registerSchemaConverter("zod", (s, io) => z.toJSONSchema(s, { io })) — ' +
           'or coerce in the schema with z.coerce.number(). ' +
-          'also: the same schemas are undocumented by @visionpilot/zen-openapi for the same reason.',
+          'also: the same schemas are undocumented by @erenthedeveloper0/zen-openapi for the same reason.',
       )
     }
 
@@ -2197,7 +2197,7 @@ export class InjectedResponse {
    * observe what the wire would observe, and a test asserting on `Vary` was
    * getting one third of it and passing.
    *
-   * Found the same way as the sibling defect in `@visionpilot/zen-adapter-node`: nothing
+   * Found the same way as the sibling defect in `@erenthedeveloper0/zen-adapter-node`: nothing
    * produced a repeated header other than `Set-Cookie` until CORS varied on
    * three of them (§32.2).
    *

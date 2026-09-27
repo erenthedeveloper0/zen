@@ -35,7 +35,7 @@ export interface CompiledRouter {
    * trie matcher, the parse function, and OpenAPI. The third one lives in a
    * package that must not depend on the router (§24.3), so the registry is
    * published here and carried on the frozen `AppGraph` — rather than
-   * re-declared in `@visionpilot/zen-openapi`, which is how the two copies would drift.
+   * re-declared in `@erenthedeveloper0/zen-openapi`, which is how the two copies would drift.
    */
   readonly paramTypes: ReadonlyMap<string, ParamType>
 }

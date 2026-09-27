@@ -1,5 +1,5 @@
 {
-  "name": "@visionpilot/zen-core",
+  "name": "@erenthedeveloper0/zen-core",
   "version": "0.1.0-alpha.1",
   "description": "Zen core: registries, compilers, runtime, context, errors and the response engine. Zero runtime dependencies.",
   "keywords": [
@@ -12,24 +12,21 @@
     "standard-schema",
     "zen"
   ],
-  "homepage": "https://github.com/VisionPilot/Zen.js/tree/main/packages/core#readme",
+  "homepage": "https://github.com/erenthedeveloper0/zen/tree/main/packages/core#readme",
   "bugs": {
-    "url": "https://github.com/VisionPilot/Zen.js/issues"
+    "url": "https://github.com/erenthedeveloper0/zen/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/VisionPilot/Zen.js.git",
+    "url": "git+https://github.com/erenthedeveloper0/zen.git",
     "directory": "packages/core"
   },
   "license": "MIT",
-  "author": {
-    "name": "VisionPilot",
-    "url": "https://github.com/VisionPilot"
-  },
+  "author": "VisionPilot",
   "contributors": [
     {
       "name": "Eren Sümer",
-      "url": "https://github.com/ErenSumer"
+      "url": "https://github.com/erenthedeveloper0"
     }
   ],
   "type": "module",

@@ -80,7 +80,7 @@ export type ZenCode = (typeof Codes)[keyof typeof Codes]
  * address the first person to buy it would decide the content of.
  * `docs/errors.md` has a heading per code, and a test asserts it stays complete.
  */
-export const DOCS_BASE = 'https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#'
+export const DOCS_BASE = 'https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#'
 
 /** The documentation link for a code — GitHub's anchor for its heading. */
 export function docsUrl(code: string): string {

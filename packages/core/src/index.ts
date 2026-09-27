@@ -1,5 +1,5 @@
 /**
- * `@visionpilot/zen-core` — registries, compilers, runtime, context, errors, response engine.
+ * `@erenthedeveloper0/zen-core` — registries, compilers, runtime, context, errors, response engine.
  *
  * Zero runtime dependencies. Not a slogan: a CI check (§19.8).
  */

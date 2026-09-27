@@ -31,8 +31,8 @@ import {
   createApp, compilePipeline, CodeGen, DEFAULT_CAPABILITIES, PlainContext, ZenContainer,
   Deadline, markSync,
   type PipelineSpec, type RawRequest, type Reply,
-} from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+} from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 const pathParser = {
   parse: (path: string) => {

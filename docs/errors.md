@@ -6,12 +6,12 @@ and messages may change while codes may not.
 
 Each code below is also a link target. A problem document's `type` and a boot
 diagnostic's `docs:` line both point here —
-`https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_not_found` —
+`https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#zen_not_found` —
 and a test asserts that every code the framework can produce has an entry.
 
 - [Boot and registration](#boot-and-registration) — reported by `ready()`, aggregated, before any traffic
 - [Request time](#request-time) — the `code` of a problem document (RFC 9457)
-- [OpenAPI](#openapi) — `@visionpilot/zen-openapi`'s document diagnostics
+- [OpenAPI](#openapi) — `@erenthedeveloper0/zen-openapi`'s document diagnostics
 - [Router warnings](#router-warnings)
 
 Boot problems are **aggregated**: an application with four registration problems
@@ -318,7 +318,7 @@ find the full error in the logs.
 
 ## OpenAPI
 
-Reported by `@visionpilot/zen-openapi` while building the document at boot. They
+Reported by `@erenthedeveloper0/zen-openapi` while building the document at boot. They
 are warnings unless the plugin runs with `strict: true`, which turns them into
 boot errors.
 

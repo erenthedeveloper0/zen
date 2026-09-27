@@ -263,7 +263,7 @@ jobs:
         run: node scripts/check-pack.ts --typescript 5.0
 
   zero-dependencies:
-    name: '@visionpilot/zen-core has zero runtime dependencies'
+    name: '@erenthedeveloper0/zen-core has zero runtime dependencies'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -276,20 +276,20 @@ jobs:
         run: |
           deps=$(node -p "JSON.stringify(require('./packages/core/package.json').dependencies || {})")
           echo "core dependencies: $deps"
-          test "$deps" = "{}" || { echo "::error::@visionpilot/zen-core gained a runtime dependency: $deps"; exit 1; }
+          test "$deps" = "{}" || { echo "::error::@erenthedeveloper0/zen-core gained a runtime dependency: $deps"; exit 1; }
 
       - name: "Assert core imports nothing from node:"
         run: |
           if grep -rn "from 'node:" packages/core/src; then
-            echo "::error::@visionpilot/zen-core must not import platform APIs — that is the adapter's job (§3.3 B2)"
+            echo "::error::@erenthedeveloper0/zen-core must not import platform APIs — that is the adapter's job (§3.3 B2)"
             exit 1
           fi
 
       # §24.3 — the dependency graph has no cycles and openapi is a leaf on core.
       # Depending on the router would be the shortest way to reach param-type
       # schemas, and the one where the two copies of that table drift (§5.2).
-      - name: Assert @visionpilot/zen-openapi depends on core alone
+      - name: Assert @erenthedeveloper0/zen-openapi depends on core alone
         run: |
           deps=$(node -p "Object.keys(require('./packages/openapi/package.json').dependencies || {}).join(',')")
           echo "openapi dependencies: $deps"
-          test "$deps" = "@visionpilot/zen-core" || { echo "::error::@visionpilot/zen-openapi must depend on @visionpilot/zen-core alone, got: $deps"; exit 1; }
+          test "$deps" = "@erenthedeveloper0/zen-core" || { echo "::error::@erenthedeveloper0/zen-openapi must depend on @erenthedeveloper0/zen-core alone, got: $deps"; exit 1; }

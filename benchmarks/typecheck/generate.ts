@@ -58,7 +58,7 @@ export function generateFixture(root: string, spec: FixtureSpec): string {
   return dir
 }
 
-const SCHEMA_HELPER = `import type { StandardSchemaV1 } from '@visionpilot/zen-core'
+const SCHEMA_HELPER = `import type { StandardSchemaV1 } from '@erenthedeveloper0/zen-core'
 
 export function typed<T>(): StandardSchemaV1<unknown, T> {
   return {
@@ -72,7 +72,7 @@ export function typed<T>(): StandardSchemaV1<unknown, T> {
 `
 
 function generatePlugins(count: number): string {
-  const parts: string[] = [`import { definePlugin } from '@visionpilot/zen-core'\n`]
+  const parts: string[] = [`import { definePlugin } from '@erenthedeveloper0/zen-core'\n`]
   for (let i = 0; i < count; i++) {
     parts.push(`
 export interface Service${i} {
@@ -136,8 +136,8 @@ function generateApp(spec: FixtureSpec, files: readonly string[]): string {
   const pluginImports = Array.from({ length: spec.plugins }, (_, i) => `Plugin${i}`).join(', ')
   const uses = Array.from({ length: spec.plugins }, (_, i) => `  .use(Plugin${i})`).join('\n')
 
-  return `import { createApp } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+  return `import { createApp } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 import { ${pluginImports} } from './plugins.ts'
 ${files.map((f, i) => `import { register${i} } from './${f}.ts'`).join('\n')}
 

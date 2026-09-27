@@ -1,10 +1,10 @@
 {
-  "name": "@visionpilot/zen-example-deadlines",
+  "name": "@erenthedeveloper0/zen-example-deadlines",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "@visionpilot/zen": "0.1.0-alpha.1",
+    "@erenthedeveloper0/zen": "0.1.0-alpha.1",
     "zod": "^4.4.3"
   },
   "scripts": {

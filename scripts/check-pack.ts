@@ -104,11 +104,11 @@ try {
   run(['install', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error'], project)
 
   writeFileSync(join(project, 'check.mjs'), `
-    import { zen, NoopLogger } from '@visionpilot/zen'
-    import { openapiPlugin } from '@visionpilot/zen-openapi'
-    import * as core from '@visionpilot/zen-core'
-    import * as contracts from '@visionpilot/zen-core/contracts'
-    import pkg from '@visionpilot/zen/package.json' with { type: 'json' }
+    import { zen, NoopLogger } from '@erenthedeveloper0/zen'
+    import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
+    import * as core from '@erenthedeveloper0/zen-core'
+    import * as contracts from '@erenthedeveloper0/zen-core/contracts'
+    import pkg from '@erenthedeveloper0/zen/package.json' with { type: 'json' }
 
     const app = zen({ env: {}, logger: new NoopLogger(), lifecycle: false })
     app.use(openapiPlugin, { title: 'pack check', version: pkg.version })
@@ -132,9 +132,9 @@ try {
     // its errors would be reported as ours.
     run(['install', '--no-audit', '--no-fund', '--loglevel=error', `typescript@${tsVersion}`, `@types/node@ts${tsVersion}`], project)
     writeFileSync(join(project, 'consumer.ts'), `
-      import { zen, defineConfig } from '@visionpilot/zen'
-      import { cors } from '@visionpilot/zen-middleware'
-      import { openapiPlugin } from '@visionpilot/zen-openapi'
+      import { zen, defineConfig } from '@erenthedeveloper0/zen'
+      import { cors } from '@erenthedeveloper0/zen-middleware'
+      import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
       export const config = defineConfig({ server: { port: 3000 } })
       const app = zen({ lifecycle: false })
       app.use(cors({ origin: ['https://example.com'] }))

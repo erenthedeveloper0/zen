@@ -1,6 +1,6 @@
 import { test, describe, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { explainRoute, steps } from '@visionpilot/zen'
+import { explainRoute, steps } from '@erenthedeveloper0/zen'
 import { audit, makeApp } from '../src/app.ts'
 import type { RequestLine } from '../src/plugins/observability.ts'
 

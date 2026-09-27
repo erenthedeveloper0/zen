@@ -1,21 +1,21 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-white.png">
-    <img alt="zen.js" src="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-black.png" width="220">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-white.png">
+    <img alt="zen.js" src="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-black.png" width="220">
   </picture>
 </p>
 
-# @visionpilot/zen-router
+# @erenthedeveloper0/zen-router
 
-The router for [Zen](https://github.com/VisionPilot/Zen.js): a backtracking radix
+The router for [Zen](https://github.com/erenthedeveloper0/zen): a backtracking radix
 trie with typed parameters, a generated fixed-shape params builder per route,
 and boot-time conflict analysis.
 
 > **Alpha.** Installed for you by
-> [`@visionpilot/zen`](https://www.npmjs.com/package/@visionpilot/zen).
+> [`@erenthedeveloper0/zen`](https://www.npmjs.com/package/@erenthedeveloper0/zen).
 
 ```bash
-npm install @visionpilot/zen-router@alpha
+npm install @erenthedeveloper0/zen-router@alpha
 ```
 
 ## Path syntax
@@ -60,6 +60,6 @@ A wrong method on a matched path is a 405 with a correct `Allow` header.
 
 ## Documentation
 
-[ARCHITECTURE.md §5](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md#5-route-registry-design).
+[ARCHITECTURE.md §5](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md#5-route-registry-design).
 
-[MIT](https://github.com/VisionPilot/Zen.js/blob/main/LICENSE) © [VisionPilot](https://github.com/VisionPilot) · created by [Eren Sümer](https://github.com/ErenSumer) · [contributors](https://github.com/VisionPilot/Zen.js/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

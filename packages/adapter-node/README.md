@@ -1,25 +1,25 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-white.png">
-    <img alt="zen.js" src="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-black.png" width="220">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-white.png">
+    <img alt="zen.js" src="https://raw.githubusercontent.com/erenthedeveloper0/zen/main/.github/images/logo-with-text-black.png" width="220">
   </picture>
 </p>
 
-# @visionpilot/zen-adapter-node
+# @erenthedeveloper0/zen-adapter-node
 
-The Node.js adapter for [Zen](https://github.com/VisionPilot/Zen.js): runs a Zen
+The Node.js adapter for [Zen](https://github.com/erenthedeveloper0/zen): runs a Zen
 application on `node:http`.
 
 > **Alpha.** Installed and configured for you by
-> [`@visionpilot/zen`](https://www.npmjs.com/package/@visionpilot/zen); install it
+> [`@erenthedeveloper0/zen`](https://www.npmjs.com/package/@erenthedeveloper0/zen); install it
 > directly only to pass options.
 
 ```bash
-npm install @visionpilot/zen-adapter-node@alpha
+npm install @erenthedeveloper0/zen-adapter-node@alpha
 ```
 
 ```ts
-import { zen, nodeAdapter } from '@visionpilot/zen'
+import { zen, nodeAdapter } from '@erenthedeveloper0/zen'
 
 const app = zen({
   adapter: nodeAdapter({
@@ -63,6 +63,6 @@ const app = zen({
 
 ## Documentation
 
-[ARCHITECTURE.md §14](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md#14-adapter-abstraction).
+[ARCHITECTURE.md §14](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md#14-adapter-abstraction).
 
-[MIT](https://github.com/VisionPilot/Zen.js/blob/main/LICENSE) © [VisionPilot](https://github.com/VisionPilot) · created by [Eren Sümer](https://github.com/ErenSumer) · [contributors](https://github.com/VisionPilot/Zen.js/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

@@ -1,4 +1,4 @@
-import type { Collection } from '@visionpilot/zen'
+import type { Collection } from '@erenthedeveloper0/zen'
 import { CheckoutToken } from './service.ts'
 import { CheckoutBody, OrderView } from './schemas.ts'
 

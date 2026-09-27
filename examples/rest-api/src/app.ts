@@ -1,4 +1,4 @@
-import { zen, NotFound, type ZenApp, type ZenAppOptions } from '@visionpilot/zen'
+import { zen, NotFound, type ZenApp, type ZenAppOptions } from '@erenthedeveloper0/zen'
 import { Created, ListQuery, NewUser, PatchUser, PublicUser, UserList } from './domain.ts'
 import type { UserRow } from './domain.ts'
 import { auth, adminOnly, requestTiming } from './plugins.ts'

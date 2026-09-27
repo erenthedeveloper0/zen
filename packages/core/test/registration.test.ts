@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   BootError, CONTEXT_MEMBERS, PlainContext, CodeGen, compileContext, NoopLogger, ZenContainer,
   DEFAULT_CAPABILITIES, type RawRequest, type ServerHandle, type RuntimeAdapter,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { makeApp, silentLogger, uniqueName } from './helpers.ts'
 
 // ── §7.5: decoration names ──────────────────────────────────────────────────
@@ -126,7 +126,7 @@ describe('app.paramType() (§5.2)', () => {
     assert.deepEqual(hit.json(), { id: { oid: '0123456789abcdef01234567' } })
     assert.equal((await app.inject('GET', '/posts/not-an-id')).status, 404)
     assert.equal(app.graph().paramTypes.get('objectId')?.jsonSchema?.['pattern'], '^[0-9a-f]{24}$',
-      'published on the graph, where @visionpilot/zen-openapi reads it')
+      'published on the graph, where @erenthedeveloper0/zen-openapi reads it')
   })
 
   it('is what the unknown-type diagnostic tells you to call', async () => {

@@ -1,5 +1,5 @@
 /**
- * `@visionpilot/zen-middleware` — the first-party pack (rfcs/0001 §24.2, §25 M4, §32).
+ * `@erenthedeveloper0/zen-middleware` — the first-party pack (rfcs/0001 §24.2, §25 M4, §32).
  *
  * Four plugins, one shape: **a global `onRequest` hook that stages response
  * metadata**. Both halves of that sentence are load-bearing and both were

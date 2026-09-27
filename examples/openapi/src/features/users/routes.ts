@@ -1,4 +1,4 @@
-import { NotFound, type ZenApp } from '@visionpilot/zen'
+import { NotFound, type ZenApp } from '@erenthedeveloper0/zen'
 import { ListUsersQuery, NewUser, PatchUser, PublicUser, UserList } from './schemas.ts'
 import { UserRepoToken } from './service.ts'
 

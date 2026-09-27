@@ -5,7 +5,7 @@ import {
   jsonSchema, registerSchemaConverter, __resetSchemaConverters, toJsonSchema,
   CodeGen, DEFAULT_CAPABILITIES, SerializationError, BootError,
   type JsonSchema, type Serializer,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 import { makeApp, schema } from './helpers.ts'
 
 /**

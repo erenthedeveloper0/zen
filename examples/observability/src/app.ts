@@ -1,5 +1,5 @@
-import { zen, Forbidden } from '@visionpilot/zen'
-import type { Reply, ZenApp } from '@visionpilot/zen'
+import { zen, Forbidden } from '@erenthedeveloper0/zen'
+import type { Reply, ZenApp } from '@erenthedeveloper0/zen'
 import { observability, type RequestLine } from './plugins/observability.ts'
 import { CatalogToken, catalogRoutes, makeCatalog } from './features/catalog/index.ts'
 import { CheckoutToken, checkoutRoutes, makeCheckout } from './features/checkout/index.ts'

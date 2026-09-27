@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/VisionPilot/Zen.js/security/advisories/new
+    url: https://github.com/erenthedeveloper0/zen/security/advisories/new
     about: Report privately. Please do not open a public issue for a vulnerability.
   - name: Architecture (RFC 0001)
-    url: https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md
+    url: https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md
     about: The design, the trade-offs, and the arguments that lost.

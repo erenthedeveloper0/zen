@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   REDACTED, LAYER_RANK, explainConfig, resolveConfig,
   type ConfigLayer, type ConfigOverlay, type EnvSource,
-} from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
 
 /**
  * Property tests for the config fold — rfcs/0001 §16, §20.5.

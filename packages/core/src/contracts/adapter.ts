@@ -6,7 +6,7 @@ import type { Logger } from './logger.ts'
 /**
  * The runtime ⇄ adapter boundary — rfcs/0001 §3.3 (B2) and §14.
  *
- * `@visionpilot/zen-core` never sees `http.IncomingMessage`, `Request`, or a Lambda event.
+ * `@erenthedeveloper0/zen-core` never sees `http.IncomingMessage`, `Request`, or a Lambda event.
  * It sees `RawRequest`: a narrow, *lazy* accessor interface. This is what lets
  * the Node adapter skip constructing a WHATWG `Request` (~3-6µs and several
  * allocations) on the platform that carries most production traffic, while an

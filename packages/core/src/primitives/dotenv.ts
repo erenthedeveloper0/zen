@@ -5,7 +5,7 @@
  *
  * It takes a **string**, not a path. §3.2 says the Config Store is not
  * responsible for reading files and assigns that to the CLI or the adapter, and
- * the reason is concrete rather than procedural: `@visionpilot/zen-core` has no `node:`
+ * the reason is concrete rather than procedural: `@erenthedeveloper0/zen-core` has no `node:`
  * imports (§3.3 B2), so a parser that opened a file would be a core module that
  * cannot run on workerd. Splitting it here puts the *policy* — what a line
  * means, what quoting does, which layer it lands in — in core, where it is

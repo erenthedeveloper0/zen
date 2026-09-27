@@ -1,4 +1,4 @@
-import { token } from '@visionpilot/zen'
+import { token } from '@erenthedeveloper0/zen'
 
 /** A service, so tests can freeze time and the document stays byte-stable. */
 export interface Clock {

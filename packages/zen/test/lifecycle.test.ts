@@ -2,7 +2,7 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { zen, processLifecycle, NoopLogger } from '@visionpilot/zen'
+import { zen, processLifecycle, NoopLogger } from '@erenthedeveloper0/zen'
 
 const fixture = fileURLToPath(new URL('./fixtures/serve.ts', import.meta.url))
 

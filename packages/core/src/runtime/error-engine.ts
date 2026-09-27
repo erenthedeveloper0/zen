@@ -168,7 +168,7 @@ function splitStack(stack: string | undefined): string[] {
 
 /**
  * A frame inside core's runtime, wherever core is installed: this repository's
- * `packages/core/{src,dist}`, or `node_modules/@visionpilot/zen-core/dist`. The
+ * `packages/core/{src,dist}`, or `node_modules/@erenthedeveloper0/zen-core/dist`. The
  * filter this replaced matched one checkout's absolute path and nothing a user
  * would ever have on disk.
  */

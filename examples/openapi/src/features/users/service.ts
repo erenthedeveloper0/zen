@@ -1,4 +1,4 @@
-import { Conflict, NotFound, token } from '@visionpilot/zen'
+import { Conflict, NotFound, token } from '@erenthedeveloper0/zen'
 import type { Clock } from '../../shared/clock.ts'
 import type { NewUserIn, PatchUserIn } from './schemas.ts'
 

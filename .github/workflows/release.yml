@@ -52,7 +52,7 @@ jobs:
       - name: Packaging is clean (what actually ships)
         run: node scripts/check-pack.ts
 
-      # A prerelease must never land on `latest`: `npm install @visionpilot/zen`
+      # A prerelease must never land on `latest`: `npm install @erenthedeveloper0/zen`
       # would then install a pre-alpha for anyone who did not ask for one, and
       # there is no undo.
       - name: Derive the dist-tag from the version

@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { explainRoute, steps } from '@visionpilot/zen-core'
+import { explainRoute, steps } from '@erenthedeveloper0/zen-core'
 import { cors, rateLimit, requestId, securityHeaders } from '../src/index.ts'
 import { makeApp } from './helpers.ts'
 

@@ -1,5 +1,5 @@
-import { zen, healthPlugin, nodeAdapter } from '@visionpilot/zen'
-import type { CheckOutcome, Reply, ZenApp } from '@visionpilot/zen'
+import { zen, healthPlugin, nodeAdapter } from '@erenthedeveloper0/zen'
+import type { CheckOutcome, Reply, ZenApp } from '@erenthedeveloper0/zen'
 import { config } from './config/health.config.ts'
 import { makeDependencies, type ComponentName, type Dependencies, type Fault } from './shared/dependencies.ts'
 import { payments } from './plugins/payments.ts'

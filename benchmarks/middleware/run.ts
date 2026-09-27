@@ -33,9 +33,9 @@
  *      §11.4's does: it is the property a later optimisation is most tempted to
  *      trade away, and a fast CORS that reflects is not a fast CORS.
  */
-import { createApp, NotFound, withoutStack, type Logger } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
-import { cors, rateLimit, requestId, securityHeaders, MemoryStore } from '@visionpilot/zen-middleware'
+import { createApp, NotFound, withoutStack, type Logger } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
+import { cors, rateLimit, requestId, securityHeaders, MemoryStore } from '@erenthedeveloper0/zen-middleware'
 
 const pathParser = {
   parse: (path: string) => {

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { serializeCookie, parseCookies, formParser, BODY_DEFAULTS } from '@visionpilot/zen-core'
+import { serializeCookie, parseCookies, formParser, BODY_DEFAULTS } from '@erenthedeveloper0/zen-core'
 import { makeApp } from './helpers.ts'
 
 describe('Set-Cookie serialization (§19.2, §19.5)', () => {

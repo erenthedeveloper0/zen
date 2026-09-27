@@ -1,6 +1,6 @@
 import { realpath, stat } from 'node:fs/promises'
 import { extname, resolve, sep } from 'node:path'
-import { NotFound, withoutStack } from '@visionpilot/zen-core'
+import { NotFound, withoutStack } from '@erenthedeveloper0/zen-core'
 
 /**
  * File responses — rfcs/0001 §13.5.

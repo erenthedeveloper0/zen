@@ -34,8 +34,8 @@ import {
   createApp, jsonSchema, registerMediaEncoder, makeNegotiator, selectOffer, offersOf,
   parseAccept, NEGOTIATION_CACHE_LIMIT,
   type Logger, type Representation,
-} from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+} from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 const pathParser = {
   parse: (path: string) => {

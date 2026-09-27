@@ -5,8 +5,8 @@ import { pipeline } from 'node:stream/promises'
 import type {
   BodySource, Capabilities, Connection, Dispatch, ListenOptions, RawRequest,
   RemoteInfo, Reply, RuntimeAdapter, ServerHandle, LowercaseName, SseChannel,
-} from '@visionpilot/zen-core'
-import { PayloadTooLarge } from '@visionpilot/zen-core'
+} from '@erenthedeveloper0/zen-core'
+import { PayloadTooLarge } from '@erenthedeveloper0/zen-core'
 import { planFile } from './file.ts'
 
 export { mediaTypeFor } from './file.ts'

@@ -1,5 +1,5 @@
-import { definePlugin } from '@visionpilot/zen'
-import type { Plugin } from '@visionpilot/zen'
+import { definePlugin } from '@erenthedeveloper0/zen'
+import type { Plugin } from '@erenthedeveloper0/zen'
 
 /**
  * A plugin that declares what it needs from configuration — rfcs/0001 §16.1

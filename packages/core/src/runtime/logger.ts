@@ -5,8 +5,8 @@ const ORDER: Readonly<Record<LogLevel, number>> = {
 }
 
 /**
- * A `pino`-shaped default so `@visionpilot/zen-core` keeps zero runtime dependencies.
- * `@visionpilot/zen-plugin-logger` swaps in real pino; the interface is identical, which
+ * A `pino`-shaped default so `@erenthedeveloper0/zen-core` keeps zero runtime dependencies.
+ * `@erenthedeveloper0/zen-plugin-logger` swaps in real pino; the interface is identical, which
  * is the point of I6.
  */
 export class ConsoleLogger implements Logger {

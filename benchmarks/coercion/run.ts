@@ -30,7 +30,7 @@
  *      `caps.eval === false` path is production for workerd, so the size of
  *      that gap is a real deployment fact rather than a curiosity.
  *
- * Every schema here is hand-written. `@visionpilot/zen-core` has no runtime dependencies
+ * Every schema here is hand-written. `@erenthedeveloper0/zen-core` has no runtime dependencies
  * and its benchmarks keep that honest; more importantly, putting Zod on one
  * side of a comparison and not the other would measure Zod.
  */
@@ -38,8 +38,8 @@ import {
   createApp, markSync, buildCoercePlan, compileCoercer, walkCoercer,
   CodeGen, DEFAULT_CAPABILITIES, COERCION_DEFAULTS,
   type CoercePlan, type ZenApp,
-} from '@visionpilot/zen-core'
-import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+} from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 const pathParser = {
   parse: (path: string) => {

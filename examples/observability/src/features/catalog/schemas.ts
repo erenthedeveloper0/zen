@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { jsonSchema } from '@visionpilot/zen'
+import { jsonSchema } from '@erenthedeveloper0/zen'
 
 /**
  * Request schemas are Standard Schema (Zod here); response schemas are plain

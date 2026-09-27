@@ -191,7 +191,7 @@ describe('errors (§12)', () => {
     assert.equal(problem.code, 'ZEN_NOT_FOUND')
     // The problem `type` is the code's entry in docs/errors.md — a URL the
     // project controls, because every error response carries it.
-    assert.equal(problem.type, 'https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_not_found')
+    assert.equal(problem.type, 'https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#zen_not_found')
     assert.ok(problem.requestId.length > 0)
   })
 

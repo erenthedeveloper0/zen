@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import type { RouteRecord, HttpMethod } from '@visionpilot/zen-core'
-import { CodeGen, DEFAULT_CAPABILITIES } from '@visionpilot/zen-core'
-import { ZenRouter, parsePath, renderPath, BUILTIN_PARAM_TYPES, analyzeRoutes } from '@visionpilot/zen-router'
+import type { RouteRecord, HttpMethod } from '@erenthedeveloper0/zen-core'
+import { CodeGen, DEFAULT_CAPABILITIES } from '@erenthedeveloper0/zen-core'
+import { ZenRouter, parsePath, renderPath, BUILTIN_PARAM_TYPES, analyzeRoutes } from '@erenthedeveloper0/zen-router'
 
 function route(method: HttpMethod, path: string): RouteRecord {
   const parsed = parsePath(path)

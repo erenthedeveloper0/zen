@@ -37,7 +37,7 @@ const encoders = new Map<MediaType, MediaEncoderFactory>()
  * Teach Zen how to write one media type.
  *
  * The exact shape of `registerSchemaConverter` (§13.3.6) and for the exact same
- * reason: `@visionpilot/zen-core` has zero runtime dependencies and imports nothing from
+ * reason: `@erenthedeveloper0/zen-core` has zero runtime dependencies and imports nothing from
  * `node:` (§19.8, B3), so it is never going to contain a CSV writer or an XML
  * writer, and a framework that shipped one would have picked a dialect on the
  * author's behalf.

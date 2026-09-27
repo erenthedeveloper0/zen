@@ -4,7 +4,7 @@
  * Prints `ready <url>` once listening, `onClose` when the shutdown sequence
  * reaches it, and — if started with `crash` — throws from a timer once ready.
  */
-import { zen, NoopLogger } from '@visionpilot/zen'
+import { zen, NoopLogger } from '@erenthedeveloper0/zen'
 
 const mode = process.argv[2] ?? 'serve'
 const app = zen({ env: {}, logger: new NoopLogger() })

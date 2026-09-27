@@ -13,7 +13,7 @@
  * Strings that *do* need escaping end in `JSON.stringify` either way, so above
  * the crossover the scan is pure overhead in both directions.
  */
-import { escapeString } from '@visionpilot/zen-core'
+import { escapeString } from '@erenthedeveloper0/zen-core'
 
 const FILLER = 'abcdefghij klmnopqrs tuvwxyz0123456789'.repeat(20)
 const LENGTHS = [4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 512] as const

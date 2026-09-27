@@ -1,5 +1,5 @@
 {
-  "name": "@visionpilot/zen-middleware",
+  "name": "@erenthedeveloper0/zen-middleware",
   "version": "0.1.0-alpha.1",
   "description": "Zen first-party middleware: CORS, security headers, request ids and rate limiting, as hooks that also run on unmatched requests.",
   "keywords": [
@@ -10,24 +10,21 @@
     "middleware",
     "zen"
   ],
-  "homepage": "https://github.com/VisionPilot/Zen.js/tree/main/packages/middleware#readme",
+  "homepage": "https://github.com/erenthedeveloper0/zen/tree/main/packages/middleware#readme",
   "bugs": {
-    "url": "https://github.com/VisionPilot/Zen.js/issues"
+    "url": "https://github.com/erenthedeveloper0/zen/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/VisionPilot/Zen.js.git",
+    "url": "git+https://github.com/erenthedeveloper0/zen.git",
     "directory": "packages/middleware"
   },
   "license": "MIT",
-  "author": {
-    "name": "VisionPilot",
-    "url": "https://github.com/VisionPilot"
-  },
+  "author": "VisionPilot",
   "contributors": [
     {
       "name": "Eren Sümer",
-      "url": "https://github.com/ErenSumer"
+      "url": "https://github.com/erenthedeveloper0"
     }
   ],
   "type": "module",
@@ -58,7 +55,7 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@visionpilot/zen-core": "0.1.0-alpha.1"
+    "@erenthedeveloper0/zen-core": "0.1.0-alpha.1"
   },
   "peerDependencies": {
     "typescript": ">=5.0"

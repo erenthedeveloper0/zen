@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { CodeGen, DEFAULT_CAPABILITIES, buildSerializerTable, definePlugin, type JsonSchema } from '@visionpilot/zen-core'
-import { openapiDocument, openapiPlugin, diffDocuments, renderReference } from '@visionpilot/zen-openapi'
-import type { OpenApiDocument } from '@visionpilot/zen-openapi'
+import { CodeGen, DEFAULT_CAPABILITIES, buildSerializerTable, definePlugin, type JsonSchema } from '@erenthedeveloper0/zen-core'
+import { openapiDocument, openapiPlugin, diffDocuments, renderReference } from '@erenthedeveloper0/zen-openapi'
+import type { OpenApiDocument } from '@erenthedeveloper0/zen-openapi'
 
 import { collectRefs, deref, makeApp, operation, responseSchema, schema } from './helpers.ts'
 
