@@ -4,7 +4,7 @@ All notable changes to Zen. The packages are versioned together; every entry
 applies to all six. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Zen is pre-alpha: until `1.0`, any prerelease may change the API.
 
-## [0.1.0-alpha.1] — unreleased
+## [0.1.0-alpha.1] — 2026-09-27
 
 The first published version. Everything built before it is described in
 [README.md](./README.md) and specified in [ARCHITECTURE.md](./ARCHITECTURE.md);
@@ -186,3 +186,5 @@ Found by the first push to CI, on Windows:
 - `ctx.params` for an application-registered param type is typed `unknown`
   rather than `string`, because its `parse` may return anything.
 - `Router.analyze` takes the same options as `Router.build`.
+
+[0.1.0-alpha.1]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.1
