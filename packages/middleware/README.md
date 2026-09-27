@@ -82,4 +82,4 @@ rotating a fake address gets a fresh rate-limit budget on every request.
 [ARCHITECTURE.md §32](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md#32-first-party-middleware) ·
 [`examples/middleware`](https://github.com/erenthedeveloper0/zen/tree/main/examples/middleware).
 
-[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

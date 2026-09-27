@@ -18,8 +18,6 @@ this entry records what changed in preparing it for release.
   `zen-router`, `zen-adapter-node`, `zen-openapi` and `zen-middleware`, from the
   repository at
   [github.com/erenthedeveloper0/zen](https://github.com/erenthedeveloper0/zen).
-- Copyright and authorship moved to VisionPilot; Eren Sümer, Zen's creator, is
-  credited in [CONTRIBUTORS.md](./CONTRIBUTORS.md) and in every package.
 - Every tarball now ships `README.md`, `LICENSE` and the TypeScript sources its
   source maps point at, and no longer ships the build cache (which held
   absolute paths from the build machine). `exports` includes

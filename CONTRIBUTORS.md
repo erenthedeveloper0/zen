@@ -1,14 +1,14 @@
 # Contributors
 
-Zen is developed and maintained by VisionPilot.
-The people below have contributed to it. Thank you.
+Zen is created and maintained by Eren Sümer. The people below have contributed
+to it. Thank you.
 
-## Creator
+## Author and maintainer
 
-- **Eren Sümer** ([@erenthedeveloper0](https://github.com/erenthedeveloper0)) — original author of
-  Zen: the architecture RFC ([ARCHITECTURE.md](./ARCHITECTURE.md)), the compiler
-  and runtime, the router, the Node adapter, the OpenAPI generator and the
-  first-party middleware pack.
+- **Eren Sümer** ([@erenthedeveloper0](https://github.com/erenthedeveloper0)) —
+  creator of Zen: the architecture RFC ([ARCHITECTURE.md](./ARCHITECTURE.md)),
+  the compiler and runtime, the router, the Node adapter, the OpenAPI generator
+  and the first-party middleware pack.
 
 ## Contributors
 

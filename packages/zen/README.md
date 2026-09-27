@@ -93,4 +93,4 @@ OpenAPI generation is a separate install:
 - [Error codes](https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md)
 - [Examples](https://github.com/erenthedeveloper0/zen/tree/main/examples)
 
-[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

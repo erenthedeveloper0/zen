@@ -59,8 +59,8 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement — the VisionPilot
-maintainers of this repository — confidentially, through the repository's
+reported to the community leaders responsible for enforcement — the maintainers
+of this repository — confidentially, through the repository's
 private reporting form at
 <https://github.com/erenthedeveloper0/zen/security/advisories/new>, with
 "Code of Conduct" in the title.

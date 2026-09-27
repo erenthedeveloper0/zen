@@ -66,4 +66,4 @@ Node.js ≥ 22.6. TypeScript ≥ 5.0 for the published types.
 is the specification this package implements; §3 describes its internal strata.
 [Error codes](https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md).
 
-[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)

@@ -5,7 +5,10 @@
   "type": "module",
   "description": "Zen — a compiler-first web framework for Node.js. Monorepo for the @erenthedeveloper0/zen packages.",
   "license": "MIT",
-  "author": "VisionPilot",
+  "author": {
+    "name": "Eren Sümer",
+    "url": "https://github.com/erenthedeveloper0"
+  },
   "homepage": "https://github.com/erenthedeveloper0/zen#readme",
   "repository": {
     "type": "git",

@@ -22,7 +22,7 @@ They always publish together, at one version, and pin each other exactly.
 | --- | --- |
 | npm scope | `@erenthedeveloper0` — an npm **organisation**, owned by the npm user `erenthedeveloper` (`npm org ls erenthedeveloper0`) |
 | Repository | [`github.com/erenthedeveloper0/zen`](https://github.com/erenthedeveloper0/zen) — every manifest's `repository`, every problem document's `type`, the badges and the npm pages' images resolve against it |
-| Copyright | VisionPilot (`LICENSE`); Eren Sümer is credited as creator in [CONTRIBUTORS.md](./CONTRIBUTORS.md) and every package's `contributors` |
+| Author | Eren Sümer — the copyright holder in `LICENSE` and every package's `author` |
 
 The organisation and the user have different names — the user is
 `erenthedeveloper`, the organisation `erenthedeveloper0`, matching the GitHub

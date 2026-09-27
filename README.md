@@ -1096,9 +1096,8 @@ Four rules worth knowing up front:
 
 ## Licence
 
-[MIT](./LICENSE) © VisionPilot. Zen was created by
-[Eren Sümer](https://github.com/erenthedeveloper0); everyone who has contributed is listed in
-[CONTRIBUTORS.md](./CONTRIBUTORS.md).
+[MIT](./LICENSE) © [Eren Sümer](https://github.com/erenthedeveloper0). Everyone who has contributed
+is listed in [CONTRIBUTORS.md](./CONTRIBUTORS.md).
 
 <br>
 
@@ -1108,5 +1107,5 @@ Four rules worth knowing up front:
     <img alt="zen.js" src="./.github/images/logo-with-text-black.png" width="138">
   </picture>
   <br>
-  <sub>Built by VisionPilot · a web framework is a compiler with an HTTP server attached</sub>
+  <sub>Built by <a href="https://github.com/erenthedeveloper0">Eren Sümer</a> · a web framework is a compiler with an HTTP server attached</sub>
 </div>

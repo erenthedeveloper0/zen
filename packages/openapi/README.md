@@ -73,4 +73,4 @@ API is public), and `onDocument` (receives the finished document at boot).
 [ARCHITECTURE.md §29](https://github.com/erenthedeveloper0/zen/blob/main/ARCHITECTURE.md#29-openapi--code-generation) ·
 [`examples/openapi`](https://github.com/erenthedeveloper0/zen/tree/main/examples/openapi).
 
-[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © VisionPilot · created by [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)
+[MIT](https://github.com/erenthedeveloper0/zen/blob/main/LICENSE) © [Eren Sümer](https://github.com/erenthedeveloper0) · [contributors](https://github.com/erenthedeveloper0/zen/blob/main/CONTRIBUTORS.md)
