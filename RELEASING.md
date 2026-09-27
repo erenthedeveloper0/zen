@@ -68,23 +68,24 @@ is why the first release is published by hand. Once all six exist:
 ```bash
 node scripts/version.ts 0.1.0-alpha.2     # every package and every internal pin
 npm install                               # refresh package-lock.json
-# write the CHANGELOG.md entry
+# write the CHANGELOG.md entry: "## [0.1.0-alpha.2] — <date>"
 npm run verify                            # typecheck, tests, smoke, API gate (Node 22 and the latest LTS)
 npm run controls                          # are the tests load-bearing?
 npm run check:pack                        # what ships, installed and run from the tarballs
 git commit -am "release: v0.1.0-alpha.2"
-git tag v0.1.0-alpha.2
+git tag -a v0.1.0-alpha.2 -m v0.1.0-alpha.2     # annotated: --follow-tags pushes no other kind
 git push --follow-tags
 ```
 
 Pushing the tag starts `.github/workflows/release.yml`. It runs every CI gate,
-refuses a tag that disagrees with the package versions, checks the tarballs
-again, and then waits for approval on the `npm-publish` environment. Once
-approved it publishes the six packages in order, with provenance, on the
-dist-tag the version implies — `alpha`, `beta`, `next` for `-rc`, `latest` only
-for a plain version — and creates a GitHub release. A package already
-published at that version is skipped, so a run that failed half way can simply
-be re-run.
+refuses a tag that disagrees with the package versions or has no dated
+CHANGELOG entry, checks the tarballs again, and then waits for approval on the
+`npm-publish` environment. Once approved it publishes the six packages in order,
+with provenance, on the dist-tag the version implies — `alpha`, `beta`, `next`
+for `-rc`, `latest` only for a plain version — and creates a GitHub release
+whose notes are that CHANGELOG entry, under the install line. A package
+already published at that version is skipped, so a run that failed half way can
+simply be re-run.
 
 ## After a release
 

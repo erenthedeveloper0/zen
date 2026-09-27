@@ -97,12 +97,26 @@ jobs:
             done
           done
 
+      # The release page is this version's CHANGELOG section — what changed, not
+      # a link to go and find it — under the install line, with relative links
+      # made absolute, since on /releases/ they would resolve to nothing.
+      # check-release.ts has already refused a missing or undated entry.
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          name=$(node -p "require('./packages/zen/package.json').name")
+          {
+            printf '```bash\nnpm install %s@%s\n```\n' "$name" "$version"
+            awk -v v="$version" '
+              index($0, "## [" v "]") == 1 { on = 1; next }
+              on && (/^## \[/ || /^\[[^]]+\]: /) { exit }
+              on { print }
+            ' CHANGELOG.md \
+              | sed "s#](\./#](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/#g"
+          } > "$RUNNER_TEMP/notes.md"
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
-            --notes "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)." \
-            $prerelease
+            --notes-file "$RUNNER_TEMP/notes.md" $prerelease

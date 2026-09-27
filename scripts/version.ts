@@ -58,5 +58,5 @@ for (const file of manifests) {
 console.log(`\n  ${published.size} packages → ${next}  (${changed} manifests updated)\n`)
 console.log('  Next:')
 console.log('    npm install              # refresh package-lock.json')
-console.log('    update CHANGELOG.md')
-console.log(`    git commit -am "release: v${next}" && git tag v${next} && git push --follow-tags\n`)
+console.log(`    update CHANGELOG.md      # "## [${next}] — <date>"; check-release.ts refuses a release without it`)
+console.log(`    git commit -am "release: v${next}" && git tag -a v${next} -m v${next} && git push --follow-tags\n`)
