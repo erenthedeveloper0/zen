@@ -6,7 +6,7 @@
   "dependencies": {
     "@erenthedeveloper0/zen": "0.1.0-alpha.1",
     "@erenthedeveloper0/zen-openapi": "0.1.0-alpha.1",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "scripts": {
     "start": "node src/main.ts",
