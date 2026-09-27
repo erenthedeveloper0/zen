@@ -278,9 +278,14 @@ jobs:
           echo "core dependencies: $deps"
           test "$deps" = "{}" || { echo "::error::@erenthedeveloper0/zen-core gained a runtime dependency: $deps"; exit 1; }
 
+      # Every import form — static, type-only, side-effect, re-export, the tail
+      # of a multi-line import, dynamic import() and require() — and no
+      # comment line: dotenv.ts documents the host's half of its seam with a
+      # `node:fs` example, and the first version of this grep failed on it.
       - name: "Assert core imports nothing from node:"
         run: |
-          if grep -rn "from 'node:" packages/core/src; then
+          if grep -rnE "(from|import|require)[[:space:]]*\(?[[:space:]]*['\"]node:" packages/core/src \
+              | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//)'; then
             echo "::error::@erenthedeveloper0/zen-core must not import platform APIs — that is the adapter's job (§3.3 B2)"
             exit 1
           fi

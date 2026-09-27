@@ -53,7 +53,7 @@ for (const dir of ORDER) {
   if (result === undefined) { fail(`${dir}: npm pack produced nothing`); continue }
   const files = new Set(result.files.map((f) => f.path))
 
-  console.log(`  ${result.name}@${result.version}`.padEnd(48) +
+  console.log(`  ${result.name}@${result.version}`.padEnd(56) +
     `${(result.size / 1024).toFixed(1).padStart(7)} kB packed  ${(result.unpackedSize / 1024).toFixed(1).padStart(7)} kB unpacked  ${String(files.size).padStart(4)} files`)
 
   for (const required of ['package.json', 'README.md', 'LICENSE', 'dist/index.js', 'dist/index.d.ts']) {
