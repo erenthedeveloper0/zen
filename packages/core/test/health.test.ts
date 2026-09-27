@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   BootError, HealthRegistry, healthPlugin, definePlugin, token,
   type HealthReport, type Plugin,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { makeApp } from './helpers.ts'
 
 /**

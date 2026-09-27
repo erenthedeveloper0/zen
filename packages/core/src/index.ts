@@ -1,5 +1,5 @@
 /**
- * `@zenjs/core` — registries, compilers, runtime, context, errors, response engine.
+ * `@visionpilot/zen-core` — registries, compilers, runtime, context, errors, response engine.
  *
  * Zero runtime dependencies. Not a slogan: a CI check (§19.8).
  */
@@ -16,14 +16,18 @@ export {
 } from './contracts/index.ts'
 
 // ── primitives (stratum 0) ──────────────────────────────────────────────────
-export { normalizePath, joinPath, splitSegments, pathnameOf, queryStringOf, safeDecode } from './primitives/path.ts'
+export {
+  normalizePath, joinPath, splitSegments, pathnameOf, queryStringOf, safeDecode, decodeComponent,
+} from './primitives/path.ts'
 export { parseDuration, formatDuration, type Duration } from './primitives/time.ts'
 export { parseDotenv, dotenvChain, type DotenvResult, type EnvEntry } from './primitives/dotenv.ts'
 export { generateRequestId } from './primitives/id.ts'
 
 // ── errors ──────────────────────────────────────────────────────────────────
 export { Codes, docsUrl, type ZenCode } from './errors/codes.ts'
-export { ZenError, FrameworkError, BootError, isZenError, type ZenErrorInit, type Diagnostic } from './errors/zen-error.ts'
+export {
+  ZenError, FrameworkError, BootError, isZenError, withoutStack, type ZenErrorInit, type Diagnostic,
+} from './errors/zen-error.ts'
 export {
   HttpError, BadRequest, Unauthorized, Forbidden, NotFound, MethodNotAllowed, NotAcceptable,
   RequestTimeout, Conflict, PayloadTooLarge, UnsupportedMediaType, TooManyRequests, Internal,
@@ -38,14 +42,17 @@ export {
   type CompiledPipeline, type PipelineSpec, type PipelineStep, type SyncClass, type ValidatorStep,
 } from './compile/pipeline-compiler.ts'
 export {
-  resolveHooks, routeHookRecords, pipelinePlan, functionsFor, diagnoseUnavailable,
+  resolveHooks, routeHookRecords, pipelinePlan, functionsFor, diagnoseUnavailable, diagnoseUnknown,
+  diagnoseMisplaced,
   type HookScope,
 } from './compile/hook-plan.ts'
 export {
   resolveTimeout, timeoutDiagnostic,
   type TimeoutSource, type TimeoutResolution,
 } from './compile/deadline-plan.ts'
-export { compileValidator, normaliseIssues, type ValidationSource } from './compile/validation.ts'
+export {
+  compileValidator, combineValidators, normaliseIssues, type ValidationSource,
+} from './compile/validation.ts'
 
 // ── coercion (§11.4) ────────────────────────────────────────────────────────
 export {
@@ -101,6 +108,10 @@ export {
   finalize, encodeBody, attachSerializer, attachNegotiated, payloadOf, replacePayload, NO_PAYLOAD,
 } from './runtime/response-engine.ts'
 export {
+  createSseChannel, isSseChannel, frameOf, SSE_CHANNEL, DEFAULT_KEEP_ALIVE, DEFAULT_MAX_BUFFERED,
+  type SseChannelWithReply,
+} from './runtime/sse.ts'
+export {
   makeNegotiator, makeNegotiationStep, selectOffer, offersOf, notAcceptable,
   NEGOTIATION_CACHE_LIMIT, type Offer, type NegotiationCarrier,
 } from './runtime/negotiation.ts'
@@ -108,7 +119,8 @@ export { ErrorEngine, classify, type ErrorMapper, type ErrorContextInfo } from '
 export { ConsoleLogger, NoopLogger } from './runtime/logger.ts'
 export { prepareForWire, stripBodyIfNeeded } from './runtime/egress.ts'
 export {
-  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty,
+  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, CONTEXT_MEMBERS,
+  forwardedClient, forwardedProtocol, requestUrl,
   type ContextEnv, type StageTarget,
 } from './runtime/context.ts'
 export {
@@ -121,9 +133,10 @@ export { HealthRegistry, type HealthRegistryOptions } from './runtime/health.ts'
 // ── public API ──────────────────────────────────────────────────────────────
 export { slot, slotCount, declaredSlots, allocateCell, __resetSlots } from './api/slot.ts'
 export {
-  ZenApp, Collection, InjectedResponse, createApp, definePlugin,
+  ZenApp, Collection, InjectedResponse, createApp, definePlugin, ALL_METHODS,
   type ZenOptions, type CollectionOptions, type SerializationOptions, type ConfigOf,
 } from './api/zen.ts'
+export { trackDisposal, type DisposalCarrier } from './primitives/disposal.ts'
 
 // ── configuration (§16) ─────────────────────────────────────────────────────
 export { defineConfig } from './api/define-config.ts'

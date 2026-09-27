@@ -1,5 +1,5 @@
-import { createApp, type JsonSchema, type Logger, type ZenApp, type ZenOptions } from '@zenjs/core'
-import { ZenRouter, parsePath } from '@zenjs/router'
+import { createApp, type JsonSchema, type Logger, type ZenApp, type ZenOptions } from '@visionpilot/zen-core'
+import { ZenRouter, parsePath } from '@visionpilot/zen-router'
 
 export const pathParser = {
   parse(path: string) {

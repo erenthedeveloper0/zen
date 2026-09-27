@@ -1,4 +1,4 @@
-import type { OpenApiPluginOptions } from '@zenjs/openapi'
+import type { OpenApiPluginOptions } from '@visionpilot/zen-openapi'
 
 /**
  * Configuration lives in `src/config/` — rfcs/0001 §23.4, §16.

@@ -1,4 +1,4 @@
-import { explainRoute } from 'zen'
+import { explainRoute } from '@visionpilot/zen'
 import { makeApp } from './app.ts'
 
 /**

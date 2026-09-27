@@ -1,4 +1,4 @@
-import { definePlugin, token } from 'zen'
+import { definePlugin, token } from '@visionpilot/zen'
 import type { Dependency } from '../shared/dependencies.ts'
 import { config } from '../config/health.config.ts'
 

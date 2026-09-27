@@ -1,11 +1,11 @@
 {
-  "name": "@zenjs-example/middleware",
+  "name": "@visionpilot/zen-example-middleware",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "zen": "0.1.0",
-    "@zenjs/middleware": "0.1.0",
+    "@visionpilot/zen": "0.1.0-alpha.1",
+    "@visionpilot/zen-middleware": "0.1.0-alpha.1",
     "zod": "^4.4.3"
   },
   "scripts": {

@@ -4,11 +4,13 @@
  * `inject()` proves the pipeline; this proves the Node adapter, the wire
  * format, and graceful shutdown. Run: `node scripts/smoke.ts`
  */
+import { fileURLToPath } from 'node:url'
+import { dirname } from 'node:path'
 import {
   zen, slot, NotFound, jsonSchema, healthPlugin, nodeAdapter, defineConfig, registerMediaEncoder,
-} from 'zen'
-import { cors, rateLimit, requestId, securityHeaders } from '@zenjs/middleware'
-import { openapiPlugin } from '@zenjs/openapi'
+} from '@visionpilot/zen'
+import { cors, rateLimit, requestId, securityHeaders } from '@visionpilot/zen-middleware'
+import { openapiPlugin } from '@visionpilot/zen-openapi'
 
 const CurrentUser = slot<{ id: number; name: string }>('smoke.user')
 
@@ -212,6 +214,24 @@ app.get('/stream', (ctx) =>
   }, { media: 'text/plain' }))
 app.collection('/api', (api) => api.get('/health', () => ({ ok: true })))
 
+// §4.4 — a request body, under the app's 30 s default deadline, over a socket.
+// For eight passes this file never sent a body, and that is how every POST on a
+// bounded route came to be answered 499: Node closes an IncomingMessage once
+// its body is read, the adapter took that for a disconnect, and the stage check
+// after intake abandoned the request. `inject()` could not see it.
+const AnyBody = { '~standard': { version: 1 as const, vendor: 'smoke', validate: (value: unknown) => ({ value }) } }
+app.post('/echo', { body: AnyBody }, (ctx) => ({ echo: ctx.body, aborted: ctx.signal.aborted }))
+
+// §13.5 — server-sent events and files, which only an adapter can write.
+app.get('/events', (ctx) => {
+  const sse = ctx.sse({ retry: 1000, keepAlive: 0 })
+  sse.send({ event: 'hello', id: '1', data: { n: 1 } })
+  sse.close()
+  return sse
+})
+app.get('/file', (ctx) => ctx.file(fileURLToPath(import.meta.url)))
+app.get('/file-missing', (ctx) => ctx.file('this-file-does-not-exist.txt', { root: dirname(fileURLToPath(import.meta.url)) }))
+
 // §16 — configuration, on the wire.
 //
 // The leak check here is the sibling of `/profile` above and belongs in the
@@ -306,6 +326,25 @@ await check('GET /tagged (two headers → one list)', '/tagged', {
   init: { headers: [['x-tags', 'a'], ['x-tags', 'b']] as unknown as HeadersInit },
 })
 await check('GET /api/health', '/api/health', { status: 200, body: '{"ok":true}' })
+await check('POST /echo (body, 30 s deadline)', '/echo', {
+  status: 200,
+  body: '{"echo":{"sku":"x"},"aborted":false}',
+  init: { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"sku":"x"}' },
+})
+await check('GET /events (§13.5 SSE)', '/events', {
+  status: 200,
+  body: 'retry: 1000\n\nevent: hello\nid: 1\ndata: {"n":1}\n\n',
+  header: ['content-type', /^text\/event-stream/],
+})
+await check('GET /file (§13.5, typed and sized)', '/file', {
+  status: 200,
+  body: /End-to-end smoke test over a real socket/,
+  header: ['etag', /^W\/"/],
+})
+await check('GET /file-missing (404, not a dropped socket)', '/file-missing', {
+  status: 404,
+  body: /ZEN_NOT_FOUND/,
+})
 await check('GET /config (§16 public values)', '/config', {
   status: 200,
   body: /"service":"smoke".*"pool":4/s,
@@ -477,7 +516,7 @@ await check('GET /report-json-only (never varies on Accept)', '/report-json-only
  * through `ctx.res.appendHeader`, both are applied by `prepareForWire`, and the
  * adapter has to emit both values. A reader of `entries()` that assigns instead
  * of accumulating drops one of them — which is exactly the defect §32.5 found
- * in `@zenjs/adapter-node`, and the only place it was visible was here.
+ * in `@visionpilot/zen-adapter-node`, and the only place it was visible was here.
  *
  * A cache that sees only `Vary: Origin` will serve a CSV body to a client that
  * asked for JSON from the same origin.

@@ -33,9 +33,9 @@
  *      §11.4's does: it is the property a later optimisation is most tempted to
  *      trade away, and a fast CORS that reflects is not a fast CORS.
  */
-import { createApp, NotFound, type Logger } from '@zenjs/core'
-import { ZenRouter, parsePath } from '@zenjs/router'
-import { cors, rateLimit, requestId, securityHeaders, MemoryStore } from '@zenjs/middleware'
+import { createApp, NotFound, withoutStack, type Logger } from '@visionpilot/zen-core'
+import { ZenRouter, parsePath } from '@visionpilot/zen-router'
+import { cors, rateLimit, requestId, securityHeaders, MemoryStore } from '@visionpilot/zen-middleware'
 
 const pathParser = {
   parse: (path: string) => {
@@ -298,9 +298,10 @@ console.log('\n  4. Answering a preflight is cheaper than not answering one\n')
   console.log('    produce at all: with no OPTIONS route there is no pipeline, so the')
   console.log('    middleware never runs and the browser reports the failure on the')
   console.log('    request that follows, in a file that is correct.')
-  console.log('\n    The fourth row is a finding about the framework rather than about this')
-  console.log('    pack, and it is measured below because a preflight is the request that')
-  console.log('    made it matter.')
+  console.log('\n    The fourth row was a finding about the framework rather than about this')
+  console.log('    pack — it measured 6.2× the third when this section was written — and')
+  console.log('    it is measured below because a preflight is the request that made it')
+  console.log('    matter.')
 }
 
 // ── 4b. the unmatched path, which is where a preflight would otherwise land ──
@@ -315,28 +316,25 @@ console.log('\n  4b. What an unmatched request costs, and why (§4.2, §12.2)\n'
   const matched = await time(() => injectable.inject('GET', '/things'))
   const unmatched = await time(() => injectable.inject('GET', '/no/such/path'))
 
-  // Where it goes. `zen.ts` calls the unmatched path "off the hot path by
-  // construction" because it "runs on 404s and 405s only" — true when it was
-  // written, and no longer true for a browser-facing service, where every
-  // preflight lands there until something answers it.
-  const construct = (): unknown => new NotFound('No route matches GET /no/such/path')
-  const withStack = timeSync(construct)
-  const capture = Error.captureStackTrace
-  ;(Error as { captureStackTrace?: unknown }).captureStackTrace = undefined
-  const withoutStack = timeSync(construct)
-  ;(Error as { captureStackTrace?: unknown }).captureStackTrace = capture
+  // Where the cost went. A 404 used to cost ~10× a served request, and almost
+  // none of it was routing: it was one `NotFound` and its stack — captured
+  // twice, once by `Error` and again by `captureStackTrace`. The dispatcher now
+  // builds routine refusals with `withoutStack` (§28.8), and `ZenError`
+  // captures once; `benchmarks/refusals` gates both.
+  const asApplication = timeSync(() => new NotFound('No route matches GET /no/such/path'))
+  const asDispatcher = timeSync(() => withoutStack(() => new NotFound('No route matches GET /no/such/path')))
 
   console.log(`    a matched GET                       ${matched.best.toFixed(2).padStart(6)} µs/req`)
   console.log(`    an unmatched GET (404)              ${unmatched.best.toFixed(2).padStart(6)} µs/req   ${(unmatched.best / matched.best).toFixed(1)}× the matched one`)
-  console.log(`\n    of which: constructing NotFound     ${withStack.toFixed(2).padStart(6)} µs`)
-  console.log(`              its stack capture         ${(withStack - withoutStack).toFixed(2).padStart(6)} µs`)
+  console.log(`\n    new NotFound(…), as a handler throws it   ${asApplication.toFixed(2).padStart(6)} µs   (keeps its stack)`)
+  console.log(`    the same, as the dispatcher builds it    ${asDispatcher.toFixed(2).padStart(6)} µs   (no stack to capture)`)
 
-  console.log('\n    So a 404 costs roughly ten times a served request, and almost none of')
-  console.log('    that is routing — it is one `Error` object and its stack. That is a')
-  console.log('    free amplification factor for the cheapest hostile traffic there is,')
-  console.log('    and it is the traffic §9.2 made the rate limiter able to see. Recorded')
-  console.log('    in §28.8; not fixed here, because not capturing a stack changes what a')
-  console.log('    developer sees in dev mode and that is a decision, not an optimisation.')
+  console.log('\n    A 404 used to cost roughly ten times a served request, and almost none')
+  console.log('    of that was routing — it was one `Error` object and its stack: a free')
+  console.log('    amplification factor for the cheapest hostile traffic there is, and the')
+  console.log('    traffic §9.2 made the rate limiter able to see. The stack of a 404 the')
+  console.log('    dispatcher answers only ever shows the dispatcher, so it is no longer')
+  console.log('    captured (§28.8). A 404 a handler throws still keeps its stack.')
 }
 
 // ── 5. the store, at the scale it exists to survive ─────────────────────────

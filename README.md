@@ -1,31 +1,79 @@
 <div align="center">
 
-# Zen
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/banner-dark.png">
+  <img alt="zen.js — a compiler-first web framework" src="./.github/images/banner-dark.png" width="100%">
+</picture>
 
-**A compiler-first web framework for Node, Bun, Deno and the edge.**
+<h3>A compiler-first web framework for Node.js</h3>
 
 Express-simple. Fastify-fast. Typed end to end. No magic.
 
-[Architecture RFC](./ARCHITECTURE.md) · [Roadmap](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) · [Trade-offs](./ARCHITECTURE.md#27-architectural-trade-offs) · [Handoff](./HANDOFF.md)
+[![CI](https://github.com/VisionPilot/Zen.js/actions/workflows/ci.yml/badge.svg)](https://github.com/VisionPilot/Zen.js/actions/workflows/ci.yml)
+[![npm (alpha)](https://img.shields.io/npm/v/%40visionpilot%2Fzen/alpha?label=npm%40alpha&color=7c5cff)](https://www.npmjs.com/package/@visionpilot/zen)
+[![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.6-3c873a)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-%E2%89%A5%205.0-3178c6)](https://www.typescriptlang.org)
+[![Core dependencies](https://img.shields.io/badge/core%20dependencies-0-7c5cff)](./packages/core/package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
+[Architecture RFC](./ARCHITECTURE.md) · [Roadmap](./TASKS.md) · [Trade-offs](./ARCHITECTURE.md#27-architectural-trade-offs) · [Error codes](./docs/errors.md) · [Changelog](./CHANGELOG.md) · [Contributing](./CONTRIBUTING.md)
 
 </div>
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-06.png">
+  <img alt="" src="./.github/images/image-03.png" width="100%" height="4">
+</picture>
+
+> [!IMPORTANT]
+> **Alpha.** Published to npm on the `alpha` tag for feedback, not for
+> production: the API will change before `1.0`. See [Status](#status).
+
+```bash
+npm install @visionpilot/zen@alpha
+```
 
 ```ts
-import { zen } from 'zen'
+import { zen } from '@visionpilot/zen'
 
 const app = zen()
 
 app.get('/', () => 'Hello world')
 
-app.listen({ port: 3000 })
+await app.listen(3000)
 ```
 
 Two concepts: `app.METHOD(path, handler)`, and **the handler returns the response**.
 That is one fewer than Express, because there is no response object to learn.
 
----
+A schema is the whole contract — validation, the handler's types, the response
+filter and the OpenAPI document all come from it:
+
+```ts
+import { zen, NotFound } from '@visionpilot/zen'
+import { z } from 'zod'
+
+const User = z.object({ id: z.number().int(), email: z.email(), name: z.string() })
+
+const app = zen()
+
+app.get('/users/:id<int>', { response: { 200: User } }, async (ctx) => {
+  const row = await db.users.find(ctx.params.id)      // ctx.params.id is a number
+  if (row === undefined) throw new NotFound(`User ${ctx.params.id} not found`)
+  return row                                           // passwordHash is never sent
+})
+
+await app.listen(3000)
+```
+
+**Contents** — [The idea](#the-idea) · [What's different](#whats-different) ·
+[Status](#status) · [In depth](#in-depth) · [Try it](#try-it) ·
+[Layout](#layout) · [Examples](#examples) · [Contributing](#contributing)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-06.png">
+  <img alt="" src="./.github/images/image-03.png" width="100%" height="4">
+</picture>
 
 ## The idea
 
@@ -58,7 +106,10 @@ async function seg0(ctx) {
 No array iteration. No dynamic dispatch. Stages the route doesn't use are not
 emitted at all — not skipped by a runtime `if`, *absent from the source*.
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">
+  <img alt="" src="./.github/images/image-09.png" width="100%" height="4">
+</picture>
 
 ## What's different
 
@@ -87,24 +138,45 @@ emitted at all — not skipped by a runtime `if`, *absent from the source*.
 
 Full reasoning, including the arguments that lost, is in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-10.png">
+  <img alt="" src="./.github/images/image-05.png" width="100%" height="4">
+</picture>
 
 ## Status
 
-**Pre-alpha (0.1 spike).** The architecture RFC is complete; the implementation is a
-working vertical slice, not a released framework. Do not put this in production.
+**Alpha — `0.1.0-alpha`.** The architecture RFC is complete; the implementation is a
+working vertical slice, published on npm's `alpha` tag for feedback. Do not put this in
+production: the API will change, and several subsystems the RFC describes are not built
+(below). What *is* built has been through two pre-release audit passes that reproduced
+each defect before fixing it — [CHANGELOG.md](./CHANGELOG.md) lists every one — and
+[TASKS.md](./TASKS.md) is the full account of what is and is not done.
+
+| Package | |
+| --- | --- |
+| [`@visionpilot/zen`](./packages/zen) | install this — everything below, wired together |
+| [`@visionpilot/zen-core`](./packages/core) | registries, compilers, runtime — zero dependencies |
+| [`@visionpilot/zen-router`](./packages/router) | compiled radix router |
+| [`@visionpilot/zen-adapter-node`](./packages/adapter-node) | Node `http` adapter |
+| [`@visionpilot/zen-middleware`](./packages/middleware) | CORS, security headers, request ids, rate limiting |
+| [`@visionpilot/zen-openapi`](./packages/openapi) | OpenAPI 3.1, `$ref` dedup, breaking-change detection |
+
+Requires Node ≥ 22.6, and TypeScript ≥ 5.0 if you use TypeScript. The packages run on
+Node today; the adapter boundary is designed for Bun, Deno and the edge
+([§14](./ARCHITECTURE.md#14-adapter-abstraction)), and those adapters are not built yet.
 
 ### Working today
 
 - Compiled context class, per-route compiled pipelines, generated params builders
-- Backtracking radix router: static/typed/wildcard/optional params, correct 405, `HEAD`→`GET`
-- Boot-time conflict analysis with aggregated, rendered diagnostics
-- Phase / around / after middleware, collections, slots
+- Backtracking radix router: static/typed/wildcard/optional params, `app.paramType()`, correct 405 with a complete `Allow`, `HEAD`→`GET`
+- Boot-time conflict analysis with aggregated, rendered diagnostics — duplicate paths *and* names, ambiguous routes, and parameter types that can match the same value; registration order never decides which route answers
+- `app.get/post/…/all(path, [spec,] handler)` and `app.listen(port)` — the Express spellings — alongside the spec and options forms
+- Phase / around / after middleware at app, collection and route scope, collections, slots
 - **The hook system**: all twelve phases, three lexical scopes, compiled into the pipeline, with mirror ordering so before/after pairs nest — and `explainRoute()` to print the resolved chain
 - **Request deadlines**: per app / collection / route, `ctx.signal` wired to the timeout as well as to disconnect, `ctx.timeLeft` to propagate the remaining budget downstream, and abandoned work stopped at the stage boundary rather than left running behind an answered request
 - **Health and readiness**: two endpoints answering two different questions, per-check budgets and cancellation, stampede-safe caching, and a `draining` state that goes red before the server stops accepting
 - **Plugins**: manifests, semver dependency resolution, topological ordering, cycle/conflict/capability detection, context decorations with type accumulation
-- **DI**: typed tokens, three lifetimes, request-scoped services stored in the slot array, boot-time cycle and captive-dependency analysis
+- **DI**: typed tokens, three lifetimes, request-scoped services stored in the slot array and disposed at the end of the request, boot-time cycle and captive-dependency analysis
 - Standard Schema validation with normalised issues; RFC 9457 error envelopes
 - **Coercion profiles**: `?page=2` is a `number` because the schema says `number` — schema-guided, so `?sku=00713` stays a string, and a source with nothing to convert emits no code
 - **Configuration**: layered resolution that keeps the *provenance* of every value, a schema-validated environment checked before any plugin's `setup` runs, typed `app.config` / `ctx.config`, and secrets that redact themselves when serialised
@@ -113,13 +185,22 @@ working vertical slice, not a released framework. Do not put this in production.
 - **Compiled response serializers**: undeclared fields cannot be emitted, because the generated function has no key enumeration to emit them *through*
 - **OpenAPI 3.1**: `AppGraph → document` as a pure function, `$ref` deduplication, a dependency-free reference viewer, and breaking-change detection
 - Body intake emitted **only** when a route declares a body; prototype-pollution stripping
-- Node adapter with lazy `RawRequest` (no WHATWG `Request` construction)
+- Node adapter with lazy `RawRequest` (no WHATWG `Request` construction), client disconnects wired to `ctx.signal`, and shutdown that drains and then closes keep-alive connections rather than waiting on them
+- **Server-sent events** — `ctx.sse()`, with heartbeats, backpressure, a bound on what a slow client can hold, and a final `shutdown` event on drain
+- **File responses** — `ctx.file(path, { root })` with root confinement, `ETag`/`Last-Modified`, 304 revalidation and single-range 206
+- **Process lifecycle** — `SIGTERM`/`SIGINT` run the graceful shutdown; an uncaught exception is logged and shuts down with exit code 1; `listen({ signal })` aborts into the same sequence
 - `inject()` in-process testing; streaming responses; graceful shutdown
 - **Interpreted twins** for the pipeline, context, router and serializer, verified by differential suites
 
 ### Designed, not yet built
 
-Typed client · CLI · non-Node adapters · WebSockets · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)) · everything else in the RFC.
+CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · `app.url()` · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). [TASKS.md](./TASKS.md) ranks them, with effort estimates and the reasoning.
+
+## In depth
+
+Each subsystem below was built against a claim in [the RFC](./ARCHITECTURE.md), and
+each claim is either measured by a benchmark or asserted by a CI gate — usually
+both. Where a measurement came out worse than the claim, the claim was corrected.
 
 ### The M2 type-performance gate — passed
 
@@ -323,7 +404,7 @@ The sharpest case is precision: `?id=9007199254740993` is an ordinary Postgres
 not survive the round trip is left as a string so the schema reports it, because
 a visible 400 beats a silent off-by-one on a primary key.
 
-`npm run explain -w @zenjs-example/coercion` prints the derived **plan** rather
+`npm run explain -w @visionpilot/zen-example-coercion` prints the derived **plan** rather
 than the profile — an outcome, not a policy, because the question is never "is
 numeric coercion on" but "why did `?sku=00713` survive and `?page=2` not":
 
@@ -347,7 +428,10 @@ follows from the declared type instead of from whether somebody remembered —
 `examples/coercion` builds the same service both ways and asserts they answer
 identically.
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-08.png">
+  <img alt="" src="./.github/images/image-03.png" width="100%" height="4">
+</picture>
 
 ### Configuration that can answer "where did this come from?"
 
@@ -449,11 +533,14 @@ Against the plain module it replaces, reading `ctx.config.x.y` measures inside
 the benchmark's noise. That is the correct result: what this buys is at boot and
 in the diagnostics, not in the hot path.
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-02.png">
+  <img alt="" src="./.github/images/image-09.png" width="100%" height="4">
+</picture>
 
 ### CORS that runs on the request the browser actually sends
 
-`@zenjs/middleware` ships `cors`, `securityHeaders`, `requestId` and `rateLimit`.
+`@visionpilot/zen-middleware` ships `cors`, `securityHeaders`, `requestId` and `rateLimit`.
 The interesting thing about them is not that a framework has CORS — every
 framework does — but that building them started by measuring whether the usual
 shape works. It does not:
@@ -527,12 +614,11 @@ reflected**, across six shapes of allowlist crossed with eight hostile origins,
 because reflecting whatever arrives is the fastest possible CORS and therefore
 the shortcut a later optimisation reaches for first.
 
-One number came out backwards and is worth keeping: **answering a preflight is
+One number came out backwards and is worth keeping: **answering a preflight was
 6.2× cheaper than not answering one** (4.2 µs against 26.1 µs). Dropping it
-means a 404, and a 404 in this framework costs ~10× a served request — almost
-all of it one `Error` object and its stack. That is a finding about the
-framework rather than about the pack, and it is now
-[§28.8](./ARCHITECTURE.md#288-smaller-known-gaps).
+meant a 404, and a 404 cost ~10× a served request — almost all of it one `Error`
+object and its stack. That was a finding about the framework rather than about
+the pack, and it has since been fixed: see [the refusal path](#the-refusal-path-is-cheap).
 
 ### One resource, three representations — and the routes that pay nothing for it
 
@@ -644,25 +730,49 @@ type, **~10 ns** for a cached browser header — against ~850 ns to parse one, s
 roughly **50×** and **100×**. Per request, four of five `Accept` shapes are
 inside the measurement noise.
 
-And one number that came out backwards, again: **a 406 costs 13× the 200 it
+And one number that came out backwards, again: **a 406 cost 13× the 200 it
 would otherwise have been** (35.7 µs against 2.8 µs). Not a negotiation cost —
-the matcher answered in the nanoseconds above. It is the `Error` object and the
-problem document, which is the *same* finding the middleware pack surfaced from
-behind a preflight. Two features have now reached
-[§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)'s 404 row from two directions,
-which is what makes it a property of the framework's refusal path rather than of
-either feature.
+the matcher answered in the nanoseconds above. It was the `Error` object and its
+stack: the *same* finding the middleware pack surfaced from behind a preflight,
+reached from the other direction. Two features arriving at one number is what
+made it a property of the framework's refusal path, and it is now fixed.
 
----
+### The refusal path is cheap
+
+A 404, a 405 and a 406 are the cheapest hostile traffic there is, and all three
+used to arrive with a free amplification factor: an `Error` whose stack was
+captured — twice — and which could only ever point at the dispatcher. A refusal
+the framework makes is now built without a stack, and every `ZenError` captures
+its stack once. An error a *handler* throws keeps its stack, because that one
+points somewhere worth reading.
+
+Measured (`node benchmarks/refusals/run.ts`, paired arms, one machine):
+
+| | before | after |
+| --- | --- | --- |
+| 404, no route | 10.0 µs — 5.6× a served 200 | **4.2 µs — 2.3×** |
+| 405, wrong method | 10.6 µs — 5.7× | **4.7 µs — 2.6×** |
+| 406, `Accept: application/pdf` | 17.5 µs — 9.5× | **6.4 µs — 3.6×** |
+| 404 thrown by a handler (keeps its stack) | 15.4 µs | **10.8 µs** |
+
+The CI gate is structural, not timed: it fails if a framework refusal captures a
+stack frame, or if an application's error stops keeping its own.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-06.png">
+  <img alt="" src="./.github/images/image-05.png" width="100%" height="4">
+</picture>
 
 ## Try it
 
 ```bash
-npm install
+git clone https://github.com/VisionPilot/Zen.js.git && cd Zen.js
+npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 841 tests
-node scripts/smoke.ts              # 67 checks over a real socket
-node scripts/negative-controls.ts  # break 12 things on purpose; every suite must notice
+npm test                           # 972 tests
+node scripts/smoke.ts              # 71 checks over a real socket
+node scripts/negative-controls.ts  # break 43 things on purpose; every suite must notice
+node scripts/check-pack.ts         # what each npm tarball contains — installed and run outside the repo
 node benchmarks/typecheck/run.ts   # the M2 gate
 node benchmarks/serializer/run.ts  # serializer throughput
 node benchmarks/openapi/run.ts     # document generation + per-request cost
@@ -673,27 +783,31 @@ node benchmarks/coercion/run.ts    # what a conversion costs, and what a declare
 node benchmarks/config/run.ts      # what config costs a request (nothing), and the redaction gate
 node benchmarks/middleware/run.ts  # what the pack costs, and the never-reflect gate
 node benchmarks/negotiation/run.ts # what Accept costs, and the never-serve-a-refusal gate
+node benchmarks/refusals/run.ts    # what a 404/405/406 costs, and the no-stack gate
+node benchmarks/request-path/run.ts # what the audit's fixes cost, and where their code is not emitted
 node scripts/show-generated.ts     # read what the pipeline compiler emitted
 node scripts/show-serializer.ts    # read what the serializer compiler emitted
 npm run explain                    # print the resolved chain for every route
 npm run explain:deadlines          # every route's budget, and where it came from
 npm run health:explain             # which dependencies are probed, and by whom
-npm run explain -w @zenjs-example/coercion   # what each route converts, and what it leaves alone
+npm run explain -w @visionpilot/zen-example-coercion   # what each route converts, and what it leaves alone
 npm run config:explain             # where every configured value came from
 npm run middleware:explain         # which responses carry which headers, and why
 npm run negotiation:explain        # what each Accept header gets, and what the plain route paid
 node examples/hello-world/src/main.ts
 ```
 
-Requires Node ≥ 22.6. The repo runs from TypeScript source with no bundler.
+Working on the repository needs Node ≥ 22.18: the sources run straight through Node's type
+stripping, which is unflagged from 22.18, with no bundler. The published packages need Node ≥ 22.6.
+[CONTRIBUTING.md](./CONTRIBUTING.md) has the rest.
 
 ### What the tests cover
 
 | Suite | What it proves |
 | --- | --- |
-| `app.test.ts` | Routing, middleware, slots, errors, boot diagnostics, body handling |
+| `app.test.ts` | Routing (including absolute-form targets, `+` in paths, `HEAD` on wildcards and `all()`), middleware at every scope, `next()` as a Promise on the sync fast path, slots and their disposal, errors, boot diagnostics, body handling (`+json` included) |
 | `plugins.test.ts` | Registration, dependency resolution, cycles, versions, capabilities, semver |
-| `di.test.ts` | Lifetimes, request scoping, cycle + captive-dependency detection, disposal order |
+| `di.test.ts` | Lifetimes, request scoping, cycle + captive-dependency detection, disposal order — and request-scoped services released at the end of every request, the failed ones included |
 | `serializer.test.ts` | Field filtering, escapes, number/date policy, unions, `$ref`, strict mode, boot diagnostics |
 | `hooks.test.ts` | All nine pipeline phases in lifecycle order, three-scope resolution and the mirror, short-circuits, the error path, phase availability, and that a hookless route generates no hook code |
 | `timeouts.test.ts` | Budget resolution across the scope chain, `timeout: false`, the arm answering on time, 408-vs-504, `onTimeout` and its stage, the pipeline stopping at the boundary, one-way header propagation, and that an unbounded route generates no deadline code |
@@ -701,7 +815,7 @@ Requires Node ≥ 22.6. The repo runs from TypeScript source with no bundler.
 | `differential.test.ts` | Compiled pipeline ≡ interpreted pipeline over every step pair + 300 random chains; compiled hooks ≡ the twin over 200 random hook plans; and deadlines ≡ the twin over 200 chains where the client leaves at a random position — agreeing on *which* boundary abandoned it, not just that one did. All three assert their own coverage, so an agreement that ran nothing cannot pass |
 | `serializer-differential.test.ts` | Compiled ≡ walking serializer over 2 500 generated schema/value pairs, plus "no undeclared key reached the wire" |
 | `context.test.ts` | Compiled context ≡ `PlainContext`; **monomorphism** (`%HaveSameMap`); headers, query, cookies, egress |
-| `router.test.ts` | Path syntax, param types, conflict classes, compiled ≡ interpreted router |
+| `router.test.ts` | Path syntax, param types, conflict classes — every overlapping pair of builtin param types refused and every disjoint pair left alone — typed params tried in the same order whatever the registration order, compiled ≡ interpreted router |
 | `types.test.ts` | Type-level inference incl. negative `@ts-expect-error` cases; the M2 budget |
 | `openapi.test.ts` | Path/param/schema mapping, `$ref` dedup, the diff classifier, and **documented fields ≡ fields the compiled serializer emits** |
 | `examples/openapi` | The same drift check over real requests, plus the API compatibility gate |
@@ -718,9 +832,19 @@ Requires Node ≥ 22.6. The repo runs from TypeScript source with no bundler.
 | `negotiation.test.ts` | The matcher against RFC 9110 §12.5.1 — specificity beating quality, ties going to the server, `q=0` never served — plus `Vary: Accept` on the 406 and on a request that sent none, a plain-form 404 keeping `application/problem+json`, a 406 refusing *before* body intake, and that a route with one representation emits no negotiation code |
 | `negotiation-properties.test.ts` | Six invariants over 2 000 random offer sets × `Accept` headers, the load-bearing one being that a refused representation is never chosen; and a real differential — the cached negotiator against the uncached matcher over 2 000 random *streams*, because the bugs a cache introduces are order-dependent |
 | `examples/negotiation` | Three representations of one resource against **real Zod**: a client pinned to `v1` staying pinned, CSV columns taken from the same schema the JSON fields come from, a field the database has and neither format contains, a spreadsheet-formula cell neutralised, and — checked by `tsc` — that `ctx.negotiated` is `string \| null` |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. Twelve known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, and a test aimed at a code path that could not reach the behaviour it claimed to cover |
+| `adapter.test.ts` (adapter-node) | Over **real sockets**, because `inject()` could not see any of it: a request body does not abort `ctx.signal`, a POST under a deadline is answered rather than abandoned, a client leaving mid-stream neither crashes the process nor logs a failure, a missing file is a 404 rather than a dropped connection, a path cannot escape its root (symlinks included), 304/206/416 and `HEAD` for files, SSE framing, heartbeats and disconnects, and that shutdown neither waits on idle keep-alive connections nor severs event streams |
+| `sse.test.ts` | The event-stream framing, including a line break in `event` or `id` refused rather than forging a field; graceful `close()`; the `maxBuffered` bound; heartbeats that start only when something reads; and `ctx.sse()` on **both** context twins |
+| `validation.test.ts` | A bad query and a bad body are reported in **one** response, each issue tagged with its source; 422 only when the body alone failed; async validators collected too; and a one-source route compiles exactly as before |
+| `registration.test.ts` | Registrations that could never take effect are boot errors: a typo'd hook phase (with the phase you meant), an application phase on a route, a decoration that would shadow `ctx.json`, two routes sharing a name; `app.paramType()`; one boot per application however many callers race for it, and a failed boot that stays failed; and a shutdown that completes when an `onClose` hook throws |
+| `lifecycle.test.ts` (meta-package) | A real child process: `SIGTERM` drains and exits 0, an uncaught exception or unhandled rejection drains and exits 1, and nothing is installed on the process until `listen()` |
+| `error-docs.test.ts` | Every error code any package can produce has its entry in [docs/errors.md](./docs/errors.md) — the page every problem document links to |
+| `logger.test.ts` | The default logger never throws — a cycle or a `bigint` in an error's metadata still produces the log line *and* the error response — and metadata cannot overwrite a line's `code` or `status` |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. Forty-three known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">
+  <img alt="" src="./.github/images/image-03.png" width="100%" height="4">
+</picture>
 
 ## Layout
 
@@ -744,16 +868,23 @@ examples/
   middleware/      a browser-facing API: preflights, 429s that browsers can read
   negotiation/     one resource in three representations, and the encoder seam
 benchmarks/        serializer, OpenAPI, hook, deadline, health, coercion, config,
-                   middleware and negotiation cost; the M2 gate
-scripts/           smoke test, negative controls, codegen inspectors
+                   middleware, negotiation, refusal and request-path cost; the M2 gate
+scripts/           smoke test, negative controls, codegen inspectors, and release
+                   tooling: version.ts, check-release.ts, check-pack.ts
+docs/errors.md     every error code — where each problem document's `type` points
 ARCHITECTURE.md    RFC 0001 — the full design
 TASKS.md           what is built, what is not, ranked by ROI
 HANDOFF.md         start here if you are picking this up: conventions, traps, next steps
+RELEASING.md       how the packages get to npm; npm-registry.md has the reasoning
+CONTRIBUTING.md    conventions, setup, sign-off · SECURITY.md · CODE_OF_CONDUCT.md
 ```
 
-`@zenjs/core` has **zero runtime dependencies**, and imports nothing from `node:`.
+`@visionpilot/zen-core` has **zero runtime dependencies**, and imports nothing from `node:`.
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-10.png">
+  <img alt="" src="./.github/images/image-09.png" width="100%" height="4">
+</picture>
 
 ## Examples
 
@@ -812,7 +943,7 @@ document says    : properties: id, email, name, role, createdAt   additionalProp
 
 All three agree, and the suite proves it by making a real request for every
 documented response and comparing the keys. The Zod integration is four lines in
-application code; neither `@zenjs/core` nor `@zenjs/openapi` imports it.
+application code; neither `@visionpilot/zen-core` nor `@visionpilot/zen-openapi` imports it.
 
 It is also the first example laid out the way
 [§23.4](./ARCHITECTURE.md#234-recommended-application-structure) recommends —
@@ -894,13 +1025,19 @@ exist on workerd. And it names the gap it does not close — secrecy propagates 
 `` `${env.DATABASE_URL}?replica=1` `` does not. There is a test asserting the
 leak, so the gap cannot move without someone deciding to move it.
 
----
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-08.png">
+  <img alt="" src="./.github/images/image-05.png" width="100%" height="4">
+</picture>
 
 ## Contributing
 
-Read [ARCHITECTURE.md](./ARCHITECTURE.md) first — particularly [§1.1, the nine
-invariants](./ARCHITECTURE.md#11-the-nine-invariants). They are numbered so reviewers
-can cite them, and a PR that violates one needs an argument, not a workaround.
+Contributions are welcome — [CONTRIBUTING.md](./CONTRIBUTING.md) has setup, the
+checks to run and the sign-off, and [SECURITY.md](./SECURITY.md) how to report a
+vulnerability privately. Read [ARCHITECTURE.md](./ARCHITECTURE.md) first —
+particularly [§1.1, the nine invariants](./ARCHITECTURE.md#11-the-nine-invariants).
+They are numbered so reviewers can cite them, and a PR that violates one needs an
+argument, not a workaround.
 
 Four rules worth knowing up front:
 
@@ -960,4 +1097,19 @@ Four rules worth knowing up front:
    "the generated source is byte identical" beats "the difference was inside the
    noise", because the second is also true when the cost is real and small.
 
-MIT.
+## Licence
+
+[MIT](./LICENSE) © [VisionPilot](https://github.com/VisionPilot). Zen was created by
+[Eren Sümer](https://github.com/ErenSumer); everyone who has contributed is listed in
+[CONTRIBUTORS.md](./CONTRIBUTORS.md).
+
+<br>
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./.github/images/logo-with-text-white.png">
+    <img alt="zen.js" src="./.github/images/logo-with-text-black.png" width="138">
+  </picture>
+  <br>
+  <sub>Built by <a href="https://github.com/VisionPilot">VisionPilot</a> · a web framework is a compiler with an HTTP server attached</sub>
+</div>

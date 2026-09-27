@@ -1,4 +1,4 @@
-import { definePlugin, type Plugin } from '@zenjs/core'
+import { definePlugin, type Plugin } from '@visionpilot/zen-core'
 import { assertCorsCorpConsistent } from './consistency.ts'
 import type { CorsExports } from './cors.ts'
 import type { Staging } from './shared.ts'

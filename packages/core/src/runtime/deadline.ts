@@ -172,6 +172,22 @@ export class Deadline {
   }
 
   /**
+   * Stop the clock, and only the clock — called as the reply is handed to the
+   * adapter.
+   *
+   * The deadline bounds stages 5–9 and not the write (§4.4), so the timer must
+   * not fire once egress starts. The *connection* half must stay wired: a
+   * streamed body — `ctx.stream()`, `ctx.sse()` — keeps the exchange open after
+   * this point, and `ctx.signal` is the only way the code producing it learns
+   * the client left. Removing the listener here, as `disarm` used to be called
+   * here, made `ctx.signal` deaf to disconnects on every bounded streaming
+   * route: an SSE subscription wired to it leaked for the life of the process.
+   */
+  settle(): void {
+    this.#clear()
+  }
+
+  /**
    * Release the timer and the listener.
    *
    * Called from a `finally` on every path. Skipping it leaks one timer per

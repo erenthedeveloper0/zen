@@ -1,0 +1,29 @@
+name: Feature or design proposal
+description: Propose a capability, or a change to something ARCHITECTURE.md specifies.
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Zen's design is written down in [ARCHITECTURE.md](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md),
+        and TASKS.md ranks what is not built yet. Check both first — the thing you need may be specified
+        and waiting for someone, which makes it a much easier pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposal
+      description: The API you have in mind, and which RFC sections it touches.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered, and what each costs
+      description: ARCHITECTURE.md §27 shows the format. The per-request cost of a feature matters here (I9).

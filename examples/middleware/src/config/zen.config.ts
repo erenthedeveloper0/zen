@@ -1,4 +1,4 @@
-import { defineConfig } from 'zen'
+import { defineConfig } from '@visionpilot/zen'
 import { z } from '../shared/zod.ts'
 
 /**
@@ -11,7 +11,7 @@ import { z } from '../shared/zod.ts'
  *
  * So it comes from the environment, through a schema, and lands on the config
  * tree with a **layer and a named source behind it** — which means
- * `npm run explain -w @zenjs-example/middleware` can answer "why is this origin
+ * `npm run explain -w @visionpilot/zen-example-middleware` can answer "why is this origin
  * allowed?" with a file and a line rather than with a grep. That question gets
  * asked during incidents, and this is the pass in which it became answerable
  * for a middleware rather than only for the application's own values:

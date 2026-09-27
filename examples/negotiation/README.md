@@ -6,8 +6,8 @@ versions of JSON and a CSV export. No `/v2/` prefix, no second route, no
 
 ```bash
 npm run example:negotiation
-npm run explain -w @zenjs-example/negotiation
-npm test -w @zenjs-example/negotiation
+npm run explain -w @visionpilot/zen-example-negotiation
+npm test -w @visionpilot/zen-example-negotiation
 ```
 
 ---
@@ -85,7 +85,7 @@ reaches for first.
 
 ## The encoder seam
 
-`text/csv` is not something `@zenjs/core` can ship: it has zero runtime
+`text/csv` is not something `@visionpilot/zen-core` can ship: it has zero runtime
 dependencies (§19.8), and there is no single right answer about `\r\n`, about
 `sep=`, or about whether a `null` is an empty cell. So it is registered, the
 same way a schema converter is:

@@ -19,7 +19,7 @@
 import {
   buildProgram, compileSerializer, walkSerializer, CodeGen, DEFAULT_CAPABILITIES,
   type JsonSchema,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 
 const codegen = new CodeGen({ caps: DEFAULT_CAPABILITIES })
 

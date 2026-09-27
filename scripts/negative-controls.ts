@@ -50,6 +50,7 @@ interface Control {
 }
 
 const CORE = 'packages/core/src'
+const ADAPTER = 'packages/adapter-node/src/index.ts'
 
 const CONTROLS: readonly Control[] = [
   // ── §13.4: the match ──────────────────────────────────────────────────────
@@ -160,6 +161,279 @@ const CONTROLS: readonly Control[] = [
     suite: 'packages/core/test/negotiation.test.ts',
     caughtBy: '"a typo alongside real media types names the typo, not the schema"',
   },
+
+  // ── §4.4, §14.3: the Node adapter — defects only a real socket can see ────
+  {
+    name: 'treat the request body being consumed as the client disconnecting',
+    file: ADAPTER,
+    find: "    response.once('close', () => {\n      if (!response.writableFinished) this.#controller.abort()\n    })",
+    replace: "    request.once('close', () => {\n      if (!response.writableEnded) this.#controller.abort()\n    })",
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"is not aborted by reading the request body"',
+  },
+  // No control for the adapter's `headersSent` guard, and that is this
+  // script's finding rather than an omission: its first run showed the guard
+  // is unreachable. Every path that sends headers and then fails goes through
+  // `#pipe`, which destroys the response first, so the `destroyed` check above
+  // it always answers. The guard stays, documented as defence in depth — but a
+  // control that cannot be caught would be a permanently red line proving
+  // nothing, which is the one thing this table must never contain.
+  {
+    name: 'log a client that left mid-stream as an application failure',
+    file: ADAPTER,
+    find: '      if (failure.failed) throw failure.error',
+    replace: "      if (failure.failed || this.signal.aborted) throw failure.error ?? new Error('client left')",
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"survives a client disconnecting mid-stream, with nothing logged as a failure"',
+  },
+  {
+    name: 'let keep-alive connections idle through shutdown',
+    file: ADAPTER,
+    find: '          state.closing = true',
+    replace: '          state.closing = false',
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"does not wait out shutdownTimeout for connections a client is keeping alive"',
+  },
+  {
+    name: 'serve a file that resolves outside its root',
+    file: 'packages/adapter-node/src/file.ts',
+    find: '  return candidate === base || candidate.startsWith(base.endsWith(sep) ? base : base + sep)',
+    replace: '  return true',
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"refuses paths that escape the root, including through a symlink"',
+  },
+
+  // ── §13.5: server-sent events ─────────────────────────────────────────────
+  {
+    name: 'send a returned SSE channel as an octet-stream',
+    file: `${CORE}/runtime/response-engine.ts`,
+    find: '    if (isSseChannel(value)) return value.$reply\n',
+    replace: '',
+    suite: 'packages/core/test/sse.test.ts',
+    caughtBy: '"finalize() turns a returned channel into its reply, not an octet-stream"',
+  },
+  {
+    name: 'stop listening for disconnects when the deadline clock stops',
+    file: `${CORE}/api/zen.ts`,
+    find: '        deadline?.settle()\n        await this.#send(ctx, conn, reply, hooks.onResponse)',
+    replace: '        deadline?.disarm()\n        await this.#send(ctx, conn, reply, hooks.onResponse)',
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"closes the channel and aborts ctx.signal when the client leaves — on a route with a deadline too"',
+  },
+  {
+    name: 'let a channel buffer without bound for a client that stopped reading',
+    file: `${CORE}/runtime/sse.ts`,
+    find: '    if (buffered + frame.byteLength > maxBuffered) {',
+    replace: '    if (buffered + frame.byteLength > maxBuffered && maxBuffered < 0) {',
+    suite: 'packages/core/test/sse.test.ts',
+    caughtBy: '"closes a stream whose reader has fallen further behind than maxBuffered"',
+  },
+
+  // ── §15: the container under concurrency and at shutdown ─────────────────
+  {
+    name: 'run an async singleton factory once per concurrent caller',
+    file: `${CORE}/di/container.ts`,
+    find: '      if (entry.pending !== null) return entry.pending\n',
+    replace: '',
+    suite: 'packages/core/test/di.test.ts',
+    caughtBy: '"concurrent first resolves of an async singleton share one build"',
+  },
+  {
+    name: 'stop disposing services at the first disposer that throws',
+    file: `${CORE}/di/container.ts`,
+    find: '      } catch (error) {\n        failures.push(error)\n      }',
+    replace: '      } catch (error) {\n        throw error\n      }',
+    suite: 'packages/core/test/di.test.ts',
+    caughtBy: '"dispose() runs every disposer even when one throws, then reports them together"',
+  },
+  {
+    name: 'abandon shutdown when an onClose hook throws',
+    file: `${CORE}/api/zen.ts`,
+    find: "        this.#log.error({ err: error, hook: hook.name }, 'onClose hook threw; continuing shutdown')",
+    replace: '        throw error',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"runs every onClose hook and disposes services even when a hook throws"',
+  },
+
+  // ── §9.7, §7.5: registrations that could never take effect ───────────────
+  {
+    name: 'file a hook for an unknown phase and never call it',
+    file: `${CORE}/api/zen.ts`,
+    find: '    diagnostics.push(...diagnoseUnknown(this.#allHookRecords()))\n',
+    replace: '',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"names the phase and suggests the one that was meant"',
+  },
+  {
+    name: 'let a plugin decorate a name the context already owns',
+    file: `${CORE}/api/zen.ts`,
+    find: '    if (CONTEXT_MEMBERS.has(name)) {',
+    replace: '    if (CONTEXT_MEMBERS.has(name) && name.length < 0) {',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"refuses a name the framework owns — it would replace ctx.json() on every route"',
+  },
+
+  // ── §11.4.1, §19.5: values that must not be quietly altered ──────────────
+  {
+    name: 'let <int> match an id it cannot represent exactly',
+    file: 'packages/router/src/param-types.ts',
+    find: ' && Number.isSafeInteger(Number(s))',
+    replace: '',
+    suite: 'packages/router/test/router.test.ts',
+    caughtBy: '"an id past 2^53 does not match rather than rounding to another row"',
+  },
+  {
+    name: "write a cookie Path containing ';' verbatim",
+    file: `${CORE}/runtime/cookies.ts`,
+    find: "  if (cookie.path !== undefined && !COOKIE_ATTRIBUTE.test(cookie.path)) throw invalidCookie('path', cookie.path)\n",
+    replace: '',
+    suite: 'packages/core/test/cookies.test.ts',
+    caughtBy: '"refuses a `;` in the name, the domain or the path — it would start a new attribute"',
+  },
+  {
+    name: "decode '+' as a space outside form encoding — in a path segment or a cookie",
+    file: `${CORE}/primitives/path.ts`,
+    find: '    return decodeURIComponent(value)\n',
+    replace: "    return decodeURIComponent(value.replace(/\\+/g, ' '))\n",
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"a `+` is a plus — only form encoding spells a space that way"',
+  },
+
+  // ── §5.5, §5.6: which route answers ──────────────────────────────────────
+  {
+    name: 'let two routes share a name, so one answers the other\'s requests',
+    file: `${CORE}/api/zen.ts`,
+    find: '      const owner = ids.get(id)\n      if (owner !== undefined) {',
+    replace: '      const owner = ids.get(id)\n      if (owner !== undefined && id.length < 0) {',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"two routes sharing a name are a boot error, not two routes answering each other"',
+  },
+  {
+    name: 'try typed params in registration order',
+    file: 'packages/router/src/trie.ts',
+    find: '        node.typed.sort((x, y) => (x.type.name < y.type.name ? -1 : x.type.name > y.type.name ? 1 : 0))\n',
+    replace: '',
+    suite: 'packages/router/test/router.test.ts',
+    caughtBy: '"the matcher tries typed params in the same order however they were registered"',
+  },
+  {
+    name: 'read two different param types in one position as disjoint, whatever they accept',
+    file: 'packages/router/src/conflicts.ts',
+    find: "      if (shared === false) return { verdict: 'disjoint', witness: null, undecided: null }",
+    replace: "      if (shared !== null) return { verdict: 'disjoint', witness: null, undecided: null }",
+    suite: 'packages/router/test/router.test.ts',
+    caughtBy: '"types that share a value are ambiguous, and the message names the value"',
+  },
+  {
+    name: "leave HEAD out of a 405's Allow although the GET route serves it",
+    file: 'packages/router/src/trie.ts',
+    find: "  if (methods.has('GET')) allowed.add('HEAD')\n",
+    replace: '',
+    suite: 'packages/router/test/router.test.ts',
+    caughtBy: '"405 reports the methods that exist on the path"',
+  },
+  {
+    name: 'match an absolute-form request target as though it were a path',
+    file: `${CORE}/primitives/path.ts`,
+    find: '  const target = url.charCodeAt(0) === 47 /* / */ ? url : originForm(url)\n',
+    replace: '  const target = url.length >= 0 ? url : originForm(url)\n',
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"an absolute-form request target is routed by its path (RFC 9112 §3.2.2)"',
+  },
+
+  // ── §2.2, §8.2: boot and the middleware contract ─────────────────────────
+  {
+    name: 'boot again for every caller instead of once',
+    file: `${CORE}/api/zen.ts`,
+    find: '    return (this.#booting ??= this.#boot())',
+    replace: '    return this.#boot()',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"concurrent callers share one boot — a plugin\'s setup runs once"',
+  },
+  {
+    name: 'hand an around middleware a bare Reply from next() when the rest compiled synchronous',
+    file: `${CORE}/compile/pipeline-compiler.ts`,
+    find: '          : `async function () { return ${inner.name}(ctx) }`',
+    replace: '          : `function () { return ${inner.name}(ctx) }`',
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"next() is a Promise even when everything downstream compiled synchronous"',
+  },
+
+  // ── §4.2 stage 10, §7.4, §15.3: what a request releases ──────────────────
+  {
+    name: 'remember one value per disposer, so a slot set twice leaks its first value',
+    file: `${CORE}/primitives/disposal.ts`,
+    find: '    if (entry.value === value && entry.dispose === dispose) return',
+    replace: '    if (entry.dispose === dispose) return',
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"a disposable slot set twice releases both values, newest first, once each"',
+  },
+  {
+    name: 'queue what a settled request acquires on a list nothing will read again',
+    file: `${CORE}/primitives/disposal.ts`,
+    find: '  if (list === SETTLED) {\n',
+    replace: '  if (list === SETTLED && name.length < 0) {\n',
+    suite: 'packages/core/test/di.test.ts',
+    caughtBy: '"a scoped service that finishes opening after its deadline answered is released at once"',
+  },
+  {
+    name: "accept a scoped provider's dispose and never call it",
+    file: `${CORE}/di/container.ts`,
+    find: '        trackDisposal(scope as DisposalCarrier, entry.token.name, entry.dispose, value)\n',
+    replace: '',
+    suite: 'packages/core/test/di.test.ts',
+    caughtBy: '"each request disposes the instance it created, once, after the response"',
+  },
+
+  // ── the edges of a request ───────────────────────────────────────────────
+  {
+    name: 'let the default logger throw on a line JSON.stringify refuses',
+    file: `${CORE}/runtime/logger.ts`,
+    find: '        text = JSON.stringify(line, tolerant())',
+    replace: "        text = JSON.stringify(line, tolerant()) ; throw new Error('unserialisable')",
+    suite: 'packages/core/test/logger.test.ts',
+    caughtBy: '"writes a line for a value JSON.stringify refuses — a cycle, a bigint"',
+  },
+  {
+    name: 'answer an invalid Host header with a 500 from whichever handler reads ctx.url',
+    file: `${CORE}/runtime/context.ts`,
+    find: "    throw new BadRequest('The request target or its Host header is not a valid URL.')",
+    replace: "    throw new TypeError('Invalid URL')",
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"an invalid Host header makes ctx.url a 400, not a TypeError"',
+  },
+  {
+    name: 'refuse a +json body with a 415',
+    file: `${CORE}/runtime/body.ts`,
+    find: "(media.endsWith('+json') ? parsers.get('application/json') : undefined)",
+    replace: "(media.endsWith('+xml') ? parsers.get('application/json') : undefined)",
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"a +json media type is JSON (RFC 6839)"',
+  },
+  {
+    name: 'let a client that cancels an upload surface as an application 500',
+    file: ADAPTER,
+    find: '      if (signal?.aborted === true && error !== signal.reason) throw signal.reason\n      if (isClientAbort(error)) throw',
+    replace: '      if (signal?.aborted === true && error !== signal.reason && error === null) throw signal.reason\n      if (isClientAbort(error) && error === null) throw',
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"is reported as the client leaving, not logged as an application failure"',
+  },
+  {
+    name: 'ignore the port in app.listen(port)',
+    file: `${CORE}/api/zen.ts`,
+    find: '      ? { port: target, ...(host === undefined ? {} : { host }) }',
+    replace: '      ? { ...(host === undefined ? {} : { host }) }',
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"takes a port number, as the five-line app of §1.2 writes it"',
+  },
+  {
+    name: 'declare ListenOptions.signal and never listen to it',
+    file: `${CORE}/api/zen.ts`,
+    find: "      signal.addEventListener('abort', onAbort, { once: true })\n",
+    replace: '      void onAbort\n',
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"shuts down gracefully when its signal aborts"',
+  },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,7 +494,10 @@ for (const control of selected) {
     if (!build()) {
       outcome = 'BUILD FAILED'
     } else {
-      const status = run(['--test', control.suite])
+      // A per-test ceiling, because some defects hang rather than fail — a
+      // shutdown that waits on a connection nobody closes — and a control
+      // that never returns would stall CI instead of reporting.
+      const status = run(['--test', '--test-timeout=30000', control.suite])
       outcome = status === 0 ? 'NOT CAUGHT' : 'CAUGHT'
     }
   } finally {

@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import type { RouteRecord, HttpMethod } from '@zenjs/core'
-import { CodeGen, DEFAULT_CAPABILITIES } from '@zenjs/core'
-import { ZenRouter, parsePath, renderPath, BUILTIN_PARAM_TYPES, analyzeRoutes } from '@zenjs/router'
+import type { RouteRecord, HttpMethod } from '@visionpilot/zen-core'
+import { CodeGen, DEFAULT_CAPABILITIES } from '@visionpilot/zen-core'
+import { ZenRouter, parsePath, renderPath, BUILTIN_PARAM_TYPES, analyzeRoutes } from '@visionpilot/zen-router'
 
 function route(method: HttpMethod, path: string): RouteRecord {
   const parsed = parsePath(path)
@@ -201,7 +201,8 @@ describe('differential: compiled router ≡ interpreted router', () => {
       const router = build(ROUTES, compile)
       const miss = router.match('DELETE', '/users')
       assert.ok(miss !== null && miss.route === null)
-      assert.deepEqual([...miss.allowed].sort(), ['GET', 'POST'])
+      // HEAD is served wherever GET is (§4.2), so the 405 says so.
+      assert.deepEqual([...miss.allowed].sort(), ['GET', 'HEAD', 'POST'])
     }
   })
 
@@ -244,5 +245,96 @@ describe('router build errors', () => {
 
   test('duplicate registration reports the conflict', () => {
     assert.throws(() => build([['GET', '/dup'], ['GET', '/dup']], true), /Duplicate route/)
+  })
+})
+
+describe('<int> refuses what it cannot represent (§11.4.1)', () => {
+  for (const compile of [true, false]) {
+    test(`an id past 2^53 does not match rather than rounding to another row (${compile ? 'compiled' : 'interpreted'})`, () => {
+      const router = build([['GET', '/orders/:id<int>']], compile)
+      const safe = router.match('GET', '/orders/9007199254740991')
+      assert.ok(safe !== null && safe.route !== null)
+      assert.equal(safe.params['id'], 9007199254740991)
+      assert.equal(router.match('GET', '/orders/9007199254740993'), null, '…993 would have become …992')
+      assert.equal(router.match('GET', '/orders/99999999999999999'), null)
+      const negative = router.match('GET', '/orders/-9007199254740991')
+      assert.ok(negative !== null && negative.route !== null)
+    })
+  }
+})
+
+describe('405 Allow names every route that matches the path', () => {
+  test('a static route beside a dynamic one contributes both method sets', () => {
+    const router = build([['GET', '/users/me'], ['DELETE', '/users/:id'], ['PATCH', '/users/:id']], true)
+    // DELETE /users/me is served by the dynamic route, so it is allowed…
+    const served = router.match('DELETE', '/users/me')
+    assert.ok(served !== null && served.route !== null)
+    // …and a PUT there must say so, instead of advertising only the static GET.
+    const refused = router.match('PUT', '/users/me')
+    assert.ok(refused !== null && refused.route === null)
+    assert.deepEqual([...refused.allowed].sort(), ['DELETE', 'GET', 'HEAD', 'PATCH'])
+  })
+})
+
+describe('two parameter types in one position (§5.5, §5.6)', () => {
+  const analyzeWith = (paths: Array<[HttpMethod, string]>, paramTypes = BUILTIN_PARAM_TYPES) =>
+    analyzeRoutes(paths.map(([m, p]) => route(m, p)), { paramTypes })
+
+  test('types that share a value are ambiguous, and the message names the value', () => {
+    // `/items/42` satisfies both. The trie used to try typed children in the
+    // order they were inserted — registration order — so which route answered
+    // depended on which file was imported first.
+    const found = analyzeWith([['GET', '/items/:id<int>'], ['GET', '/items/:key<slug>']])
+    const errors = found.filter((d) => d.severity === 'error')
+    assert.equal(errors.length, 1)
+    assert.equal(errors[0]?.code, 'ZEN_ROUTE_AMBIGUOUS')
+    assert.match(errors[0]?.message ?? '', /satisfies both/)
+  })
+
+  test('every overlapping builtin pair is caught, and every disjoint one is left alone', () => {
+    const overlapping: Array<[string, string]> = [
+      ['int', 'float'], ['int', 'slug'], ['int', 'hex'], ['float', 'slug'], ['float', 'hex'],
+      ['uuid', 'slug'], ['ulid', 'slug'], ['ulid', 'hex'], ['ulid', 'float'], ['date', 'slug'], ['slug', 'hex'],
+    ]
+    const disjoint: Array<[string, string]> = [
+      ['int', 'uuid'], ['int', 'ulid'], ['int', 'date'], ['uuid', 'ulid'], ['uuid', 'hex'], ['uuid', 'date'],
+    ]
+    for (const [a, b] of overlapping) {
+      const errors = analyzeWith([['GET', `/x/:a<${a}>`], ['GET', `/x/:b<${b}>`]]).filter((d) => d.severity === 'error')
+      assert.equal(errors[0]?.code, 'ZEN_ROUTE_AMBIGUOUS', `<${a}> and <${b}> share a value`)
+    }
+    for (const [a, b] of disjoint) {
+      const found = analyzeWith([['GET', `/x/:a<${a}>`], ['GET', `/x/:b<${b}>`]])
+      assert.deepEqual(found, [], `<${a}> and <${b}> cannot share a value`)
+    }
+  })
+
+  test('application types are checked through jsonSchema.examples, and undecidable pairs warn', () => {
+    const sku = { name: 'sku', test: (s: string) => /^[A-Z]{3}-\d{4}$/.test(s), parse: (s: string) => s, jsonSchema: { examples: ['ABC-1234'] } }
+    const code = { name: 'code', test: (s: string) => /^[A-Z]{3}-\d+$/.test(s), parse: (s: string) => s, jsonSchema: { examples: ['XYZ-9'] } }
+    const opaque = { name: 'opaque', test: (s: string) => s.startsWith('o_'), parse: (s: string) => s }
+    const opaque2 = { name: 'opaque2', test: (s: string) => s.startsWith('o'), parse: (s: string) => s }
+    const types = new Map([...BUILTIN_PARAM_TYPES, ['sku', sku], ['code', code], ['opaque', opaque], ['opaque2', opaque2]])
+
+    const shared = analyzeWith([['GET', '/p/:a<sku>'], ['GET', '/p/:b<code>']], types)
+    assert.equal(shared.filter((d) => d.severity === 'error')[0]?.code, 'ZEN_ROUTE_AMBIGUOUS', 'ABC-1234 is also a code')
+
+    const unknown = analyzeWith([['GET', '/q/:a<opaque>'], ['GET', '/q/:b<opaque2>']], types)
+    assert.deepEqual(unknown.filter((d) => d.severity === 'error'), [])
+    assert.equal(unknown[0]?.code, 'ZEN_ROUTE_TYPES_UNDECIDED', 'said out loud, not silently resolved')
+  })
+
+  test('the matcher tries typed params in the same order however they were registered', () => {
+    const custom = (name: string) => ({ name, test: (s: string) => s.startsWith('v'), parse: (s: string) => `${name}:${s}` })
+    const paramTypes = new Map([...BUILTIN_PARAM_TYPES, ['beta', custom('beta')], ['alpha', custom('alpha')]])
+    const answer = (paths: Array<[HttpMethod, string]>) => {
+      const router = new ZenRouter().build(paths.map(([m, p]) => route(m, p)), { paramTypes })
+      const hit = router.match('GET', '/v/v1')
+      return hit !== null && hit.route !== null ? hit.route.path : null
+    }
+    const forwards = answer([['GET', '/v/:x<alpha>'], ['GET', '/v/:y<beta>']])
+    const backwards = answer([['GET', '/v/:y<beta>'], ['GET', '/v/:x<alpha>']])
+    assert.equal(forwards, backwards, 'registration order never decides (§5.6)')
+    assert.equal(forwards, '/v/:x<alpha>', 'the type whose name sorts first')
   })
 })

@@ -3,7 +3,9 @@ import type { RawRequest } from './adapter.ts'
 import type { Logger } from './logger.ts'
 import type { Slot } from './slot.ts'
 import type { Token } from './container.ts'
-import type { Reply, ReplyInit, SetCookie, StreamSource, SseChannel, SseEvent } from './reply.ts'
+import type {
+  FileReplyInit, Reply, ReplyInit, SetCookie, StreamSource, SseChannel, SseEvent, SseInit,
+} from './reply.ts'
 import type {
   RouteSchema, InferParams, InferQuery, InferHeaders, InferCookies, InferBody, RouteId,
 } from './route.ts'
@@ -120,9 +122,32 @@ export interface BaseContext<S extends RouteSchema = RouteSchema, P extends stri
   bytes(body: Uint8Array, init?: ReplyInit): Reply<Uint8Array>
   empty(status?: 204 | 205 | 304): Reply<null>
   redirect(to: string, status?: 301 | 302 | 303 | 307 | 308): Reply<null>
-  file(path: string, init?: ReplyInit): Reply<null>
+  /**
+   * A file on disk. Pass `root` whenever any part of `path` came from the
+   * request — see `FileReplyInit.root`. The adapter answers 404 for a missing
+   * file or an escaping path, and handles `HEAD`, `ETag`/`Last-Modified`
+   * revalidation (304) and single byte ranges (206) itself (§13.5).
+   */
+  file(path: string, init?: FileReplyInit): Reply<null>
   stream(source: StreamSource, init?: ReplyInit): Reply<null>
-  sse(init?: { retry?: number; keepAlive?: number }): SseChannel & { readonly $reply: Reply<SseEvent> }
+  /**
+   * Open a server-sent event stream (§13.5). Return the channel from the
+   * handler, keep the reference, and `send` on it:
+   *
+   *     app.get('/events', { timeout: false }, (ctx) => {
+   *       const sse = ctx.sse({ retry: 3000 })
+   *       const off = bus.on('update', (e) => sse.send({ event: 'update', data: e, id: e.seq }))
+   *       ctx.signal.addEventListener('abort', off)
+   *       return sse
+   *     })
+   *
+   * The response carries `text/event-stream`, `Cache-Control: no-cache,
+   * no-transform` and `X-Accel-Buffering: no`, so it streams through nginx
+   * without a config change. A route deadline bounds the work before the first
+   * byte and stops there (§4.4); `ctx.signal` still aborts when the client
+   * leaves, for as long as the stream is open.
+   */
+  sse(init?: SseInit): SseChannel & { readonly $reply: Reply<SseEvent> }
   respond<T>(reply: Reply<T>): Reply<T>
 
   readonly res: ReplyBuilder

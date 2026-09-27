@@ -15,6 +15,5 @@ console.log(`    curl ${handle.url}/users/1`)
 console.log(`    curl ${handle.url}/orders/1        # returns marginCents and fraudScore — watch the wire`)
 console.log(`    curl ${handle.url}/openapi.json | head -40\n`)
 
-process.on('SIGINT', () => {
-  void app.close('SIGINT').then(() => process.exit(0))
-})
+// SIGTERM and SIGINT drain and exit on their own: `zen()` installs the process
+// lifecycle when the app starts listening (§4.5, §12.8).

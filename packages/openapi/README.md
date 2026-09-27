@@ -1,0 +1,76 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-white.png">
+    <img alt="zen.js" src="https://raw.githubusercontent.com/VisionPilot/Zen.js/main/.github/images/logo-with-text-black.png" width="220">
+  </picture>
+</p>
+
+# @visionpilot/zen-openapi
+
+OpenAPI 3.1 for [Zen](https://github.com/VisionPilot/Zen.js), generated from the
+same schemas the framework validates requests and serializes responses with —
+so the document says exactly what the wire carries.
+
+> **Alpha.**
+
+```bash
+npm install @visionpilot/zen-openapi@alpha
+```
+
+```ts
+import { zen, registerSchemaConverter } from '@visionpilot/zen'
+import { openapiPlugin } from '@visionpilot/zen-openapi'
+import { z } from 'zod'
+
+// Once, before the app boots: how to read a Zod schema as JSON Schema.
+registerSchemaConverter('zod', (schema, io) => z.toJSONSchema(schema as z.ZodType, { io }))
+
+const app = zen()
+app.use(openapiPlugin, {
+  title: 'Acme API',
+  version: '2.0.0',
+  json: '/openapi.json',   // the document
+  ui: '/docs',             // a built-in viewer with no external requests
+})
+```
+
+## Why the document cannot drift
+
+The generator is a pure function from the frozen application graph to a
+document, run once at boot — the endpoint serves a pre-encoded string with an
+`ETag`, and costs nothing per request.
+
+Response schemas are published **closed** (`additionalProperties: false`),
+because Zen's serializer drops any field a response schema does not declare: a
+document generated from the raw schema would promise clients fields that can
+never arrive. Parameter serialization follows the route's actual coercion
+settings, and a negotiated route publishes one `content` entry per media type,
+in the server's preference order.
+
+## Breaking-change detection
+
+```ts
+import { diffDocuments } from '@visionpilot/zen-openapi'
+
+const { breaking, compatible } = diffDocuments(committedBaseline, currentDocument)
+if (breaking.length > 0) process.exitCode = 1
+```
+
+Requests are contravariant and responses covariant: removing a response field,
+narrowing a request type or renaming an `operationId` is breaking; adding an
+optional response field is not. Run it in CI against a committed baseline and an
+API change is reviewed as an API change.
+
+## Options
+
+`title` and `version` are required. Also: `servers`, `tags`, `security`,
+`securitySchemes`, `license`, `contact`, `json` / `ui` (paths, or `false`),
+`strict` (turn documentation warnings into boot errors — worth enabling once an
+API is public), and `onDocument` (receives the finished document at boot).
+
+## Documentation
+
+[ARCHITECTURE.md §29](https://github.com/VisionPilot/Zen.js/blob/main/ARCHITECTURE.md#29-openapi--code-generation) ·
+[`examples/openapi`](https://github.com/VisionPilot/Zen.js/tree/main/examples/openapi).
+
+[MIT](https://github.com/VisionPilot/Zen.js/blob/main/LICENSE) © [VisionPilot](https://github.com/VisionPilot) · created by [Eren Sümer](https://github.com/ErenSumer) · [contributors](https://github.com/VisionPilot/Zen.js/blob/main/CONTRIBUTORS.md)

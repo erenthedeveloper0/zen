@@ -1,5 +1,5 @@
-import { zen, explainConfig, NotFound } from 'zen'
-import type { EnvSource } from 'zen'
+import { zen, explainConfig, NotFound } from '@visionpilot/zen'
+import type { EnvSource } from '@visionpilot/zen'
 import './shared/zod.ts'
 import config from './config/zen.config.ts'
 import { envSources } from './config/sources.ts'

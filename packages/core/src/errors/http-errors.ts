@@ -30,6 +30,13 @@ export const ServiceUnavailable = http(503, Codes.INTERNAL, 'Service Unavailable
 export const GatewayTimeout = http(504, Codes.TIMEOUT, 'Gateway Timeout')
 
 export interface Issue {
+  /**
+   * Which part of the request the issue is in — `params`, `query`, `headers`,
+   * `cookies` or `body`. Present on every issue a route's schemas produce, so a
+   * client can tell `query.page` from `body.page` when one response reports
+   * both (§4.2 stage 7).
+   */
+  readonly source?: string | undefined
   readonly path: readonly (string | number)[]
   readonly code: string
   readonly message: string

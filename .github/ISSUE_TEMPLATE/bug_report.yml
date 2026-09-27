@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Zen does not behave as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. **Security issues go to
+        [a private advisory](https://github.com/VisionPilot/Zen.js/security/advisories/new), not here.**
+  - type: input
+    id: version
+    attributes:
+      label: Package and version
+      description: Output of `npm ls @visionpilot/zen @visionpilot/zen-core`
+      placeholder: "@visionpilot/zen@0.1.0-alpha.1"
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Node.js version and OS
+      placeholder: "Node 22.12.0 on Ubuntu 24.04"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The route definitions and the request that misbehaves. `app.inject()` is ideal.
+      render: ts
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Boot diagnostics or `explainRoute` output
+      description: Optional, but often the fastest route to the cause.
+      render: text

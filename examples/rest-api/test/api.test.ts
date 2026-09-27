@@ -189,7 +189,9 @@ describe('errors (§12)', () => {
     const problem = response.json<{ type: string; status: number; code: string; requestId: string }>()
     assert.equal(problem.status, 404)
     assert.equal(problem.code, 'ZEN_NOT_FOUND')
-    assert.match(problem.type, /^https:\/\/zenjs\.dev\/errors\//)
+    // The problem `type` is the code's entry in docs/errors.md — a URL the
+    // project controls, because every error response carries it.
+    assert.equal(problem.type, 'https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_not_found')
     assert.ok(problem.requestId.length > 0)
   })
 

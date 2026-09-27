@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { jsonSchema } from 'zen'
+import { jsonSchema } from '@visionpilot/zen'
 
 /**
  * Request schemas validate; response schemas are contracts (§13.3).

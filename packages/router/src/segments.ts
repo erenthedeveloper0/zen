@@ -1,5 +1,5 @@
-import type { PathSegment } from '@zenjs/core'
-import { ZenError, Codes, normalizePath, splitSegments } from '@zenjs/core'
+import type { PathSegment } from '@visionpilot/zen-core'
+import { ZenError, Codes, normalizePath, splitSegments } from '@visionpilot/zen-core'
 
 /**
  * Path syntax parsing — rfcs/0001 §5.2.

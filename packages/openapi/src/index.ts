@@ -1,7 +1,7 @@
 /**
- * `@zenjs/openapi` — `AppGraph → OpenAPI 3.1`, plus breaking-change detection.
+ * `@visionpilot/zen-openapi` — `AppGraph → OpenAPI 3.1`, plus breaking-change detection.
  *
- * rfcs/0001 §29. Depends on `@zenjs/core` and nothing else — in particular not
+ * rfcs/0001 §29. Depends on `@visionpilot/zen-core` and nothing else — in particular not
  * on the router, which is why param-type schemas arrive through the frozen
  * graph rather than through a second copy of the built-in table (§24.3).
  */

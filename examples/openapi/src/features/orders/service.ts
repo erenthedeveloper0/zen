@@ -1,4 +1,4 @@
-import { NotFound, token } from 'zen'
+import { NotFound, token } from '@visionpilot/zen'
 import type { Clock } from '../../shared/clock.ts'
 import type { UserRepo, UserRow } from '../users/service.ts'
 import type { NewOrderIn } from './schemas.ts'

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { jsonSchema } from 'zen'
+import { jsonSchema } from '@visionpilot/zen'
 
 /**
  * A body big enough for the `validate` stage to register on the clock.

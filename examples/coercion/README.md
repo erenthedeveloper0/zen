@@ -4,7 +4,7 @@
 
 ```bash
 npm run example:coercion                      # start it
-npm run explain -w @zenjs-example/coercion    # the plan the compiler derived, per route
+npm run explain -w @visionpilot/zen-example-coercion    # the plan the compiler derived, per route
 ```
 
 A product catalogue whose query string carries numbers, booleans, lists and a
@@ -151,7 +151,7 @@ is per source; the content type decides which of §11.4's two body rows applies.
 ## The reader
 
 ```bash
-npm run explain -w @zenjs-example/coercion
+npm run explain -w @visionpilot/zen-example-coercion
 ```
 
 ```

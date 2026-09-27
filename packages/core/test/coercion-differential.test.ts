@@ -4,7 +4,7 @@ import {
   buildCoercePlan, compileCoercer, walkCoercer, generateCoercerSource,
   CodeGen, DEFAULT_CAPABILITIES, COERCION_DEFAULTS,
   type CoercePlan, type CoercionProfile, type JsonSchema,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { shaped } from './helpers.ts'
 
 /**

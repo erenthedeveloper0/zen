@@ -19,7 +19,7 @@ import { z } from '../../shared/zod.ts'
  * and the string reaches the database driver — which either coerces it back
  * (fine, until the day it doesn't) or builds `LIMIT '2'`. The failure of the
  * old form is silent, and the failure of this one is a boot-time plan you can
- * print (`npm run explain -w @zenjs-example/coercion`).
+ * print (`npm run explain -w @visionpilot/zen-example-coercion`).
  */
 
 /** Shared by both list endpoints, and the reason they behave identically. */

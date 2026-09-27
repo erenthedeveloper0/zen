@@ -2,7 +2,7 @@ import { test, describe, before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { makeApp } from '../src/app.ts'
 import type { Dependencies } from '../src/shared/dependencies.ts'
-import type { ZenApp } from 'zen'
+import type { ZenApp } from '@visionpilot/zen'
 
 /**
  * The example, under test — rfcs/0001 §20.2, §31.4.

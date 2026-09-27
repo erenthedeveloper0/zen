@@ -29,3 +29,5 @@ export interface SlotOptions<T> {
   /** Run at lifecycle stage 10, in reverse creation order. */
   readonly dispose?: ((value: T) => void | Promise<void>) | undefined
 }
+
+export type { Disposal } from '../primitives/disposal.ts'

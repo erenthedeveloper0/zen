@@ -1,4 +1,4 @@
-import { registerMediaEncoder, type JsonSchema } from 'zen'
+import { registerMediaEncoder, type JsonSchema } from '@visionpilot/zen'
 
 /**
  * A CSV encoder for the `text/csv` representation — rfcs/0001 §13.4.
@@ -31,7 +31,7 @@ import { registerMediaEncoder, type JsonSchema } from 'zen'
  *
  * ### Why core does not ship this
  *
- * `@zenjs/core` has zero runtime dependencies and imports nothing from `node:`
+ * `@visionpilot/zen-core` has zero runtime dependencies and imports nothing from `node:`
  * (§19.8, B3). More to the point, there is no single right answer here: RFC
  * 4180 says `\r\n`, spreadsheets disagree about `sep=`, and whether a `null` is
  * an empty cell or the word `null` is a decision about somebody's downstream

@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { explainRoute } from 'zen'
-import type { ZenApp } from 'zen'
+import { explainRoute } from '@visionpilot/zen'
+import type { ZenApp } from '@visionpilot/zen'
 import { makeApp, makeLegacyApp } from '../src/app.ts'
 import type { CatalogResult, OrderResult } from '../src/features/catalog/index.ts'
 
@@ -192,7 +192,7 @@ describe('the document describes the serialization the server actually parses', 
     // that said `explode: true` would send `?ids=0&ids=1`, which this route
     // reads as one element — so the mapping has to come from the same plan the
     // coercer was built from, and it does.
-    const { openapiDocument } = await import('@zenjs/openapi')
+    const { openapiDocument } = await import('@visionpilot/zen-openapi')
     const { document } = openapiDocument((await ready()).graph(), { title: 'catalog', version: '1' })
     const parameters = document.paths['/catalog/by-ids']?.get?.parameters ?? []
     const ids = parameters.find((p) => 'name' in p && p.name === 'ids')

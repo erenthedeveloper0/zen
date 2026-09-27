@@ -3,10 +3,22 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Zen — a compiler-first web framework for Node, Bun, Deno and the edge.",
+  "description": "Zen — a compiler-first web framework for Node.js. Monorepo for the @visionpilot/zen packages.",
   "license": "MIT",
+  "author": {
+    "name": "VisionPilot",
+    "url": "https://github.com/VisionPilot"
+  },
+  "homepage": "https://github.com/VisionPilot/Zen.js#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VisionPilot/Zen.js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VisionPilot/Zen.js/issues"
+  },
   "engines": {
-    "node": ">=22.6.0"
+    "node": ">=22.18.0"
   },
   "workspaces": [
     "packages/*",
@@ -48,7 +60,13 @@
     "example:negotiation": "node examples/negotiation/src/main.ts",
     "negotiation:explain": "node examples/negotiation/src/inspect.ts",
     "bench:negotiation": "node benchmarks/negotiation/run.ts",
-    "controls": "node scripts/negative-controls.ts"
+    "controls": "node scripts/negative-controls.ts",
+    "bench:refusals": "node benchmarks/refusals/run.ts",
+    "bench:request-path": "node benchmarks/request-path/run.ts",
+    "check:pack": "node scripts/check-pack.ts --typescript 5.0",
+    "check:release": "node scripts/check-release.ts",
+    "release:version": "node scripts/version.ts",
+    "verify": "npm run typecheck && npm test && node scripts/smoke.ts && npm run openapi:check"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

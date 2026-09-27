@@ -1,5 +1,5 @@
-import type { JsonSchema, JsonSchemaNode, JsonType } from '@zenjs/core'
-import { resolveRef } from '@zenjs/core'
+import type { JsonSchema, JsonSchemaNode, JsonType } from '@visionpilot/zen-core'
+import { resolveRef } from '@visionpilot/zen-core'
 import type { OpenApiSchema } from './types.ts'
 
 /**

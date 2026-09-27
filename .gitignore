@@ -11,6 +11,3 @@ coverage/
 benchmarks/results/local/
 *.log
 benchmarks/typecheck/.generated/
-HANDOFF.md
-npm-registry.md
-TASKS.md

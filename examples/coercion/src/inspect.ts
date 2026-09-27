@@ -1,8 +1,8 @@
-import { explainRoute } from 'zen'
+import { explainRoute } from '@visionpilot/zen'
 import { makeApp } from './app.ts'
 
 /**
- * `npm run explain -w @zenjs-example/coercion`
+ * `npm run explain -w @visionpilot/zen-example-coercion`
  *
  * The reader half of §11.4 — and the convention that has now found a defect in
  * the producer four times running (HANDOFF §3.2), so it is built alongside the

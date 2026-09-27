@@ -18,7 +18,7 @@
  * In a real application you would write `import { z } from 'zod'` and one line
  * of `registerSchemaConverter`. Nothing else about this example would change.
  */
-import type { JsonSchema } from 'zen'
+import type { JsonSchema } from '@visionpilot/zen'
 
 // ─────────────────────────────────────────────────────────────────────────────
 

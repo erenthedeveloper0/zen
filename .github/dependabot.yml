@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # The workflows pin actions by major version; keep them current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  # Dev-only: typescript, @types/node, and zod for the examples. The published
+  # packages have no third-party runtime dependencies to update.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # The six packages pin each other exactly and move in lockstep through
+    # `scripts/version.ts` (RELEASING.md). A bot bumping one pin would publish
+    # a set that disagrees with itself, which `check-release.ts` then refuses.
+    ignore:
+      - dependency-name: '@visionpilot/*'
+    groups:
+      dev-dependencies:
+        patterns: ['*']

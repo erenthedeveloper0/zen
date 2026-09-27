@@ -1,6 +1,6 @@
 import { test, describe, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import type { EnvSource, ZenApp } from 'zen'
+import type { EnvSource, ZenApp } from '@visionpilot/zen'
 import { makeApp } from '../src/app.ts'
 import type { AppConfig } from '../src/config/types.ts'
 

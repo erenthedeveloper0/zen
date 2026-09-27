@@ -1,4 +1,4 @@
-import { definePlugin, Codes, ZenError, type Plugin } from '@zenjs/core'
+import { definePlugin, Codes, ZenError, type Plugin } from '@visionpilot/zen-core'
 import type { RawReading, Staging } from './shared.ts'
 
 /**

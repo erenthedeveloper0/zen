@@ -1,4 +1,4 @@
-import type { JsonSchema } from '@zenjs/core'
+import type { JsonSchema } from '@visionpilot/zen-core'
 
 /**
  * OpenAPI 3.1 document types — rfcs/0001 §29.

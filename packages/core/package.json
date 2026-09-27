@@ -1,10 +1,41 @@
 {
-  "name": "@zenjs/core",
-  "version": "0.1.0",
-  "description": "Zen core: registries, compilers, runtime, context, errors, response engine.",
+  "name": "@visionpilot/zen-core",
+  "version": "0.1.0-alpha.1",
+  "description": "Zen core: registries, compilers, runtime, context, errors and the response engine. Zero runtime dependencies.",
+  "keywords": [
+    "web",
+    "framework",
+    "http",
+    "server",
+    "typescript",
+    "compiler",
+    "standard-schema",
+    "zen"
+  ],
+  "homepage": "https://github.com/VisionPilot/Zen.js/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/VisionPilot/Zen.js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VisionPilot/Zen.js.git",
+    "directory": "packages/core"
+  },
   "license": "MIT",
+  "author": {
+    "name": "VisionPilot",
+    "url": "https://github.com/VisionPilot"
+  },
+  "contributors": [
+    {
+      "name": "Eren Sümer",
+      "url": "https://github.com/ErenSumer"
+    }
+  ],
   "type": "module",
   "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -13,13 +44,32 @@
     "./contracts": {
       "types": "./dist/contracts/index.d.ts",
       "default": "./dist/contracts/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=22.6.0" },
-  "dependencies": {},
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "typescript": ">=5.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   }
 }

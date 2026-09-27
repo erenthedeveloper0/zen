@@ -1,10 +1,10 @@
 {
-  "name": "@zenjs-example/hello-world",
+  "name": "@visionpilot/zen-example-hello-world",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "zen": "0.1.0"
+    "@visionpilot/zen": "0.1.0-alpha.1"
   },
   "scripts": {
     "start": "node src/main.ts"

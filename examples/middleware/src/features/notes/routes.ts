@@ -1,4 +1,4 @@
-import { NotFound, Unauthorized, type Collection } from 'zen'
+import { NotFound, Unauthorized, type Collection } from '@visionpilot/zen'
 import { NewNote, Note, NoteId, NoteList, Page } from './schemas.ts'
 import type { NoteService } from './service.ts'
 import type { AppConfig } from '../../config/types.ts'

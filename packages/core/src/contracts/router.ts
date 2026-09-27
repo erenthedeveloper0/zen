@@ -35,7 +35,7 @@ export interface CompiledRouter {
    * trie matcher, the parse function, and OpenAPI. The third one lives in a
    * package that must not depend on the router (§24.3), so the registry is
    * published here and carried on the frozen `AppGraph` — rather than
-   * re-declared in `@zenjs/openapi`, which is how the two copies would drift.
+   * re-declared in `@visionpilot/zen-openapi`, which is how the two copies would drift.
    */
   readonly paramTypes: ReadonlyMap<string, ParamType>
 }
@@ -48,7 +48,12 @@ export interface CompiledRouter {
 export interface Router {
   readonly name: string
   build(routes: readonly RouteRecord[], opts?: RouterOptions): CompiledRouter
-  analyze(routes: readonly RouteRecord[]): readonly RouteDiagnostic[]
+  /**
+   * Conflict analysis (§5.5). Takes the same `paramTypes` as `build`, because
+   * whether two typed params can match the same segment depends on types the
+   * application registered, not only on the builtins.
+   */
+  analyze(routes: readonly RouteRecord[], opts?: RouterOptions): readonly RouteDiagnostic[]
 }
 
 export type DiagnosticSeverity = 'error' | 'warning'

@@ -56,9 +56,12 @@ console.log(`
   drain window on shutdown: ${config.drainDelay}ms
 `)
 
+// The shutdown itself is `zen()`'s: it installs the process lifecycle when the
+// app starts listening, so SIGTERM and SIGINT run §4.5's sequence and exit.
+// This only narrates it, because watching /readyz go red while the socket is
+// still open is what this example is for.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     console.log(`\n  ${signal} — /readyz is now 503; draining for ${config.drainDelay}ms before the socket closes\n`)
-    void app.close(signal).then(() => process.exit(0))
   })
 }

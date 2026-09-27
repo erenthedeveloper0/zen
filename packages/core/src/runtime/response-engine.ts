@@ -1,6 +1,7 @@
 import type { Reply } from '../contracts/reply.ts'
 import type { Representation } from '../contracts/negotiation.ts'
 import { MutableReply, isReply, jsonReply, textReply, bytesReply, emptyReply } from './reply.ts'
+import { isSseChannel } from './sse.ts'
 import { ZenError } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 
@@ -28,6 +29,10 @@ export function finalize(value: unknown, allowUndefined = false): Reply {
   if (t === 'string') return textReply(value as string)
   if (value instanceof Uint8Array) return bytesReply(value)
   if (isAsyncIterable(value)) {
+    // A returned `ctx.sse()` channel is also an async iterable, and without this
+    // it would go out as `application/octet-stream` with none of its headers.
+    // Checked inside this branch so no other return value pays for it.
+    if (isSseChannel(value)) return value.$reply
     return new MutableReply(200, { kind: 'stream', value: value as AsyncIterable<Uint8Array>, media: 'application/octet-stream' })
   }
   return jsonReply(value)

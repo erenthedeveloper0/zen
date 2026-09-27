@@ -28,6 +28,5 @@ console.log(`
     node examples/rest-api/src/inspect.ts
 `)
 
-process.on('SIGINT', () => {
-  void app.close('SIGINT').then(() => process.exit(0))
-})
+// SIGTERM and SIGINT drain and exit on their own: `zen()` installs the process
+// lifecycle when the app starts listening (§4.5, §12.8).

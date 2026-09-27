@@ -1,5 +1,5 @@
-import { zen, healthPlugin, type EnvSource } from 'zen'
-import { cors, rateLimit, requestId, securityHeaders } from '@zenjs/middleware'
+import { zen, healthPlugin, type EnvSource } from '@visionpilot/zen'
+import { cors, rateLimit, requestId, securityHeaders } from '@visionpilot/zen-middleware'
 import './shared/zod.ts'
 import config from './config/zen.config.ts'
 import { envSources } from './config/sources.ts'

@@ -1,4 +1,4 @@
-import { NotFound, type Collection } from 'zen'
+import { NotFound, type Collection } from '@visionpilot/zen'
 import { ProblemShape, Regions, SaleV1, SaleV2, SalesCsv, SalesQuery, SalesV1, SalesV2 } from './schemas.ts'
 import type { Sale, SalesService } from './service.ts'
 

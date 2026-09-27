@@ -1,4 +1,4 @@
-import { defineConfig } from 'zen'
+import { defineConfig } from '@visionpilot/zen'
 import { z } from '../shared/zod.ts'
 
 /**
@@ -23,7 +23,7 @@ import { z } from '../shared/zod.ts'
  *      a bind error four frames deep. Here it is a diagnostic in the first few
  *      milliseconds, next to every other configuration problem.
  *   2. **Every value knows where it came from.** `npm run explain -w
- *      @zenjs-example/config` prints the table.
+ *      @visionpilot/zen-example-config` prints the table.
  *   3. **`ctx.config.pagination.pageSize` is a `number`** because the schema
  *      says so, not because someone remembered to write `Number(...)`.
  */

@@ -12,6 +12,8 @@
  * `isolatedModules` and bundler tree-shaking.
  */
 
+import type { Disposal } from '../primitives/disposal.ts'
+
 export type Lifetime = 'singleton' | 'scoped' | 'transient'
 
 export interface Token<T> {
@@ -49,9 +51,17 @@ export interface DiDiagnostic {
   readonly hint?: string | undefined
 }
 
-/** Per-request storage handed to the container by the dispatcher. */
+/**
+ * Per-request storage handed to the container by the dispatcher.
+ *
+ * `$disposers` is where a request-scoped instance with a `dispose` is queued
+ * for release when the request settles (§15.3). Optional so that a container
+ * can still be exercised with a bare `{ $s: [] }` in a test, where there is no
+ * request to settle.
+ */
 export interface ScopeCarrier {
   readonly $s: unknown[]
+  $disposers?: Disposal[] | null | undefined
 }
 
 export interface Container {

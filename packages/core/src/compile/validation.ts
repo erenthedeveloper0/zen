@@ -127,9 +127,73 @@ function apply(
   assign: Assigner,
 ): void {
   if (result.issues !== undefined) {
-    throw new ValidationError(source, normaliseIssues(result.issues), source === 'body' ? 422 : 400)
+    throw new ValidationError(source, normaliseIssues(result.issues, source), source === 'body' ? 422 : 400)
   }
   assign(ctx, result.value)
+}
+
+/**
+ * One validation stage for a route that validates several sources — §4.2
+ * stage 7: *"All source failures are collected into one `ValidationError` with
+ * per-source issues rather than failing on the first — one round trip should
+ * tell a client everything that is wrong."*
+ *
+ * That sentence was in the RFC and not in the code: each source threw on its
+ * own, so a request with a bad query and a bad body was told about the query,
+ * fixed it, and only then learned about the body. Every source now runs; the
+ * failures are merged in the fixed order of §4.2, each issue tagged with its
+ * source. The status is 422 only when every failure was in the body — anything
+ * wrong in the URL or headers makes the request malformed, which is 400.
+ *
+ * Used only where a route validates two or more sources. A route with one is
+ * compiled exactly as before, so this costs nothing where there is nothing to
+ * collect, and the compiled pipeline and its interpreted twin both see one
+ * ordinary validator step — neither had to learn anything.
+ */
+export function combineValidators(steps: readonly ValidatorStep[]): ValidatorStep {
+  const runs = steps.map((step) => step.run)
+
+  const settle = (failures: ValidationError[]): void => {
+    if (failures.length === 0) return
+    if (failures.length === 1) throw failures[0]
+    const issues = failures.flatMap((failure) => failure.issues)
+    const status = failures.every((failure) => failure.status === 422) ? 422 : 400
+    throw new ValidationError(failures.map((failure) => failure.source).join(', '), issues, status)
+  }
+
+  const collect = (error: unknown, failures: ValidationError[]): void => {
+    if (error instanceof ValidationError) failures.push(error)
+    else throw error
+  }
+
+  // Finishes the stage asynchronously once one validator has returned a
+  // promise; the sources before it already ran synchronously.
+  const rest = async (ctx: unknown, from: number, pending: Promise<void>, failures: ValidationError[]): Promise<void> => {
+    try { await pending } catch (error) { collect(error, failures) }
+    for (let i = from + 1; i < runs.length; i++) {
+      try { await (runs[i] as ValidatorStep['run'])(ctx) } catch (error) { collect(error, failures) }
+    }
+    settle(failures)
+  }
+
+  const run = (ctx: unknown): void | Promise<void> => {
+    const failures: ValidationError[] = []
+    for (let i = 0; i < runs.length; i++) {
+      let result: void | Promise<void>
+      try {
+        result = (runs[i] as ValidatorStep['run'])(ctx)
+      } catch (error) {
+        collect(error, failures)
+        continue
+      }
+      if (result !== undefined && typeof (result as Promise<void>).then === 'function') {
+        return rest(ctx, i, result as Promise<void>, failures)
+      }
+    }
+    settle(failures)
+  }
+
+  return { source: steps.map((step) => step.source).join(', '), run }
 }
 
 function isThenable(value: unknown): value is Promise<StandardResult<unknown>> {
@@ -141,7 +205,7 @@ function isThenable(value: unknown): value is Promise<StandardResult<unknown>> {
  * emit byte-identical error envelopes, so clients can switch on `issues[].code`
  * across the entire ecosystem rather than per-library.
  */
-export function normaliseIssues(issues: ReadonlyArray<StandardIssue>): Issue[] {
+export function normaliseIssues(issues: ReadonlyArray<StandardIssue>, source?: string): Issue[] {
   const out: Issue[] = []
   for (const raw of issues) {
     const path: (string | number)[] = []
@@ -152,7 +216,9 @@ export function normaliseIssues(issues: ReadonlyArray<StandardIssue>): Issue[] {
         else path.push(String(key))
       }
     }
-    out.push({ path, code: inferCode(raw.message), message: raw.message })
+    out.push(source === undefined
+      ? { path, code: inferCode(raw.message), message: raw.message }
+      : { source, path, code: inferCode(raw.message), message: raw.message })
   }
   return out
 }

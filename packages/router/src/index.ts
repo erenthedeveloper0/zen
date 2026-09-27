@@ -1,12 +1,12 @@
 import type {
   CompiledRouter, MatchResult, ParamType, ParamsObject, RouteDiagnostic, RouteRecord, Router,
   RouterOptions, RouterStats, HttpMethod,
-} from '@zenjs/core'
-import { CodeGen, ZenError, Codes, DEFAULT_CAPABILITIES } from '@zenjs/core'
+} from '@visionpilot/zen-core'
+import { CodeGen, ZenError, Codes, DEFAULT_CAPABILITIES } from '@visionpilot/zen-core'
 import { BUILTIN_PARAM_TYPES } from './param-types.ts'
 import { analyzeRoutes } from './conflicts.ts'
 import {
-  createNode, insert, matchTrie, genericBuilder, countNodes,
+  createNode, insert, matchTrie, genericBuilder, countNodes, addAllowed,
   type RouteEntry, type TrieNode,
 } from './trie.ts'
 import { expandOptional } from './segments.ts'
@@ -132,10 +132,15 @@ class CompiledZenRouter implements CompiledRouter {
         if (get !== undefined) return { route: get.route, params: EMPTY_PARAMS }
       }
       // Fall through: a dynamic route may still match, and only if none does is
-      // this genuinely a 405.
+      // this genuinely a 405 — whose `Allow` must name the dynamic routes'
+      // methods as well. `/users/me` (GET, static) beside `/users/:id` (DELETE)
+      // means DELETE /users/me is served, so a PUT there must advertise both.
       const dynamic = matchTrie(this.#root, method, path)
       if (dynamic !== null && dynamic.route !== null) return dynamic
-      return { route: null, allowed: [...table.keys()] }
+      const allowed = new Set<HttpMethod>()
+      addAllowed(table, allowed)
+      if (dynamic !== null) for (const m of dynamic.allowed) allowed.add(m)
+      return { route: null, allowed: [...allowed] }
     }
 
     return matchTrie(this.#root, method, path)

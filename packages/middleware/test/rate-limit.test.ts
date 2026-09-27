@@ -26,6 +26,33 @@ import { bootFailure, frozenClock, makeApp } from './helpers.ts'
  * owns. That split keeps both halves honest.
  */
 
+describe('rate limiting behind a proxy (§19.4)', () => {
+  const rotating = (n: number) => ({ 'x-forwarded-for': `198.51.100.${n}, 203.0.113.7` })
+
+  test('with trustProxy as a hop count, rotating a fake X-Forwarded-For buys no fresh budget', async () => {
+    const app = makeApp({ trustProxy: 1 })
+    app.use(rateLimit({ limit: 2, store: fixedStore() }))
+    app.get('/', () => 'ok')
+    const statuses: number[] = []
+    for (let i = 0; i < 4; i++) statuses.push((await app.inject('GET', '/', { headers: rotating(i) })).status)
+    assert.deepEqual(statuses, [200, 200, 429, 429], 'every request counted against 203.0.113.7')
+  })
+
+  test('with trustProxy: true the same attack walks straight through — the reason the warning names a hop count', async () => {
+    const app = makeApp({ trustProxy: true })
+    app.use(rateLimit({ limit: 2, store: fixedStore() }))
+    app.get('/', () => 'ok')
+    const statuses: number[] = []
+    for (let i = 0; i < 4; i++) statuses.push((await app.inject('GET', '/', { headers: rotating(i) })).status)
+    assert.deepEqual(statuses, [200, 200, 200, 200])
+  })
+
+  test('a trustProxy that is not a count of proxies is refused at construction', () => {
+    assert.throws(() => makeApp({ trustProxy: -1 }), { code: 'ZEN_CONFIG_INVALID' })
+    assert.throws(() => makeApp({ trustProxy: 1.5 }), { code: 'ZEN_CONFIG_INVALID' })
+  })
+})
+
 /** A store that counts and never rolls, so a test can assert on verdicts alone. */
 function fixedStore(): Store & { readonly hits: ReadonlyMap<string, number> } {
   const hits = new Map<string, number>()

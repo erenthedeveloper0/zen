@@ -81,7 +81,11 @@ export class ErrorEngine {
   }
 
   #log(error: ZenError, ctx: ErrorContextInfo): void {
+    // `meta` first, so an application's metadata can add fields to the line
+    // but never replace the ones every dashboard filters on — a `meta.status`
+    // used to overwrite the real one.
     const payload = {
+      ...(error.meta ?? {}),
       err: error,
       code: error.code,
       status: error.status,
@@ -89,7 +93,6 @@ export class ErrorEngine {
       route: ctx.route,
       method: ctx.method,
       path: ctx.path,
-      ...(error.meta ?? {}),
     }
     if (error.status >= 500) this.#logger.error(payload, error.message)
     else if (error.status === 429 || error.status === 408) this.#logger.warn(payload, error.message)
@@ -159,14 +162,25 @@ function splitStack(stack: string | undefined): string[] {
     .split('\n')
     .slice(1)
     .map((line) => line.trim())
-    .filter((line) => !line.includes('/zen/packages/core/src/runtime/'))
+    .filter((line) => !FRAMEWORK_FRAME.test(line))
     .slice(0, 12)
 }
+
+/**
+ * A frame inside core's runtime, wherever core is installed: this repository's
+ * `packages/core/{src,dist}`, or `node_modules/@visionpilot/zen-core/dist`. The
+ * filter this replaced matched one checkout's absolute path and nothing a user
+ * would ever have on disk.
+ */
+const FRAMEWORK_FRAME = /[\\/](?:zen-)?core[\\/](?:src|dist)[\\/]runtime[\\/]/
 
 function minimalFailure(requestId: string): Reply {
   const reply = new MutableReply(500, {
     kind: 'text',
-    value: `{"status":500,"code":"ZEN_INTERNAL","requestId":"${requestId}"}`,
+    // Encoded, not interpolated: `ctx.id` is writable, and a request id holding
+    // a quote would otherwise make the one response that exists to be safe
+    // into malformed JSON.
+    value: `{"status":500,"code":"ZEN_INTERNAL","requestId":${JSON.stringify(requestId)}}`,
     media: 'application/problem+json; charset=utf-8',
   })
   return reply

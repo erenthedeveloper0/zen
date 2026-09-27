@@ -1,7 +1,7 @@
 import {
   definePlugin, parseDuration, Codes, TooManyRequests, ZenError,
   type Duration, type Plugin, type Reply,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { MemoryStore, type Store, type Tally } from './store.ts'
 import type { Answering, RawReading, Staging } from './shared.ts'
 
@@ -24,7 +24,7 @@ import type { Answering, RawReading, Staging } from './shared.ts'
  * ### `Codes.RATE_LIMITED` was already here
  *
  * `TooManyRequests` and `ZEN_RATE_LIMITED` have been exported from
- * `@zenjs/core` since 0.1 and read by nothing — the same state `COERCION_DEFAULTS`
+ * `@visionpilot/zen-core` since 0.1 and read by nothing — the same state `COERCION_DEFAULTS`
  * and `Codes.CONFIG_INVALID` were in before the two features that needed them.
  * Using it rather than inventing a 429 means the refusal is an ordinary
  * `HttpError`: it goes through the error engine, the RFC 9457 envelope, the
@@ -198,8 +198,10 @@ function warnProxy(ctx: RateLimitContext & RawReading): boolean {
   console.warn(
     `[zen] ${Codes.RATE_LIMITED}: rate limiting is keyed on ctx.ip, this request carried ` +
       `X-Forwarded-For: ${claimed}, and trustProxy is off — so it was counted as ${ctx.ip}. ` +
-      'fix: set trustProxy on the app so ctx.ip reads the forwarded address, or pass ' +
-      'rateLimit({ key }) to count by something you control. ' +
+      'fix: set trustProxy to the number of proxies in front of the app — trustProxy: 1 for one ' +
+      'load balancer — so ctx.ip is the address your proxy saw; not `true`, which reads the ' +
+      'leftmost entry, and a client that writes its own X-Forwarded-For then gets a fresh budget ' +
+      'per request. Or pass rateLimit({ key }) to count by something you control. ' +
       'also: until then every caller behind the proxy shares one counter, which throttles the ' +
       'whole service at the configured limit instead of limiting anyone. Reported once per process.',
   )

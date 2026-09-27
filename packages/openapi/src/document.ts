@@ -1,8 +1,8 @@
 import type {
   AppGraph, CoercePlan, CollectionId, CollectionRecord, JsonSchema, ParamType, PathSegment,
   RouteRecord,
-} from '@zenjs/core'
-import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem } from '@zenjs/core'
+} from '@visionpilot/zen-core'
+import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem } from '@visionpilot/zen-core'
 import {
   Components, canonical, declaredName, projectSchema, sanitizeName,
   type DocDiagnostic,
@@ -822,10 +822,15 @@ const PROBLEM_DETAILS: JsonSchema = {
     requestId: { type: 'string' },
     errors: {
       type: 'array',
-      description: 'Present on validation failures: one entry per failing field.',
+      description: 'Present on validation failures: one entry per failing field, across every source that failed.',
       items: {
         type: 'object',
         properties: {
+          source: {
+            type: 'string',
+            enum: ['params', 'query', 'headers', 'cookies', 'body'],
+            description: 'Which part of the request the issue is in.',
+          },
           path: { type: 'array', items: { type: ['string', 'integer'] } },
           code: { type: 'string' },
           message: { type: 'string' },

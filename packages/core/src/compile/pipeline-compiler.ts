@@ -360,7 +360,8 @@ function generate(spec: PipelineSpec, readable: boolean): string {
   const finishWith = (valueExpr: string): string =>
     hasEpilogue ? `return finish(ctx, ${valueExpr})` : `return ${valueExpr}`
 
-  function emitSegment(from: number): string {
+  /** Emit the segment starting at `from`; returns its name and whether it is async. */
+  function emitSegment(from: number): { name: string; isAsync: boolean } {
     const name = `seg${segmentCount++}`
     const lines: string[] = []
     let needsAsync = epilogueAsync
@@ -397,11 +398,22 @@ function generate(spec: PipelineSpec, readable: boolean): string {
       if (step.kind === 'around') {
         // The only per-request closure in the design, and only on routes that
         // actually use `around` (§8.2).
+        //
+        // `next` is typed `() => Promise<Reply>`, and the segment it calls may
+        // be the fully synchronous one §8.4 produces — which returns a bare
+        // Reply and throws rather than rejecting. `next().then(…)` then failed
+        // with "then is not a function" on exactly the routes that had been
+        // optimised, and only there. So a sync segment is called through an
+        // `async` wrapper: one promise, on a path that already allocates a
+        // closure, and nothing extra when the segment is async already.
         const inner = emitSegment(f + 1)
+        const next = inner.isAsync
+          ? `function () { return ${inner.name}(ctx) }`
+          : `async function () { return ${inner.name}(ctx) }`
         lines.push(note(`around: ${step.name}`))
-        lines.push(`  return d.steps[${index}](ctx, function () { return ${inner}(ctx) })`)
+        lines.push(`  return d.steps[${index}](ctx, ${next})`)
         decls.push(buildFn(name, `  let r\n${lines.join('\n')}`, true))
-        return name
+        return { name, isAsync: true }
       }
 
       const cls = classifySync(step.fn)
@@ -474,11 +486,11 @@ function generate(spec: PipelineSpec, readable: boolean): string {
     lines.push(`  ${finishWith('reply')}`)
 
     decls.push(buildFn(name, `  let r\n${lines.join('\n')}`, needsAsync))
-    return name
+    return { name, isAsync: needsAsync }
   }
 
   const entry = emitSegment(0)
-  return `${decls.join('\n\n')}\n\nreturn ${entry}`
+  return `${decls.join('\n\n')}\n\nreturn ${entry.name}`
 }
 
 function buildFn(name: string, body: string, isAsync: boolean, params = 'ctx'): string {

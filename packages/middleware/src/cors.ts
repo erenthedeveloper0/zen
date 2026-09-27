@@ -1,7 +1,7 @@
 import {
   definePlugin, parseDuration, Codes, ZenError,
   type AppGraph, type Duration, type HttpMethod, type Plugin, type Reply,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { assertCorsCorpConsistent } from './consistency.ts'
 import { type CorsRequest, type Staging, headerOf, isPreflight } from './shared.ts'
 

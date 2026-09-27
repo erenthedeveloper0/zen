@@ -1,4 +1,4 @@
-import { token } from 'zen'
+import { token } from '@visionpilot/zen'
 import { callProvider, UpstreamError, type Quote } from '../../shared/upstream.ts'
 import { config, type ProviderName } from '../../config/deadlines.config.ts'
 

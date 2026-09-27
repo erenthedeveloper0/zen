@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test'
 import assert from 'node:assert/strict'
-import type { ZenApp } from 'zen'
+import type { ZenApp } from '@visionpilot/zen'
 import { makeApp } from '../src/app.ts'
 import { CSV, V1, V2 } from '../src/features/reports/index.ts'
 

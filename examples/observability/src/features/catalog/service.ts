@@ -1,4 +1,4 @@
-import { token } from 'zen'
+import { token } from '@visionpilot/zen'
 import type { Product } from './schemas.ts'
 
 /**

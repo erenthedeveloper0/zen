@@ -1,4 +1,4 @@
-import type { Collection } from 'zen'
+import type { Collection } from '@visionpilot/zen'
 import { OrderPage, OrderQuery } from './schemas.ts'
 import { listOrders } from './service.ts'
 import type { AppConfig } from '../../config/types.ts'

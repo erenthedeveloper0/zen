@@ -1,5 +1,5 @@
-import type { AppGraph, Diagnostic, Plugin } from '@zenjs/core'
-import { BootError, definePlugin } from '@zenjs/core'
+import type { AppGraph, Diagnostic, Plugin } from '@visionpilot/zen-core'
+import { BootError, definePlugin } from '@visionpilot/zen-core'
 import { openapiDocument, type OpenApiOptions, type OpenApiResult } from './document.ts'
 import type { DocDiagnostic } from './schema.ts'
 import { renderReference } from './ui.ts'

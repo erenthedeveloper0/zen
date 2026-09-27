@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { createApp, slot, NotFound, ZenApp } from '@zenjs/core'
-import { ZenRouter, parsePath } from '@zenjs/router'
+import { createApp, slot, markSync, NotFound, ZenApp, ALL_METHODS } from '@visionpilot/zen-core'
+import { ZenRouter, parsePath } from '@visionpilot/zen-router'
 
 const pathParser = {
   parse(path: string) {
@@ -70,7 +70,9 @@ describe('routing', () => {
     const res = await app.inject('DELETE', '/only-get')
     assert.equal(res.status, 405)
     const allow = (res.header('allow') ?? '').split(', ').sort()
-    assert.deepEqual(allow, ['GET', 'PUT'])
+    // HEAD is served wherever GET is (§4.2), and Allow lists what the resource
+    // supports (RFC 9110 §10.2.1) — so it is named even though no route declares it.
+    assert.deepEqual(allow, ['GET', 'HEAD', 'PUT'])
   })
 
   test('backtracks: static and dynamic siblings both remain reachable', async () => {
@@ -110,6 +112,55 @@ describe('routing', () => {
 
     assert.equal((await app.inject('GET', '/api/health')).status, 200)
     assert.equal((await app.inject('GET', '/health')).status, 404)
+  })
+
+  test('an absolute-form request target is routed by its path (RFC 9112 §3.2.2)', async () => {
+    // A client behind a forward proxy sends `GET http://host/path`, and Node
+    // passes it through verbatim. It used to be matched as a path and 404.
+    const app = makeApp()
+    app.get('/orders/:id<int>', (ctx) => ({ id: ctx.params.id, page: (ctx.query as { page?: string }).page ?? null }))
+
+    const res = await app.inject('GET', 'http://api.example.com/orders/7?page=2')
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.json(), { id: 7, page: '2' })
+    assert.equal((await app.inject('GET', 'https://api.example.com')).status, 404, 'the root, and it has no route')
+  })
+
+  test('a `+` in a path is a plus, with or without percent-escapes beside it', async () => {
+    const app = makeApp()
+    app.get('/files/:name', (ctx) => ctx.params.name)
+    app.get('/tail/*rest', (ctx) => ctx.params.rest)
+
+    assert.equal((await app.inject('GET', '/files/a+b')).text(), 'a+b')
+    assert.equal((await app.inject('GET', '/files/a+b%20c')).text(), 'a+b c', 'only form encoding spells a space as +')
+    assert.equal((await app.inject('GET', '/tail/x+y/%41+b')).text(), 'x+y/A+b')
+  })
+
+  test('HEAD is served by a wildcard GET route, and a 405 names HEAD wherever GET exists', async () => {
+    const app = makeApp()
+    app.get('/files/*path', (ctx) => ctx.params.path)
+
+    const head = await app.inject('HEAD', '/files/a/b.txt')
+    assert.equal(head.status, 200, 'it used to be a 405 — the wildcard branch had no HEAD fallback')
+    assert.equal(head.text(), '', 'and carries no body')
+    const refused = await app.inject('DELETE', '/files/a/b.txt')
+    assert.equal(refused.status, 405)
+    assert.equal(refused.header('allow'), 'GET, HEAD')
+  })
+
+  test('all() registers one ordinary route per method, and a name per route', async () => {
+    const app = makeApp()
+    app.all('/proxy', { name: 'proxy' }, (ctx) => ctx.method)
+    app.all('/echo', (ctx) => ctx.method)
+
+    for (const method of ALL_METHODS) {
+      assert.equal((await app.inject(method, '/proxy')).text(), method)
+      assert.equal((await app.inject(method, '/echo')).text(), method)
+    }
+    assert.equal((await app.inject('HEAD', '/proxy')).status, 200, 'HEAD through the GET route')
+    assert.equal((await app.inject('TRACE', '/proxy')).status, 405, 'TRACE is never registered for you')
+    const names = app.graph().routes.filter((r) => r.path === '/proxy').map((r) => r.name).sort()
+    assert.deepEqual(names, ['proxy.delete', 'proxy.get', 'proxy.options', 'proxy.patch', 'proxy.post', 'proxy.put'])
   })
 })
 
@@ -158,6 +209,49 @@ describe('middleware', () => {
     assert.equal((await app.inject('GET', '/guarded/x')).status, 403)
     assert.equal((await app.inject('GET', '/open')).status, 200)
   })
+
+  test('next() is a Promise even when everything downstream compiled synchronous (§8.2, §8.4)', async () => {
+    // `Next` is typed `() => Promise<Reply>`. On a route whose remaining steps
+    // and handler are all sync, the generated segment returned a bare Reply,
+    // and `next().then(…)` failed with "then is not a function" — only on the
+    // routes the compiler had optimised.
+    const app = makeApp()
+    app.around((ctx, next) => next().then((reply) => (reply.status === 200 ? ctx.json({ wrapped: true }) : reply)))
+    app.get('/sync', markSync(() => ({ original: true })))
+    app.get('/throws', markSync(() => { throw new NotFound('gone') }))
+
+    const res = await app.inject('GET', '/sync')
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.json(), { wrapped: true })
+    // A synchronous throw downstream arrives as a rejection, not as a throw
+    // from `next()` itself — `next().catch(…)` has to be able to see it.
+    assert.equal((await app.inject('GET', '/throws')).status, 404)
+  })
+
+  test('a collection has the whole registration surface — head, options, all, around, after', async () => {
+    const app = makeApp()
+    const order: string[] = []
+    app.collection('/c', (c) => {
+      c.around(async (_ctx, next) => { order.push('around'); return next() })
+      c.after((_ctx, reply) => { order.push('after'); return reply })
+      c.head('/probe', (ctx) => ctx.empty())
+      c.options('/probe', (ctx) => ctx.empty())
+      c.all('/any', (ctx) => ctx.method)
+    })
+
+    assert.equal((await app.inject('HEAD', '/c/probe')).status, 204)
+    assert.equal((await app.inject('OPTIONS', '/c/probe')).status, 204)
+    assert.equal((await app.inject('PATCH', '/c/any')).text(), 'PATCH')
+    assert.deepEqual(order, ['around', 'after', 'around', 'after', 'around', 'after'])
+  })
+
+  test('a collection handle refuses middleware after boot instead of dropping it', async () => {
+    const app = makeApp()
+    let kept: { use(fn: () => void): unknown } | null = null
+    app.collection('/late', (c) => { kept = c; c.get('/x', () => 'x') })
+    await app.ready()
+    assert.throws(() => (kept as unknown as { use(fn: () => void): unknown }).use(() => {}), { code: 'ZEN_APP_FROZEN' })
+  })
 })
 
 describe('slots', () => {
@@ -191,6 +285,40 @@ describe('slots', () => {
 
     await app.inject('GET', '/set/7')
     assert.deepEqual((await app.inject('GET', '/read')).json(), { n: null })
+  })
+
+  test('a disposable slot set by a handler still running behind its deadline is released at once', async () => {
+    // The deadline answered; the abandoned handler carries on and acquires
+    // something. Stage 10 has already run, so it is released on arrival rather
+    // than queued on a list nothing will read again (§4.2 stage 10).
+    const released: string[] = []
+    const Tx = slot<string>('test.token.tx-late', { dispose: (tx) => { released.push(tx) } })
+    const app = createApp({ router: new ZenRouter(), pathParser, logger: silent(), timeout: '20ms' })
+    app.get('/', async (ctx) => {
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      ctx.set(Tx, 'acquired-late')
+      return 'too late'
+    })
+
+    assert.equal((await app.inject('GET', '/')).status, 504)
+    assert.deepEqual(released, [])
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    assert.deepEqual(released, ['acquired-late'])
+  })
+
+  test('a disposable slot set twice releases both values, newest first, once each (§7.4)', async () => {
+    const released: string[] = []
+    const Tx = slot<string>('test.token.tx-twice', { dispose: (tx) => { released.push(tx) } })
+    const app = makeApp()
+    app.get('/', (ctx) => {
+      ctx.set(Tx, 'outer')
+      ctx.set(Tx, 'inner')
+      ctx.set(Tx, 'inner')
+      return 'ok'
+    })
+
+    await app.inject('GET', '/')
+    assert.deepEqual(released, ['inner', 'outer'])
   })
 })
 
@@ -275,7 +403,7 @@ describe('repeated headers (§13.6)', () => {
   /**
    * `SmallHeaderBag` stores a multi-value header as an array and `entries()`
    * flattens it to one entry per value. Two readers disagreed with that
-   * contract for as long as nothing exercised it: `@zenjs/adapter-node` called
+   * contract for as long as nothing exercised it: `@visionpilot/zen-adapter-node` called
    * `setHeader` for every name but `set-cookie`, which discards all but the
    * last, and `InjectedResponse` used `Object.fromEntries`, which does the
    * same. Both looked complete because the only repeated header anyone had
@@ -358,6 +486,21 @@ describe('body handling', () => {
     const problem = res.json<{ code: string; errors: Array<{ path: string[]; code: string }> }>()
     assert.equal(problem.code, 'ZEN_VALIDATION')
     assert.deepEqual(problem.errors[0]?.path, ['n'])
+  })
+
+  test('a +json media type is JSON (RFC 6839)', async () => {
+    // `application/merge-patch+json` and vendor types used to be refused with a
+    // 415, so a client that labelled its body precisely looked broken.
+    const app = makeApp()
+    app.patch('/doc', { body: passthroughSchema() }, (ctx) => ({ got: ctx.body }))
+
+    for (const type of ['application/merge-patch+json', 'application/vnd.api+json; charset=utf-8']) {
+      const res = await app.inject('PATCH', '/doc', { headers: { 'content-type': type }, body: '{"a":1}' })
+      assert.equal(res.status, 200, type)
+      assert.deepEqual(res.json(), { got: { a: 1 } })
+    }
+    const xml = await app.inject('PATCH', '/doc', { headers: { 'content-type': 'application/xml' }, body: '<a/>' })
+    assert.equal(xml.status, 415, 'and a genuinely unknown type is still refused')
   })
 
   test('prototype pollution keys are stripped from JSON bodies', async () => {

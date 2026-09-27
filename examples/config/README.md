@@ -6,7 +6,7 @@ Layered configuration, schema-validated environment, provenance and redaction �
 ```bash
 npm run example:config          # the service
 npm run config:explain          # the provenance table
-npm test -w @zenjs-example/config
+npm test -w @visionpilot/zen-example-config
 ```
 
 ---
@@ -126,7 +126,7 @@ Boot failed: 1 problem
      to be <=100 (expected: integer, between 1 and 100)
      at process.env
      fix: Correct PAGE_SIZE where it is set (process.env).
-     docs: https://zenjs.dev/errors/ZEN_ENV_INVALID
+     docs: https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_env_invalid
 ```
 
 And the one that is a security property rather than a convenience: a secret that
@@ -198,7 +198,7 @@ for (const file of dotenvChain(mode)) {
 ```
 
 §3.2 assigns file reading to the CLI or the adapter, and the constraint is
-concrete rather than procedural: `@zenjs/core` has no `node:` imports (§3.3 B2),
+concrete rather than procedural: `@visionpilot/zen-core` has no `node:` imports (§3.3 B2),
 because `fs` and `process` do not exist on workerd, where the environment
 arrives as an argument to the fetch handler. So core owns the **policy** —
 `dotenvChain` states the precedence (`.env` → `.env.local` → `.env.<mode>` →

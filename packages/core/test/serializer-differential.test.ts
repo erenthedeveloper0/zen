@@ -4,7 +4,7 @@ import {
   buildProgram, compileSerializer, walkSerializer, generateSerializerSource,
   CodeGen, DEFAULT_CAPABILITIES,
   type JsonSchema, type Serializer,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 
 /**
  * Differential testing for the serializer — rfcs/0001 §20.5, §13.3.

@@ -1,4 +1,4 @@
-import type { Collection } from 'zen'
+import type { Collection } from '@visionpilot/zen'
 
 /**
  * The routes that must not have a deadline at all.

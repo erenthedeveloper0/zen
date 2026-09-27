@@ -1,5 +1,5 @@
-import type { Collection } from 'zen'
-import { NotFound } from 'zen'
+import type { Collection } from '@visionpilot/zen'
+import { NotFound } from '@visionpilot/zen'
 import { CatalogQuery, CatalogView, LegacyQuery, OrderForm, OrderView, ProductView } from './schemas.ts'
 import { byIds, find, search } from './service.ts'
 

@@ -1,5 +1,7 @@
 import type { Capabilities } from '../contracts/capabilities.ts'
-import type { Connection, RawRequest, RuntimeAdapter, ListenOptions, ServerHandle } from '../contracts/adapter.ts'
+import type {
+  Connection, HostLifecycle, RawRequest, RuntimeAdapter, ListenOptions, ServerHandle,
+} from '../contracts/adapter.ts'
 import type { AppGraph, DecorationRecord } from '../contracts/graph.ts'
 import type { HookFn, HookPlan, HookRecord, Phase, RequestPhase, RouteHooks } from '../contracts/hook.ts'
 import type { TimeoutInfo, TimeoutOptions, TimeoutSpec } from '../contracts/deadline.ts'
@@ -17,6 +19,7 @@ import type { Container, ProviderSpec, Token } from '../contracts/container.ts'
 import type { OptionsOf, Plugin, ProvidesOf, Registrar } from '../contracts/plugin.ts'
 import type { Prettify } from '../contracts/route.ts'
 import type { HttpMethod } from '../contracts/http.ts'
+import type { ParamType } from '../contracts/route.ts'
 import type {
   CollectionId, MiddlewareRef, RouteId, RouteRecord, RouteSchema, RouteSpec,
   HandlerResult, MaybePromise,
@@ -33,14 +36,15 @@ import {
   compilePipeline, simplePipeline, NO_HOOKS, type CompiledPipeline, type PipelineStep,
 } from '../compile/pipeline-compiler.ts'
 import {
-  diagnoseUnavailable, functionsFor, pipelinePlan, resolveHooks, routeHookRecords,
+  diagnoseMisplaced, diagnoseUnavailable, diagnoseUnknown, functionsFor, pipelinePlan, resolveHooks,
+  routeHookRecords,
 } from '../compile/hook-plan.ts'
 import { resolveTimeout, timeoutDiagnostic, type TimeoutSource } from '../compile/deadline-plan.ts'
 import { VALIDATION_SOURCES } from '../contracts/coercion.ts'
 import { Deadline, EXPIRED, budgetFor, timeoutError } from '../runtime/deadline.ts'
 import { HealthRegistry, type HealthRegistryOptions } from '../runtime/health.ts'
 import { isRequestPhase } from '../contracts/hook.ts'
-import { compileValidator } from '../compile/validation.ts'
+import { combineValidators, compileValidator } from '../compile/validation.ts'
 import { describeField, planRoute, resolveCoercion } from '../compile/coercion-plan.ts'
 import { compileCoercer } from '../compile/coercion-compiler.ts'
 import { buildSerializerTable, type SerializerMode, type SerializerTable } from '../compile/serializer.ts'
@@ -57,7 +61,8 @@ import { prepareForWire, stripBodyIfNeeded } from '../runtime/egress.ts'
 import { encodeBody, finalize } from '../runtime/response-engine.ts'
 import { MutableReply } from '../runtime/reply.ts'
 import type { PlainContext, ContextEnv } from '../runtime/context.ts'
-import { ZenError, BootError, isZenError, type Diagnostic } from '../errors/zen-error.ts'
+import { CONTEXT_MEMBERS } from '../runtime/context.ts'
+import { ZenError, BootError, isZenError, withoutStack, type Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { NotFound, MethodNotAllowed } from '../errors/http-errors.ts'
 import { slot as declareSlot, slotCount, declaredSlots } from './slot.ts'
@@ -65,6 +70,7 @@ import { ZenContainer } from '../di/container.ts'
 import { resolvePlugins, type PendingPlugin } from '../registry/plugin-registry.ts'
 import { resolveConfig, type ResolvedConfigResult } from '../registry/config-store.ts'
 import { EMPTY_SNAPSHOT } from '../contracts/config.ts'
+import { SETTLED } from '../primitives/disposal.ts'
 import { toJsonSchema } from '../compile/json-schema.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,7 +83,14 @@ export interface ZenOptions<C = unknown> {
   readonly dev?: boolean | undefined
   readonly logger?: Logger | undefined
   readonly caps?: Capabilities | undefined
-  readonly trustProxy?: boolean | undefined
+  /**
+   * Whether to believe `X-Forwarded-For` / `X-Forwarded-Proto` — §19.4. Off by
+   * default. Behind proxies, set it to **how many** there are: `1` for one load
+   * balancer. `ctx.ip` is then the address the outermost trusted proxy saw,
+   * which a client cannot forge. `true` reads the leftmost entry and is only
+   * safe when every proxy *overwrites* the header rather than appending to it.
+   */
+  readonly trustProxy?: boolean | number | undefined
   readonly maxQueryParams?: number | undefined
   readonly body?: Partial<BodyOptions> | undefined
   readonly parsers?: ReadonlyMap<string, BodyParser> | undefined
@@ -131,7 +144,7 @@ export interface ZenOptions<C = unknown> {
    * Where environment variables come from — §16.1 layers 5–7.
    *
    * A plain record is the common case and is what the `zen` meta-package fills
-   * in with `process.env`. `@zenjs/core` does not read it itself, and that is
+   * in with `process.env`. `@visionpilot/zen-core` does not read it itself, and that is
    * not pedantry: `process` does not exist on workerd, where the environment
    * arrives as an argument to the fetch handler, so a core that reached for a
    * global would be a core that cannot run there (§3.3 B2).
@@ -145,6 +158,16 @@ export interface ZenOptions<C = unknown> {
    *     ]
    */
   readonly env?: Readonly<Record<string, string | undefined>> | readonly EnvSource[] | undefined
+  /**
+   * The host process's side of the lifecycle — §4.5, §12.8.
+   *
+   * Installed by `listen()` and removed at the end of `close()`. The `zen`
+   * meta-package supplies `processLifecycle()` by default: `SIGTERM`/`SIGINT`
+   * run the graceful shutdown, and an uncaught exception or unhandled rejection
+   * is logged at `fatal` and does the same with exit code 1 — because Zen never
+   * keeps serving from a process whose state is unknown (§12.8).
+   */
+  readonly lifecycle?: HostLifecycle | undefined
   /** Layers 2, 4 and 8 as raw sources — `zen.config.<NODE_ENV>.ts`, and tests. */
   readonly overlays?: readonly ConfigOverlay[] | undefined
   /**
@@ -313,6 +336,8 @@ export class ZenApp<X = {}> {
    */
   #config: ResolvedConfigResult | null = null
   readonly #hooks = new Map<Phase, HookRecord[]>()
+  /** §5.2 — application param types, merged over the router's builtins. */
+  readonly #paramTypes = new Map<string, ParamType>()
   readonly #decorations: Decoration[] = []
   readonly #errorMappers: Array<{ ctor: Function; map: (e: unknown, c: unknown) => unknown }> = []
   #rootScope: Scope
@@ -335,9 +360,24 @@ export class ZenApp<X = {}> {
   readonly #timeoutHeader: string | undefined
 
   #handle: ServerHandle | null = null
+  /** Removes whatever `lifecycle.install` put on the host process. */
+  #uninstall: (() => void) | null = null
+  /** The shutdown in progress, so a second `close()` joins it rather than re-running it. */
+  #closing: Promise<void> | null = null
+  /** The boot, once started — shared by concurrent callers and kept when it fails. */
+  #booting: Promise<this> | null = null
+  /** Detaches `listen({ signal })`'s abort listener once shutdown has begun. */
+  #unlistenSignal: (() => void) | null = null
 
   constructor(opts: ZenOptions<unknown>) {
     this.#opts = opts
+    if (typeof opts.trustProxy === 'number' && !(Number.isInteger(opts.trustProxy) && opts.trustProxy >= 0)) {
+      throw new ZenError(
+        Codes.CONFIG_INVALID,
+        `trustProxy must be true, false, or the number of proxies in front of the app; got ${opts.trustProxy}.`,
+        { status: 500, expose: false },
+      )
+    }
     this.#log = opts.logger ?? new ConsoleLogger(opts.dev === true ? 'debug' : 'info')
     this.#caps = opts.caps ?? DEFAULT_CAPABILITIES
     this.#codegen = new CodeGen({ caps: this.#caps, readable: opts.dev === true })
@@ -515,6 +555,24 @@ export class ZenApp<X = {}> {
   options(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'OPTIONS', path, a, b) }
 
   /**
+   * One handler for every method — §22.1.
+   *
+   * Registers ordinary routes, one per method in {@link ALL_METHODS}, so each is
+   * conflict-checked, compiled and documented like any other and a `405` is
+   * still impossible for a method it serves. `HEAD` is served by the `GET`
+   * route, as everywhere (§4.2). `TRACE` is not included: a handler written for
+   * "every method" was not written to reflect a request back (RFC 9110 §9.3.8).
+   * A `name` gets the method appended — `proxy.get`, `proxy.post` — because a
+   * name identifies one route.
+   */
+  all<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  all<P extends string>(path: P, handler: BareHandler<X, P>): this
+  all(path: string, a: unknown, b?: unknown): this {
+    registerAll((method, spec, handler) => this.#register(this.#rootScope, method, path, spec, handler), a, b)
+    return this
+  }
+
+  /**
    * Register a plugin, widening the app's context type.
    *
    *     const app = zen().use(ConfigPlugin).use(RedisPlugin).use(AuthPlugin)
@@ -549,7 +607,7 @@ export class ZenApp<X = {}> {
     const opts = second as { name?: string } | undefined
     this.#rootScope.middleware.push({
       kind: 'phase',
-      name: opts?.name ?? middleware.name ?? 'anonymous',
+      name: opts?.name ?? (middleware.name || 'anonymous'),
       fn: middleware,
       scope: this.#rootScope.id,
       origin: undefined,
@@ -625,7 +683,7 @@ export class ZenApp<X = {}> {
     this.#assertOpen()
     this.#rootScope.middleware.push({
       kind: 'around',
-      name: opts?.name ?? middleware.name ?? 'anonymous',
+      name: opts?.name ?? (middleware.name || 'anonymous'),
       fn: middleware,
       scope: this.#rootScope.id,
       origin: undefined,
@@ -637,7 +695,7 @@ export class ZenApp<X = {}> {
     this.#assertOpen()
     this.#rootScope.middleware.push({
       kind: 'after',
-      name: opts?.name ?? middleware.name ?? 'anonymous',
+      name: opts?.name ?? (middleware.name || 'anonymous'),
       fn: middleware,
       scope: this.#rootScope.id,
       origin: undefined,
@@ -694,6 +752,15 @@ export class ZenApp<X = {}> {
     build(new Collection<X>(this, scope))
   }
 
+  /**
+   * @internal — used by Collection. A collection handle can outlive its
+   * callback, so its middleware methods check the freeze the same way the app's
+   * do; `use()` on one after boot used to be accepted and never compiled.
+   */
+  assertOpen(): void {
+    this.#assertOpen()
+  }
+
   /** @internal — used by Collection#hook. */
   hookScoped(scope: Scope, phase: Phase, fn: Function, name?: string): void {
     this.#assertOpen()
@@ -726,6 +793,27 @@ export class ZenApp<X = {}> {
    */
   decorate<K extends string, T>(name: K, slotOrAccessor: Slot<T> | ((ctx: unknown) => T), source = 'app'): ZenApp<X & { [k in K]: T }> {
     this.#assertOpen()
+    // The name becomes a getter in generated source, so it has to be an
+    // identifier — `decorate('bad-name')` used to fail inside the compiler with
+    // "this is a Zen bug", while the eval-free twin accepted it — and it must
+    // not be one of the context's own members, or it silently replaces them.
+    if (!DECORATION_NAME.test(name)) {
+      throw new ZenError(
+        Codes.DECORATOR_CONFLICT,
+        `Context property "${name}" (from ${source}) is not a valid decoration name. ` +
+          'Use a JavaScript identifier that does not start with "$" — e.g. "currentUser".',
+        { status: 500, expose: false },
+      )
+    }
+    if (CONTEXT_MEMBERS.has(name)) {
+      throw new ZenError(
+        Codes.DECORATOR_CONFLICT,
+        `Context property "${name}" (from ${source}) is already owned by the framework: ` +
+          `ctx.${name} is part of every context, and a decoration would replace it on every route. ` +
+          'Choose another name.',
+        { status: 500, expose: false },
+      )
+    }
     const existing = this.#decorations.find((d) => d.name === name)
     if (existing) {
       throw new ZenError(
@@ -745,6 +833,45 @@ export class ZenApp<X = {}> {
     return this as unknown as ZenApp<X & { [k in K]: T }>
   }
 
+  /**
+   * Register a path parameter type — §5.2.
+   *
+   *     app.paramType('objectId', {
+   *       test: (s) => s.length === 24 && /^[0-9a-f]+$/.test(s),
+   *       parse: (s) => new ObjectId(s),
+   *       jsonSchema: { type: 'string', pattern: '^[0-9a-f]{24}$' },
+   *     })
+   *     app.get('/posts/:id<objectId>', (ctx) => posts.find(ctx.params.id))
+   *
+   * One declaration, three consumers: `test` is compiled into the router, so a
+   * malformed id 404s instead of reaching the handler; `parse` builds the value
+   * `ctx.params` carries; `jsonSchema` is what `@visionpilot/zen-openapi` documents. The
+   * router's "unknown parameter type" diagnostic has always named this method —
+   * it now exists.
+   *
+   * `test` runs on every request that reaches the segment, so keep it linear
+   * (§19.3): no nested quantifiers, bounded length first.
+   */
+  paramType<T>(name: string, type: Omit<ParamType<T>, 'name'>): this {
+    this.#assertOpen()
+    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) {
+      throw new ZenError(
+        Codes.ROUTE_INVALID_PATH,
+        `Param type name "${name}" cannot appear in a path as ":x<${name}>". Use letters, digits, "_" and "-".`,
+        { status: 500, expose: false },
+      )
+    }
+    if (typeof type.test !== 'function' || typeof type.parse !== 'function') {
+      throw new ZenError(
+        Codes.ROUTE_INVALID_PATH,
+        `Param type "${name}" needs a test(raw) predicate and a parse(raw) function.`,
+        { status: 500, expose: false },
+      )
+    }
+    this.#paramTypes.set(name, { name, test: type.test, parse: type.parse, jsonSchema: type.jsonSchema } as ParamType)
+    return this
+  }
+
   onError<E>(ctor: new (...args: never[]) => E, map: (error: E, ctx: unknown) => unknown): this {
     this.#assertOpen()
     this.#errorMappers.push({ ctor: ctor as unknown as Function, map: map as (e: unknown, c: unknown) => unknown })
@@ -760,9 +887,19 @@ export class ZenApp<X = {}> {
    * has three or four registration problems at once, and a fail-fast framework
    * turns that into four restart cycles (§12.7).
    */
-  async ready(): Promise<this> {
-    if (this.#compiled !== null) return this
+  ready(): Promise<this> {
+    // One boot per application, shared by every caller — and remembered when
+    // it fails. Two `inject()`s started together used to run two boots side by
+    // side: every plugin's `setup` ran twice, so two connection pools were
+    // opened and the second compile silently replaced the first. And a boot
+    // that failed after compiling (an `onBoot` check, an eager singleton,
+    // `onReady`) left the compiled state in place, so the *next* `ready()`
+    // returned "ready" and `inject()`/`listen()` served an application whose
+    // boot had been refused.
+    return (this.#booting ??= this.#boot())
+  }
 
+  async #boot(): Promise<this> {
     const diagnostics: Diagnostic[] = []
 
     // ── configuration first, and "first" is the specification ──────────────
@@ -845,9 +982,15 @@ export class ZenApp<X = {}> {
     // condition never occurred, which is how a team ends up believing it has
     // timeout instrumentation for a year (§9.7).
     diagnostics.push(...diagnoseUnavailable(this.#allHookRecords()))
+    // …and phases that do not exist at all, which were stored and never called,
+    // and application phases declared on a route or collection, which likewise.
+    diagnostics.push(...diagnoseUnknown(this.#allHookRecords()))
+    diagnostics.push(...diagnoseMisplaced(this.#scopedHookRecords()))
 
     const records: RouteRecord[] = []
     const seen = new Map<string, PendingRoute>()
+    /** Route id → the `METHOD path` that claimed it first. */
+    const ids = new Map<string, string>()
     /**
      * Routes whose request schema could not be read as JSON Schema, so §11.4
      * silently did nothing.
@@ -897,6 +1040,26 @@ export class ZenApp<X = {}> {
       }
       seen.set(key, pending)
 
+      // A route's id is its `name`, or its method and path when it has none —
+      // and the id is what the compiled route table, the negotiation plan, the
+      // OpenAPI operationId and every metrics label are keyed by. Two routes
+      // sharing a name used to boot cleanly and then answer each other's
+      // requests: the second compiled pipeline replaced the first in the table,
+      // so `GET /a` ran `GET /b`'s handler, and nothing said so (§5.5).
+      const id = pending.name ?? key
+      const owner = ids.get(id)
+      if (owner !== undefined) {
+        diagnostics.push({
+          severity: 'error',
+          code: Codes.ROUTE_DUPLICATE,
+          message: `Route name "${id}" is used by both ${owner} and ${key}.`,
+          hint: 'Give each route its own name. A name identifies one route — to URL generation, the OpenAPI operationId and metrics labels.',
+          locations: [owner, key],
+        })
+        continue
+      }
+      ids.set(id, key)
+
       // §4.4 — the deadline is resolved from the same scope chain, at the same
       // moment, as the hooks and the middleware. Innermost wins outright; a bad
       // duration is a diagnostic rather than a throw, so it is reported with
@@ -918,7 +1081,7 @@ export class ZenApp<X = {}> {
 
       // §13.4 — and the same treatment again, for the same reason. What lands
       // on the record is the *offer list in preference order*, which is what
-      // `explainRoute` prints and what @zenjs/openapi turns into a `content`
+      // `explainRoute` prints and what @visionpilot/zen-openapi turns into a `content`
       // map; the representations it also produces are the compiled half and
       // stay out of the graph, exactly as the compiled serializers do.
       const negotiated = buildNegotiation(pending.schema.response, {
@@ -968,11 +1131,11 @@ export class ZenApp<X = {}> {
           `${shown}${rest > 0 ? `, and ${rest} more` : ''}. ` +
           'fix: register a converter — registerSchemaConverter("zod", (s, io) => z.toJSONSchema(s, { io })) — ' +
           'or coerce in the schema with z.coerce.number(). ' +
-          'also: the same schemas are undocumented by @zenjs/openapi for the same reason.',
+          'also: the same schemas are undocumented by @visionpilot/zen-openapi for the same reason.',
       )
     }
 
-    for (const diagnostic of this.#opts.router.analyze(records)) {
+    for (const diagnostic of this.#opts.router.analyze(records, { paramTypes: this.#paramTypes })) {
       if (diagnostic.severity === 'error') {
         diagnostics.push({
           severity: 'error',
@@ -1052,7 +1215,7 @@ export class ZenApp<X = {}> {
       codegen: this.#codegen,
     })
 
-    const router = this.#opts.router.build(records, { codegen: this.#codegen } as never)
+    const router = this.#opts.router.build(records, { codegen: this.#codegen, paramTypes: this.#paramTypes } as never)
 
     const byId = new Map<RouteId, CompiledRoute>()
     for (const record of records) {
@@ -1184,7 +1347,7 @@ export class ZenApp<X = {}> {
       use(middleware, opts) {
         app.#rootScope.middleware.push({
           kind: 'phase',
-          name: opts?.name ?? middleware.name ?? pluginName,
+          name: opts?.name ?? (middleware.name || pluginName),
           fn: middleware,
           scope: app.#rootScope.id,
           origin: undefined,
@@ -1193,7 +1356,7 @@ export class ZenApp<X = {}> {
       around(middleware, opts) {
         app.#rootScope.middleware.push({
           kind: 'around',
-          name: opts?.name ?? middleware.name ?? pluginName,
+          name: opts?.name ?? (middleware.name || pluginName),
           fn: middleware,
           scope: app.#rootScope.id,
           origin: undefined,
@@ -1202,7 +1365,7 @@ export class ZenApp<X = {}> {
       after(middleware, opts) {
         app.#rootScope.middleware.push({
           kind: 'after',
-          name: opts?.name ?? middleware.name ?? pluginName,
+          name: opts?.name ?? (middleware.name || pluginName),
           fn: middleware,
           scope: app.#rootScope.id,
           origin: undefined,
@@ -1317,7 +1480,9 @@ export class ZenApp<X = {}> {
       steps,
       handler: record.handler as Function,
       intake,
-      validators,
+      // §4.2 stage 7 — two or more sources are validated as one stage, so every
+      // failure reaches the client at once. One source compiles as it always did.
+      validators: validators.length > 1 ? [combineValidators(validators)] : validators,
       serialize,
       // §13.4 — `null` unless the route declared the variant form, and the
       // generator emits nothing for it when it is null.
@@ -1372,10 +1537,13 @@ export class ZenApp<X = {}> {
             return
           }
 
-          if (match === null) throw new NotFound(`No route matches ${raw.method} ${path}`)
-          throw new MethodNotAllowed(`${raw.method} is not allowed for ${path}`, {
+          // Routine refusals, built without a stack: it could only ever show
+          // these few lines of the dispatcher, and capturing it was most of why
+          // a 404 cost ~6× a served request (§28.8, `withoutStack`).
+          if (match === null) throw withoutStack(() => new NotFound(`No route matches ${raw.method} ${path}`))
+          throw withoutStack(() => new MethodNotAllowed(`${raw.method} is not allowed for ${path}`, {
             headers: { allow: match.allowed.join(', ') },
-          })
+          }))
         }
 
         const compiledRoute = compiled.byId.get(match.route.id)
@@ -1425,12 +1593,14 @@ export class ZenApp<X = {}> {
           ? await running
           : await Promise.race([running, deadline.expiry])
 
-        // Disarmed before egress on purpose: the deadline bounds stages 5-9, up
-        // to handing the reply to the adapter. It does not bound the write.
-        // Cancelling a 2 GB download halfway is not a timeout, it is a corrupt
-        // response — the status line has already gone out and there is no way
-        // to take it back (§4.4).
-        deadline?.disarm()
+        // The clock stops before egress on purpose: the deadline bounds stages
+        // 5-9, up to handing the reply to the adapter. It does not bound the
+        // write. Cancelling a 2 GB download halfway is not a timeout, it is a
+        // corrupt response — the status line has already gone out and there is
+        // no way to take it back (§4.4). Only the *timer* stops: the connection
+        // listener stays until the `finally`, so a streamed body still sees
+        // `ctx.signal` abort when its client leaves.
+        deadline?.settle()
         await this.#send(ctx, conn, reply, hooks.onResponse)
       } catch (error) {
         const target = ctx ?? new compiled.Ctx(raw, null, EMPTY, compiled.env, conn.signal)
@@ -1444,11 +1614,19 @@ export class ZenApp<X = {}> {
         const reply = deadline !== null && (error as unknown) === EXPIRED
           ? await this.#timeoutReply(target, deadline, hooks, info)
           : await this.#errorReply(target, error, hooks, info)
+        // The error reply is egress too, and §4.4 does not bound egress: a timer
+        // left running here could fire mid-write and publish `timedOut` on a
+        // request that failed for an unrelated reason.
+        deadline?.settle()
         await this.#send(target, conn, reply, hooks.onResponse)
       } finally {
         // In a `finally` because the failure mode of forgetting it is invisible
         // under test and fatal under load: one leaked timer per request.
         deadline?.disarm()
+        // Normally already done by `#send`. This covers the exchange whose
+        // error reply could not be written either — a request that failed
+        // twice still has a transaction to roll back.
+        if (ctx !== null && ctx.$disposers !== SETTLED) await this.#release(ctx)
       }
     }
   }
@@ -1601,16 +1779,36 @@ export class ZenApp<X = {}> {
       }
     }
 
-    const disposers = ctx.$disposers
-    if (disposers !== null) {
-      for (let i = disposers.length - 1; i >= 0; i--) {
-        const slot = disposers[i]
-        if (slot?.dispose === undefined) continue
-        try {
-          await slot.dispose(ctx.$s[slot.index])
-        } catch (error) {
-          this.#log.error({ err: error, slot: slot.name }, 'slot dispose threw')
-        }
+    // Almost every request has nothing to release, and it must not pay an
+    // `await` to find that out — a call into an async function is a promise
+    // and a tick on every request in the application.
+    if (ctx.$disposers === null) ctx.$disposers = SETTLED
+    else await this.#release(ctx)
+  }
+
+  /**
+   * Stage 10's last step — release what the request took, newest first: every
+   * value a disposable slot held and every request-scoped service with a
+   * `dispose` (§4.2, §7.4, §15.3).
+   *
+   * Idempotent, because it is reached twice on one path: once from `#send`, and
+   * once from the dispatcher's `finally` for the exchange whose write threw
+   * before `#send` got this far. The list is swapped for `SETTLED` before the
+   * first disposer runs, so the second call finds nothing to do — and anything
+   * the request acquires *after* this point (a handler still running behind a
+   * deadline that has already answered) is released the moment it arrives, by
+   * `trackDisposal`, rather than queued on a list nobody will read again.
+   */
+  async #release(ctx: PlainContext): Promise<void> {
+    const disposals = ctx.$disposers
+    ctx.$disposers = SETTLED
+    if (disposals === null || disposals === SETTLED) return
+    for (let i = disposals.length - 1; i >= 0; i--) {
+      const disposal = disposals[i] as (typeof disposals)[number]
+      try {
+        await (disposal.dispose as (value: unknown) => unknown)(disposal.value)
+      } catch (error) {
+        this.#log.error({ err: error, slot: disposal.name }, 'dispose threw; releasing the rest')
       }
     }
   }
@@ -1681,7 +1879,28 @@ export class ZenApp<X = {}> {
 
   // ── lifecycle ────────────────────────────────────────────────────────────
 
-  async listen(opts: ListenOptions = {}): Promise<ServerHandle> {
+  /**
+   * Start serving — §4.2 stage 0, §16.3.
+   *
+   *     await app.listen(3000)                       // the Express spelling, §1.2
+   *     await app.listen({ port: 3000, host: '0.0.0.0' })
+   *     await app.listen()                           // config.server.port / .host
+   *
+   * `app.listen(3000)` is the five-line app of §1.2 and §21.1 — and it used to
+   * be ignored: the number was spread into an options object as nothing, so a
+   * JavaScript caller asking for port 8080 got the configured default and no
+   * error. `signal` aborts into the same graceful shutdown as `close()`.
+   */
+  listen(port: number, host?: string): Promise<ServerHandle>
+  listen(options?: ListenOptions): Promise<ServerHandle>
+  async listen(target: number | ListenOptions = {}, host?: string): Promise<ServerHandle> {
+    const opts: ListenOptions = typeof target === 'number'
+      ? { port: target, ...(host === undefined ? {} : { host }) }
+      : target
+    // Refused before anything binds: a signal already aborted is a caller that
+    // has stopped wanting the server, and opening a port it will not close is
+    // how a test suite leaks one.
+    if (opts.signal?.aborted === true) throw opts.signal.reason
     if (this.#opts.adapter === undefined) {
       throw new ZenError(
         Codes.CAPABILITY_UNAVAILABLE,
@@ -1704,6 +1923,23 @@ export class ZenApp<X = {}> {
       ...(opts.host === undefined && typeof server.host === 'string' ? { host: server.host } : {}),
     }
     this.#handle = await this.#opts.adapter.listen(this.dispatch, address)
+    // §4.5, §12.8 — only once there is a server to drain; an app that is only
+    // ever `inject()`ed never touches the host process.
+    this.#uninstall ??= this.#opts.lifecycle?.install({ close: (reason) => this.close(reason), log: this.#log }) ?? null
+
+    // `ListenOptions.signal` was declared and read by nothing: aborting it left
+    // the server answering. It now runs §4.5's sequence, exactly as `close()`
+    // does — readiness first, then the drain — rather than dropping the socket.
+    const signal = opts.signal
+    if (signal !== undefined) {
+      const onAbort = (): void => {
+        this.close('abort').catch((error: unknown) => {
+          this.#log.error({ err: error }, 'shutdown after listen({ signal }) aborted failed')
+        })
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      this.#unlistenSignal = () => signal.removeEventListener('abort', onAbort)
+    }
 
     for (const hook of this.#hooks.get('onListen') ?? []) {
       await (hook.fn as (h: ServerHandle) => unknown)(this.#handle)
@@ -1724,7 +1960,18 @@ export class ZenApp<X = {}> {
    * "readiness reports draining before the server stops accepting" has no
    * meaning until something can be asked.
    */
-  async close(reason = 'shutdown'): Promise<void> {
+  close(reason = 'shutdown'): Promise<void> {
+    // A signal handler and application code can both ask; the sequence runs
+    // once, and everybody waits for the same end.
+    return (this.#closing ??= this.#shutdown(reason))
+  }
+
+  async #shutdown(reason: string): Promise<void> {
+    // A signal handed to `listen()` has nothing left to stop once this runs,
+    // and a listener on a caller's long-lived signal would outlive the app.
+    this.#unlistenSignal?.()
+    this.#unlistenSignal = null
+
     // 1. Readiness fails first, while the process is still answering, so the
     //    load balancer has a window to take this instance out of rotation. This
     //    is the step whose absence causes the 502s.
@@ -1736,15 +1983,35 @@ export class ZenApp<X = {}> {
 
     // 4. `onClose` in reverse registration order, so a plugin tears down after
     //    everything that depends on it.
+    //
+    //    Each hook in its own `try`, per §12.8: an error thrown inside `onClose`
+    //    is logged and never stops the sequence. It used to stop it — one
+    //    plugin failing to flush a buffer meant no other plugin was closed, no
+    //    singleton was disposed, the connection pools stayed open and the state
+    //    never reached `stopped`, so a supervisor waiting on it waited forever.
     for (const hook of [...(this.#hooks.get('onClose') ?? [])].reverse()) {
-      await (hook.fn as (r: string) => unknown)(reason)
+      try {
+        await (hook.fn as (r: string) => unknown)(reason)
+      } catch (error) {
+        this.#log.error({ err: error, hook: hook.name }, 'onClose hook threw; continuing shutdown')
+      }
     }
 
-    // 5. Singletons in reverse dependency order.
-    await this.#container.dispose()
+    // 5. Singletons in reverse dependency order. The container runs every
+    //    disposer even when one throws, and reports them together.
+    try {
+      await this.#container.dispose()
+    } catch (error) {
+      this.#log.error({ err: error }, 'service disposal failed; continuing shutdown')
+    }
 
     this.#health.stop()
     this.#handle = null
+
+    // Last, so a second signal arriving mid-shutdown still reaches the host
+    // integration — which is how "press Ctrl+C again to stop waiting" works.
+    this.#uninstall?.()
+    this.#uninstall = null
   }
 
   /** The service container, for `zen inspect di` and test overrides. */
@@ -1771,6 +2038,19 @@ export class ZenApp<X = {}> {
   #allHookRecords(): HookRecord[] {
     const out: HookRecord[] = []
     for (const [, list] of this.#hooksByPhase()) out.push(...list)
+    return out
+  }
+
+  /**
+   * Records from `hooks: { … }` objects — on collections and on routes — which
+   * can only ever hold request phases. `app.hook()` and `Collection#hook()` are
+   * not included: an application phase registered through either is filed
+   * where it fires.
+   */
+  #scopedHookRecords(): HookRecord[] {
+    const out: HookRecord[] = []
+    for (const scope of this.#scopes) out.push(...scope.hooks.filter((h) => !isRequestPhase(h.phase)))
+    for (const pending of this.#routes) out.push(...routeHookRecords(pending.schema.hooks))
     return out
   }
 
@@ -1826,11 +2106,46 @@ export class Collection<X = {}> {
   delete<P extends string>(path: P, handler: BareHandler<X, P>): this
   delete(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'DELETE', path, a, b); return this }
 
+  // `head`, `options`, `all`, `around` and `after` exist on the app, and a
+  // collection is the same registration surface one scope down (§6.1). Their
+  // absence here meant a `HEAD`-only or `OPTIONS` route, or wrapping middleware,
+  // could not be written inside a collection at all.
+  head<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  head<P extends string>(path: P, handler: BareHandler<X, P>): this
+  head(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'HEAD', path, a, b); return this }
+
+  options<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  options<P extends string>(path: P, handler: BareHandler<X, P>): this
+  options(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'OPTIONS', path, a, b); return this }
+
+  /** One handler for every method — see {@link ZenApp.all}. */
+  all<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  all<P extends string>(path: P, handler: BareHandler<X, P>): this
+  all(path: string, a: unknown, b?: unknown): this {
+    registerAll((method, spec, handler) => this.#app.registerScoped(this.#scope, method, path, spec, handler), a, b)
+    return this
+  }
+
   use(middleware: PhaseMiddleware<never, X>, opts?: { name?: string }): this {
+    return this.#push('phase', middleware, opts)
+  }
+
+  /** Around middleware for every route in this subtree — one closure per request (§8.2). */
+  around(middleware: AroundMiddleware<never, X>, opts?: { name?: string }): this {
+    return this.#push('around', middleware, opts)
+  }
+
+  /** After middleware for every route in this subtree (§8.2). */
+  after(middleware: AfterMiddleware<never, X>, opts?: { name?: string }): this {
+    return this.#push('after', middleware, opts)
+  }
+
+  #push(kind: MiddlewareRef['kind'], fn: Function, opts: { name?: string } | undefined): this {
+    this.#app.assertOpen()
     this.#scope.middleware.push({
-      kind: 'phase',
-      name: opts?.name ?? middleware.name ?? 'anonymous',
-      fn: middleware,
+      kind,
+      name: opts?.name ?? (fn.name || 'anonymous'),
+      fn,
       scope: this.#scope.id,
       origin: undefined,
     })
@@ -1882,7 +2197,7 @@ export class InjectedResponse {
    * observe what the wire would observe, and a test asserting on `Vary` was
    * getting one third of it and passing.
    *
-   * Found the same way as the sibling defect in `@zenjs/adapter-node`: nothing
+   * Found the same way as the sibling defect in `@visionpilot/zen-adapter-node`: nothing
    * produced a repeated header other than `Set-Cookie` until CORS varied on
    * three of them (§32.2).
    *
@@ -1933,6 +2248,38 @@ export class InjectedResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EMPTY: Record<string, unknown> = Object.freeze({})
+
+/** An identifier the generated class can use as a getter name; `$` is reserved for internals. */
+const DECORATION_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/
+
+/**
+ * What `all()` registers. `HEAD` is absent because the `GET` route serves it
+ * (§4.2) and `TRACE` because a handler written for "any method" was not written
+ * to echo a request back.
+ */
+export const ALL_METHODS: readonly HttpMethod[] = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+
+/**
+ * `all(path, [spec,] handler)` as one ordinary registration per method.
+ *
+ * A declared `name` gets the method appended, because route names are unique
+ * (§5.5) and six routes cannot share one.
+ */
+function registerAll(
+  register: (method: HttpMethod, spec: unknown, handler: unknown) => unknown,
+  a: unknown,
+  b: unknown,
+): void {
+  const hasSpec = typeof a === 'object' && a !== null
+  for (const method of ALL_METHODS) {
+    if (!hasSpec) {
+      register(method, a, undefined)
+      continue
+    }
+    const spec = a as RouteSpec
+    register(method, spec.name === undefined ? spec : { ...spec, name: `${spec.name}.${method.toLowerCase()}` }, b)
+  }
+}
 
 /**
  * A plugin is data before it is behaviour, so it is distinguishable from a

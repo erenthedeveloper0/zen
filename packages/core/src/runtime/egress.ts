@@ -38,17 +38,22 @@ export function prepareForWire(ctx: PlainContext, reply: Reply): Reply {
   // ── cookies: staged as values so a later writer overrides by name rather
   //    than emitting two conflicting Set-Cookie headers ──────────────────────
   const cookies = ctx.$resCookies
-  if (cookies !== null) {
-    const seen = new Set<string>()
-    for (let i = cookies.length - 1; i >= 0; i--) {
-      const cookie = cookies[i]
-      if (cookie === undefined || seen.has(cookie.name)) continue
-      seen.add(cookie.name)
-      mutable.headers.append('set-cookie', serializeCookie(cookie))
+  if (cookies !== null || reply.cookies.length > 0) {
+    // Read once, and only when a cookie is being set: `ctx.secure` is a header
+    // lookup, and a response without cookies should not pay for it (§19.2).
+    const secure = ctx.secure
+    if (cookies !== null) {
+      const seen = new Set<string>()
+      for (let i = cookies.length - 1; i >= 0; i--) {
+        const cookie = cookies[i]
+        if (cookie === undefined || seen.has(cookie.name)) continue
+        seen.add(cookie.name)
+        mutable.headers.append('set-cookie', serializeCookie(cookie, secure))
+      }
     }
-  }
-  for (const cookie of reply.cookies) {
-    mutable.headers.append('set-cookie', serializeCookie(cookie))
+    for (const cookie of reply.cookies) {
+      mutable.headers.append('set-cookie', serializeCookie(cookie, secure))
+    }
   }
 
   // ── body encoding ───────────────────────────────────────────────────────
@@ -70,10 +75,19 @@ export function prepareForWire(ctx: PlainContext, reply: Reply): Reply {
     if (mutable.status !== 304) mutable.headers.set('content-length', '0')
   } else if (kind === 'stream') {
     if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', mutable.body.media)
+  } else if (kind === 'sse') {
+    // `ctx.sse()` sets this already; a reply assembled by hand around a channel
+    // still has to announce itself as an event stream or `EventSource` refuses it.
+    if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', 'text/event-stream; charset=utf-8')
   }
+  // `file` is deliberately absent: its Content-Type, Content-Length and
+  // validators come from a `stat`, and only the adapter can make one (§14.1).
 
   // ── HEAD: identical headers, no body (RFC 9110 §9.3.2) ──────────────────
-  if (ctx.method === 'HEAD' && mutable.body.kind !== 'empty') {
+  // A file keeps its body kind so the adapter can still `stat` it and answer
+  // with the real length; it writes no bytes for a HEAD either way.
+  if (ctx.method === 'HEAD' && mutable.body.kind !== 'empty' && mutable.body.kind !== 'file') {
+    discardBody(mutable.body)
     mutable.body = { kind: 'empty' }
   }
 
@@ -84,9 +98,22 @@ export function prepareForWire(ctx: PlainContext, reply: Reply): Reply {
 export function stripBodyIfNeeded(reply: Reply): Reply {
   if (reply.status === 204 || reply.status === 304) {
     const mutable = reply as MutableReply
+    discardBody(mutable.body)
     mutable.body = { kind: 'empty' }
     mutable.headers.delete('content-length')
     mutable.headers.delete('content-type')
   }
   return reply
+}
+
+/**
+ * A body that is dropped rather than written still has to be released.
+ *
+ * Only an SSE channel holds anything: a handler that produced one for a `HEAD`
+ * may also have subscribed it to an event bus, and a channel nobody will ever
+ * read must be closed so its `send` becomes a no-op instead of a queue that
+ * grows until `maxBuffered` finally closes it.
+ */
+function discardBody(body: Reply['body']): void {
+  if (body.kind === 'sse') body.channel.close()
 }

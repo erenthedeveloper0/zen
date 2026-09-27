@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { diffDocuments, type OpenApiDocument } from '@zenjs/openapi'
+import { diffDocuments, type OpenApiDocument } from '@visionpilot/zen-openapi'
 import { build } from '../../app.ts'
 
 /**

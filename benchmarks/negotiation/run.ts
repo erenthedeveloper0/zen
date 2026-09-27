@@ -34,8 +34,8 @@ import {
   createApp, jsonSchema, registerMediaEncoder, makeNegotiator, selectOffer, offersOf,
   parseAccept, NEGOTIATION_CACHE_LIMIT,
   type Logger, type Representation,
-} from '@zenjs/core'
-import { ZenRouter, parsePath } from '@zenjs/router'
+} from '@visionpilot/zen-core'
+import { ZenRouter, parsePath } from '@visionpilot/zen-router'
 
 const pathParser = {
   parse: (path: string) => {
@@ -362,10 +362,10 @@ console.log('\n  5. Refusing, against the response it would otherwise have been\
   console.log(`    a refused 406                ${result.b.toFixed(2)} µs   ${(result.b / result.a).toFixed(1)}× more expensive`)
 
   console.log('\n    Not a negotiation cost. The matcher answered in the nanoseconds measured')
-  console.log('    in section 3; the rest is constructing an Error and rendering a problem')
-  console.log('    document, which §28.8 already records for the 404 — 8.3 µs of a 404 is')
-  console.log('    `Error.captureStackTrace` alone. A 406 flood is the same cheap hostile')
-  console.log('    traffic a 404 flood is, and it has the same unfixed amplification.')
+  console.log('    in section 3; the rest is building the error and rendering a problem')
+  console.log('    document. This ratio was 13× when §13.4 was built, almost all of it the')
+  console.log('    stack of an `Error` nobody would read; a 406 is now built without one')
+  console.log('    (§28.8, `withoutStack`), and `benchmarks/refusals` gates that it stays so.')
 }
 
 // ── 6. the security gate ────────────────────────────────────────────────────

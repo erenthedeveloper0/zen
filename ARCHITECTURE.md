@@ -6,12 +6,12 @@
 | --- | --- |
 | RFC | 0001 |
 | Title | Zen Core Architecture |
-| Status | **Draft** — pre-implementation, seeking review |
-| Target | `zen@1.0`, first MVP `zen@0.1` |
-| Runtime floor | Node 20 LTS, Bun 1.1, Deno 2, Workerd (2024-09 compat date) |
-| Language | TypeScript 5.5+ (`exactOptionalPropertyTypes`, `const` type params) |
+| Status | **Draft** — the 0.1 alpha implements a large part of it; [TASKS.md](./TASKS.md) tracks what is built |
+| Target | `@visionpilot/zen@1.0`, first MVP `@visionpilot/zen@0.1` |
+| Runtime floor | Node 22 LTS (built); Bun 1.1, Deno 2, Workerd (designed, §14.2) |
+| Language | TypeScript 5.0+ for consumers, checked in CI against the published declarations; 5.9 to build (`erasableSyntaxOnly`) |
 | Supersedes | — |
-| Discussion | `rfcs/0001` |
+| Discussion | [GitHub issues](https://github.com/VisionPilot/Zen.js/issues) |
 
 ---
 
@@ -136,7 +136,7 @@ Any feature that costs an allocation, a closure, a promise tick, or a microsecon
 The Express hello-world is five lines and requires understanding two concepts (`app.METHOD`, `res.send`). That is the bar. Not "similar API" — *the same conceptual budget for a beginner.*
 
 ```ts
-import { zen } from 'zen'
+import { zen } from '@visionpilot/zen'
 
 const app = zen()
 
@@ -165,7 +165,7 @@ Explicitly out of scope, permanently:
 | --- | --- |
 | Being a full-stack/meta framework | Zen serves HTTP. It does not own your frontend build, SSR, or file-based pages. Nitro/Next occupy that space; competing there means competing on bundler politics. Zen must be *embeddable* in those instead. |
 | An ORM | Data access is a domain with irreconcilable opinions. Zen ships DI good enough to hold yours, and adapters for lifecycle (`onClose` for pool drain). |
-| Decorators in core | `reflect-metadata`, `experimentalDecorators`, and stage-3 decorators are three mutually incompatible worlds. Core stays in the intersection: plain functions and objects. `@zenjs/decorators` exists for those who want it. |
+| Decorators in core | `reflect-metadata`, `experimentalDecorators`, and stage-3 decorators are three mutually incompatible worlds. Core stays in the intersection: plain functions and objects. `@visionpilot/zen-decorators` exists for those who want it. |
 | Runtime-agnostic *at the cost of* Node performance | Hono's model treats Node as one target among many, which costs a `Request` object construction per request on the platform where 90% of production traffic lives. Zen's abstraction lives *above* the request representation, so the Node adapter can skip it entirely (§14.3). |
 | Backward compatibility with Express middleware, in core | An `express-compat` shim exists (§14.7) and is honest about its cost: it materialises `req`/`res` façades. It is a migration tool, not an architecture. |
 | A DSL | No custom file format, no config language, no codegen you must check in. TypeScript is the DSL. |
@@ -357,7 +357,7 @@ Three boundaries carry most of the design's weight. If these leak, the architect
 
 **B1 — Registry ⇄ Compiler.** Compilers read a frozen `AppGraph`; they never call back into registries and never hold references to registry objects. Consequence: a second router implementation can be dropped in with no knowledge of how routes were registered, and the AppGraph can be produced by something other than the fluent API (a manifest file, a codegen step, a test fixture).
 
-**B2 — Runtime ⇄ Adapter.** The runtime never sees `http.IncomingMessage`, `Request`, or a Lambda event. It sees `RawRequest` (§22.6) — a narrow interface of method, path, header accessor, body source, and remote address. Consequence: `@zenjs/core` has zero platform imports and can run in a test harness with a fake adapter, in-process, with no sockets (§20.2).
+**B2 — Runtime ⇄ Adapter.** The runtime never sees `http.IncomingMessage`, `Request`, or a Lambda event. It sees `RawRequest` (§22.6) — a narrow interface of method, path, header accessor, body source, and remote address. Consequence: `@visionpilot/zen-core` has zero platform imports and can run in a test harness with a fake adapter, in-process, with no sockets (§20.2).
 
 **B3 — Core ⇄ Schema library.** Core never imports Zod, Valibot, ArkType, or TypeBox. It imports the [Standard Schema](https://standardschema.dev) interface (`~standard`), which those libraries implement natively. Consequence: the framework's dependency tree does not fork on your schema choice, and adding a schema library is a userland act, not a framework release.
 
@@ -455,7 +455,7 @@ interface RawRequest {
 
 Ingress guards run here because they must run before any allocation proportional to attacker input: header count cap, header size cap, URL length cap, and the `requestTimeout` arm. A request rejected at ingress never allocates a `Ctx`.
 
-**3 — Match.** The compiled matcher is called with `(method, path)` where `path` is the URL up to the first `?`, found with `indexOf` rather than `new URL()` (the WHATWG URL constructor is ~2µs and allocates; we need a `slice`).
+**3 — Match.** The compiled matcher is called with `(method, path)` where `path` is the URL up to the first `?`, found with `indexOf` rather than `new URL()` (the WHATWG URL constructor is ~2µs and allocates; we need a `slice`). A request target in the absolute form — `GET http://host/path`, which RFC 9112 §3.2.2 requires a server to accept and a client behind a forward proxy sends — is reduced to its path first; the origin form pays one character comparison for that (`benchmarks/request-path`).
 
 The matcher returns a `MatchResult`:
 
@@ -653,7 +653,7 @@ interface RouteRecord<S extends RouteSchema = RouteSchema> {
    *  declares one representation and is therefore not negotiated (§13.4.1).
    *  Here for the same reason `hooks` and `timeout` are: it is a function of
    *  static registration, so the step the pipeline emits, the line
-   *  `explainRoute` prints and the `content` map @zenjs/openapi writes all read
+   *  `explainRoute` prints and the `content` map @visionpilot/zen-openapi writes all read
    *  one structure and cannot disagree about which media types this route
    *  serves. */
   readonly negotiation: NegotiationRecord | null
@@ -695,7 +695,7 @@ app.paramType('objectId', {
 
 A param type contributes three things at once: a matcher predicate compiled into the trie (so `/users/abc` cleanly 404s rather than reaching your handler with garbage), a parse function, and a JSON Schema fragment for OpenAPI. One declaration, three consumers — I4.
 
-For the third consumer to actually get it, the registry is published on the built router and carried on the frozen `AppGraph` as `graph.paramTypes`. `@zenjs/openapi` must not depend on `@zenjs/router` (§24.3), and the alternative — a second copy of the built-in table inside the OpenAPI package — is the shorter path and the one where "three consumers, one declaration" quietly becomes two declarations.
+For the third consumer to actually get it, the registry is published on the built router and carried on the frozen `AppGraph` as `graph.paramTypes`. `@visionpilot/zen-openapi` must not depend on `@visionpilot/zen-router` (§24.3), and the alternative — a second copy of the built-in table inside the OpenAPI package — is the shorter path and the one where "three consumers, one declaration" quietly becomes two declarations.
 
 Path templates are also *typed at the type level*: `ExtractParams<'/users/:id<int>/posts/:slug'>` resolves to `{ id: number; slug: string }` via template literal types, so `ctx.params` is typed **even with no schema at all**. Adding a `params` schema refines it further and is checked for compatibility with the path at compile time (declaring `params: z.object({ userId: ... })` on `/users/:id` is a boot error, `ZEN_PARAM_MISMATCH`).
 
@@ -743,6 +743,11 @@ Zen classifies every pair of routes at boot:
 
 The ambiguity check is a bounded pairwise analysis on the trie, not a full path-space intersection: two routes are ambiguous iff they have equal segment count, differ in at least one position where one is static and the other is dynamic, *and* neither dominates the other in every position. Cost is O(n·k) for n routes of depth k with grouping by segment count, comfortably under 5 ms for 10,000 routes.
 
+Two more classes, both found by the pre-release audit and both boot errors:
+
+- **Two routes sharing a `name`** — `ZEN_ROUTE_DUPLICATE`. A route's id is its name when it has one, and the id is what the compiled route table, the OpenAPI `operationId` and every metrics label are keyed by. Before the check, the second registration silently replaced the first in the table and each route answered the other's requests.
+- **Two different parameter types in one position that can match one value** — `/items/:id<int>` and `/items/:key<slug>` both accept `42`. Both rank "typed param" (§5.6), so no rule separates them, and it is `ZEN_ROUTE_AMBIGUOUS`, naming the value. Whether two predicates intersect is undecidable in general, so the check searches *witnesses* — values each builtin type is known to accept, and an application type's `jsonSchema.examples` — against the other type's test. A pair nothing can decide is reported as the warning `ZEN_ROUTE_TYPES_UNDECIDED` rather than guessed at.
+
 ### 5.6 Priority
 
 Deterministic, positional, and documented — decided **left to right per segment**, not by whole-route score (whole-route scoring is what makes other routers' behaviour hard to predict):
@@ -752,6 +757,8 @@ static  >  typed param  >  param  >  optional param  >  wildcard
 ```
 
 The first segment where two candidates differ decides. Registration order is never a factor, which means splitting routes across files can never change behaviour — a property Express does not have and which is why large Express apps are afraid of reordering imports.
+
+That sentence was false in one place until the pre-release audit: two typed parameters in the same position were tried in the order they were inserted into the trie, which *is* registration order. Overlapping types are now a boot error (§5.5), and the pairs nothing can decide are tried in type-name order — the same on every boot, whichever file was imported first.
 
 ### 5.7 URL generation
 
@@ -899,7 +906,7 @@ A module is a collection plus a service scope plus a lifecycle participant. It i
 
 ### 6.6 Filesystem routing
 
-Provided by `@zenjs/fs-router`, not core. It is a **build/boot-time source that emits `RouteDefinition`s** — it does not introduce a second routing mechanism.
+Provided by `@visionpilot/zen-fs-router`, not core. It is a **build/boot-time source that emits `RouteDefinition`s** — it does not introduce a second routing mechanism.
 
 ```
 routes/
@@ -1036,7 +1043,7 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
 }
 ```
 
-Note what is absent: no `ctx.send()`, no `ctx.end()`, no `ctx.next()`, no `ctx.app`, no `ctx.throw()` (throw a real error — `throw new NotFound()`), no `ctx.assert()`, no `ctx.is()`/`ctx.accepts()` (those are free functions in `@zenjs/http` operating on `ctx`, so they tree-shake). Keeping this list short is a design activity, not an oversight; each method added to `Context` is a method every user must learn and every alternative implementation must provide.
+Note what is absent: no `ctx.send()`, no `ctx.end()`, no `ctx.next()`, no `ctx.app`, no `ctx.throw()` (throw a real error — `throw new NotFound()`), no `ctx.assert()`, no `ctx.is()`/`ctx.accepts()` (those are free functions in `@visionpilot/zen-http` operating on `ctx`, so they tree-shake). Keeping this list short is a design activity, not an oversight; each method added to `Context` is a method every user must learn and every alternative implementation must provide.
 
 ### 7.3 The immutability model — precisely
 
@@ -1074,7 +1081,7 @@ Mechanics:
 - `slot<T>(name, opts)` creates an opaque token. During boot the Slot Registry assigns each declared slot a **dense integer index**.
 - The generated `Ctx` constructor allocates `this.$s = new Array(SLOT_COUNT)` — one array, fixed length, per request.
 - `ctx.get(s)` compiles to `this.$s[s.i]`, `ctx.set(s, v)` to `this.$s[s.i] = v`. Both are monomorphic array accesses.
-- Slots with `dispose` are tracked in a small dirty-list so stage 10 can tear them down in reverse order.
+- Slots with `dispose` are tracked in a small dirty-list so stage 10 can tear them down in reverse order. The list records *values*, not slots: a slot set twice holds two things that each need releasing, and reading the slot's current value at settle time — which is what the first implementation did — disposed the second value twice and leaked the first.
 - A slot read before write throws `ZEN_SLOT_EMPTY` naming the slot and the route — vastly better than `undefined` propagating three layers into your business logic, which is the actual daily experience of `req.user`.
 
 Why this beats the alternatives:
@@ -1319,6 +1326,8 @@ A pipeline whose members are *all* `sync` and whose handler is `sync` compiles t
 3. A `pipeline: 'simple'` config switch lets any user opt out in one line if they ever suspect it.
 
 The `maybe` classification is also trampolined: a chain of ≥32 consecutive sync hops yields to avoid unbounded stack growth on pathological middleware counts.
+
+One interaction with `around` has to be stated, because it was a defect first. `Next` is typed `() => Promise<Reply>`, and the segment `next()` calls may be one this section compiled fully synchronous — which returns a bare `Reply`, and throws rather than rejecting. `next().then(…)` failed on exactly the optimised routes. So a synchronous segment is reached through an `async` wrapper: one promise, on a path that already allocates a closure, and nothing extra where the segment is async already. `benchmarks/request-path` asserts both halves against the emitted source.
 
 ### 8.5 Ordering
 
@@ -1733,11 +1742,11 @@ A plugin that throws during `setup` produces a `PluginError` carrying: plugin na
 
 Published plugins must:
 
-- Export the plugin as **default and named**; name the package `zen-plugin-*` (community) or `@zenjs/plugin-*` (first-party).
+- Export the plugin as **default and named**; name the package `zen-plugin-*` (community) or `@visionpilot/zen-plugin-*` (first-party).
 - Declare `zen` as a `peerDependency` with a range, never a dependency.
 - Ship `exports` with `types` first, ESM and CJS builds, and no side effects (`"sideEffects": false`).
 - Include a `zen.plugin.json` manifest fragment so `zen plugin search` and the registry can index capabilities without executing code.
-- Pass `@zenjs/plugin-test-kit`'s conformance suite: registers cleanly, tears down cleanly (no open handles after `app.close()`), is idempotent under `isolate`, and declares every slot/decoration it uses.
+- Pass `@visionpilot/zen-plugin-test-kit`'s conformance suite: registers cleanly, tears down cleanly (no open handles after `app.close()`), is idempotent under `isolate`, and declares every slot/decoration it uses.
 
 ---
 
@@ -1776,7 +1785,7 @@ Libraries predating or outside the spec get thin first-party adapters:
 | Zod, Valibot, ArkType, Effect | Standard Schema, native | Optional (via JSON Schema conversion) |
 | TypeBox | Already JSON Schema | ✅ Ajv or TypeCompiler |
 | Raw JSON Schema | Direct | ✅ Ajv |
-| Yup, Joi, superstruct | `@zenjs/validation-adapters` | ❌ native only |
+| Yup, Joi, superstruct | `@visionpilot/zen-validation-adapters` | ❌ native only |
 | Hand-written | `defineValidator({ validate })` | ❌ |
 
 ### 11.2 The `Validator` contract
@@ -1899,7 +1908,7 @@ Profiles resolve down the scope chain — app → collection → route — and *
 >
 > **The `body` row is per media type, and a profile is per source.** So the profile decides whether a route coerces its body at all, and the request's `Content-Type` decides whether that means anything: anything ending in `json` is excluded, everything else is not. Excluding JSON rather than including form-encoding specifically is what lets a custom parser for a string-shaped format (`text/csv`) behave the way its author expects. The cost is one header read on routes that opted in and none elsewhere; the alternative — having intake record which parser ran — means a new field on the context and therefore on the *generated* class too, in the same position (I2), which is a permanent per-request cost to save a lookup on a handful of routes. The normalisation reuses `mediaTypeOf`, the same function intake selects a parser with, so the two cannot disagree about `application/json ; charset=utf-8`.
 >
-> **Only top-level properties of a plain object are planned.** Not a shortcut: the sources this applies to are flat by construction, and the deep parsing that would create nesting is off by design. A `$ref` or union at the *root* of a query schema yields no plan and is silent about it, because `@zenjs/openapi` already reports the same schema as `ZEN_OAS_PARAMS_NOT_OBJECT`, and two warnings from two subsystems about one schema trains people to ignore both.
+> **Only top-level properties of a plain object are planned.** Not a shortcut: the sources this applies to are flat by construction, and the deep parsing that would create nesting is off by design. A `$ref` or union at the *root* of a query schema yields no plan and is silent about it, because `@visionpilot/zen-openapi` already reports the same schema as `ZEN_OAS_PARAMS_NOT_OBJECT`, and two warnings from two subsystems about one schema trains people to ignore both.
 >
 > **An unreadable schema coerces nothing, loudly.** `toJsonSchema` returning `null` — a library with no converter registered and no `toJSONSchema()` method — produces one aggregated boot warning naming the routes, not a silent absence. Aggregated rather than per route for §12.7's reason: fifty identical lines at boot is how a real signal gets filtered out of a log.
 
@@ -2112,7 +2121,7 @@ Non-exposed errors collapse to title/status/code/requestId. The `requestId` is a
   └
 
   chain  requestId → cors → requireAuth → validate(body) ✗
-  docs   https://zenjs.dev/errors/ZEN_VALIDATION
+  docs   https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_validation
 ```
 
 Terminal output is colourised, hyperlinked (OSC 8), and the file paths are clickable in every modern terminal. Framework frames are elided by default (`--stack=full` to keep them), because 40 lines of `node_modules/zen/dist/...` is how a stack trace becomes unreadable.
@@ -2435,7 +2444,7 @@ Exactly the lesson §32.2 records for `Vary: Origin`, and the same bug with a di
 
 The header describes what the response *depends on*, which is a property of the route rather than of this particular request. So it is staged unconditionally, on the negotiation step's first line, before anything can throw. It is staged rather than written for the reason §13.6 gives: staged metadata is applied by `prepareForWire` at egress, downstream of success, error and timeout alike — which is what puts `Vary: Accept` on the 406 itself.
 
-A negotiated route in an app that also uses CORS emits **both** `Vary: Origin` and `Vary: Accept`, and they must accumulate rather than overwrite. That is the defect §32.5 found in `@zenjs/adapter-node` and in `InjectedResponse`, in its new form: only `scripts/smoke.ts` can see it, because a reader of `entries()` that assigns instead of accumulating drops one value and both in-process readers used to do exactly that. There is a smoke check for the pair.
+A negotiated route in an app that also uses CORS emits **both** `Vary: Origin` and `Vary: Accept`, and they must accumulate rather than overwrite. That is the defect §32.5 found in `@visionpilot/zen-adapter-node` and in `InjectedResponse`, in its new form: only `scripts/smoke.ts` can see it, because a reader of `entries()` that assigns instead of accumulating drops one value and both in-process readers used to do exactly that. There is a smoke check for the pair.
 
 #### 13.4.6 Measured
 
@@ -2479,7 +2488,9 @@ a served 200                ~2.9 µs
 a refused 406              ~38   µs   ← 13× more expensive
 ```
 
-That is not a negotiation cost — the matcher answered in the nanoseconds above. It is the `Error` and the problem document, which §28.8 already records for the 404: 8.3 µs of a 404 is `Error.captureStackTrace` alone. A 406 flood is the same cheap hostile traffic a 404 flood is, and it inherits the same unfixed amplification. Recorded, not fixed, for the same reason: not capturing a stack changes what a developer sees in dev mode, which is a decision rather than an optimisation.
+That is not a negotiation cost — the matcher answered in the nanoseconds above. It is the `Error` and the problem document, which §28.8 already records for the 404: 8.3 µs of a 404 is `Error.captureStackTrace` alone. A 406 flood is the same cheap hostile traffic a 404 flood is, and it inherited the same amplification.
+
+> **Fixed since.** The decision turned out to have one answer: a routine refusal's stack only ever shows the dispatcher, in any mode, so it is not captured (`withoutStack`), and every `ZenError` captures its stack once instead of twice. A 406 now costs ~3.6× the 200 rather than 13×, and `benchmarks/refusals` gates it structurally — it fails if a framework refusal captures a frame, or if an application's own error stops keeping its stack (§28.8).
 
 #### 13.4.7 What is not negotiated
 
@@ -2513,7 +2524,11 @@ app.get('/events', ctx => {
 
 SSE is first-class rather than a recipe: `SseChannel` handles event framing, `id`/`retry` fields, `Last-Event-ID` resumption (the route can declare a `resume` function), heartbeat comments to defeat proxy idle timeouts, and automatic `Cache-Control: no-cache, no-transform` + `X-Accel-Buffering: no` so it works behind nginx without the config change everyone discovers the hard way.
 
-Files get conditional-request handling for free: `ETag` (weak, from size+mtime, or strong from content hash when configured), `Last-Modified`, `If-None-Match`/`If-Modified-Since` → 304, and `Range` → 206 with multipart support. Path traversal is blocked at the IR level: `{ kind: 'file' }` paths are resolved against a declared root and rejected if they escape it, so no plugin can accidentally serve `/etc/passwd`.
+> **Status: built, except resumption.** `ctx.sse()` frames events per the WHATWG grammar and refuses a line break in `event` or `id` rather than let it forge a field; heartbeats start with the first read, so an unconsumed channel owns no timer; backpressure is the adapter pulling frames, and `maxBuffered` (1 MiB) bounds what a client that stopped reading can make the server hold; and open streams receive a final `event: shutdown` during drain (§30.2). The `resume` function for `Last-Event-ID` is not built — the header reaches the handler, which can resume by hand.
+
+Files get conditional-request handling for free: `ETag` (weak, from size+mtime), `Last-Modified`, `If-None-Match`/`If-Modified-Since` → 304, and `Range` → 206. Path traversal is blocked at the IR level: `{ kind: 'file' }` paths are resolved against a declared root and rejected if they escape it — on the *real* path, so a symlink inside the root pointing out of it is refused too — so no plugin can accidentally serve `/etc/passwd`.
+
+> **Status: built, with two narrowings.** One byte range is honoured; a request for several is answered with the whole representation, which RFC 9110 §14.2 permits — `multipart/byteranges` is a known amplification vector (§19.3) for a feature almost nothing uses. And the ETag is weak only: a strong one needs a content hash, which means reading the file to answer a request that may only want to know whether it changed. A missing file, or a path that escapes its root, is an ordinary 404 through the error engine — decided before the status line is written, not a dropped connection.
 
 ### 13.6 Headers, cookies, and interaction ordering
 
@@ -2552,7 +2567,7 @@ Compression runs *after* ETag so the ETag identifies the resource, not its encod
 
 ### 14.1 The boundary
 
-`@zenjs/core` imports nothing from `node:`, has no reference to `Request`/`Response` globals, and does not assume streams exist. It talks to two interfaces:
+`@visionpilot/zen-core` imports nothing from `node:`, has no reference to `Request`/`Response` globals, and does not assume streams exist. It talks to two interfaces:
 
 ```ts
 interface RuntimeAdapter {
@@ -2593,14 +2608,14 @@ interface Capabilities {
 
 | Adapter | Package | Entry | Notes |
 | --- | --- | --- | --- |
-| Node | `@zenjs/adapter-node` | `http`/`https`/`http2` | Default; the optimised path (§14.3) |
-| Bun | `@zenjs/adapter-bun` | `Bun.serve` | Native WS, native file streaming |
-| Deno | `@zenjs/adapter-deno` | `Deno.serve` | |
-| Cloudflare Workers | `@zenjs/adapter-workers` | `fetch(req, env, ctx)` | `eval: false` → requires `zen build` |
-| Vercel Edge / Netlify Edge | `@zenjs/adapter-edge` | `fetch(req)` | Web-standard baseline |
-| AWS Lambda | `@zenjs/adapter-lambda` | handler(event) | API GW v1/v2, ALB, Function URLs, streaming responses |
-| Azure / GCP Functions | `@zenjs/adapter-faas` | handler | |
-| Test | `@zenjs/testing` | in-process | No sockets (§20.2) |
+| Node | `@visionpilot/zen-adapter-node` | `http`/`https`/`http2` | Default; the optimised path (§14.3) |
+| Bun | `@visionpilot/zen-adapter-bun` | `Bun.serve` | Native WS, native file streaming |
+| Deno | `@visionpilot/zen-adapter-deno` | `Deno.serve` | |
+| Cloudflare Workers | `@visionpilot/zen-adapter-workers` | `fetch(req, env, ctx)` | `eval: false` → requires `zen build` |
+| Vercel Edge / Netlify Edge | `@visionpilot/zen-adapter-edge` | `fetch(req)` | Web-standard baseline |
+| AWS Lambda | `@visionpilot/zen-adapter-lambda` | handler(event) | API GW v1/v2, ALB, Function URLs, streaming responses |
+| Azure / GCP Functions | `@visionpilot/zen-adapter-faas` | handler | |
+| Test | `@visionpilot/zen-testing` | in-process | No sockets (§20.2) |
 
 **The application code does not change between these.** What changes is the entry file and which optional plugins are compatible (a plugin declaring `requires: { fs: true }` fails at boot on Workers with a clear message, rather than at runtime with `fs is not defined`).
 
@@ -2628,7 +2643,7 @@ On Web-standard runtimes the same interface is backed by `Request`, and there it
 
 ### 14.4 Conformance suite
 
-`@zenjs/adapter-conformance` is a package of ~250 executable assertions every adapter must pass, covering: method/path/query fidelity (including encoded slashes and unicode), header multi-value handling, body forms (JSON/form/multipart/raw/empty/chunked), all `BodySource` kinds, status/header/cookie emission, `Range` and conditional requests, abort/disconnect signalling, timeouts, graceful shutdown, WebSocket upgrade where supported, and error propagation.
+`@visionpilot/zen-adapter-conformance` is a package of ~250 executable assertions every adapter must pass, covering: method/path/query fidelity (including encoded slashes and unicode), header multi-value handling, body forms (JSON/form/multipart/raw/empty/chunked), all `BodySource` kinds, status/header/cookie emission, `Range` and conditional requests, abort/disconnect signalling, timeouts, graceful shutdown, WebSocket upgrade where supported, and error propagation.
 
 An adapter is not published until it is green. This is what makes "runs anywhere without changing your code" a testable claim rather than a README bullet. Adapters may declare `skip` for capabilities they do not have (`fs: false` skips the file suite), and the skip list is printed in the adapter's README automatically.
 
@@ -2651,7 +2666,7 @@ Cold start is a first-class metric. `zen build --target lambda` produces a manif
 
 ### 14.7 Express compatibility
 
-`@zenjs/express-compat` lets an existing Express middleware run inside Zen:
+`@visionpilot/zen-express-compat` lets an existing Express middleware run inside Zen:
 
 ```ts
 app.use(fromExpress(helmet()))
@@ -2708,6 +2723,8 @@ A token is a unique symbol-backed object carrying a phantom type. No `reflect-me
 
 Request-scoped services reusing the slot array is the key implementation detail: a scoped token is assigned a slot index at boot, so `ctx.resolve(TenantService)` is `this.$s[i] ?? (this.$s[i] = create())` — an array read, not a map lookup, and no per-request container object is allocated. A request that resolves nothing allocates nothing.
 
+> **Status: built — and disposal only since the pre-release audit.** A scoped provider's `dispose` was accepted and never called, so a per-request transaction or pooled connection was dropped rather than released. A scoped instance with a `dispose` now joins the same stage-10 list as a disposable slot's value (§7.4), and is released newest first on every path, including a request that failed and one whose error reply could not be written either. Something acquired *after* its request settled — a handler still running behind a deadline that has already answered, whose transaction finishes opening a moment later — is released on arrival rather than queued on a list nothing will read again. A request that creates nothing disposable still allocates nothing, and awaits nothing to find that out — asserted in `benchmarks/request-path`.
+
 Disposal integrates with the explicit resource management proposal where available (`Symbol.asyncDispose`), and falls back to a `dispose` option otherwise.
 
 ### 15.4 Graph analysis
@@ -2735,7 +2752,7 @@ Overrides are applied before compilation, so the app under test is compiled with
 
 ### 15.6 For NestJS refugees
 
-`@zenjs/decorators` provides `@Injectable()`, `@Controller()`, `@Get()`, and constructor injection for teams that want it, implemented as a thin layer emitting ordinary `RouteDefinition`s and `provide()` calls. It is a separate package with its own TypeScript configuration requirements, so the core never pays for `emitDecoratorMetadata` and users who do not want decorators never encounter them. The layer is deliberately shallow: it produces the same AppGraph, so `zen routes` works identically and there is no second execution model.
+`@visionpilot/zen-decorators` provides `@Injectable()`, `@Controller()`, `@Get()`, and constructor injection for teams that want it, implemented as a thin layer emitting ordinary `RouteDefinition`s and `provide()` calls. It is a separate package with its own TypeScript configuration requirements, so the core never pays for `emitDecoratorMetadata` and users who do not want decorators never encounter them. The layer is deliberately shallow: it produces the same AppGraph, so `zen routes` works identically and there is no second execution model.
 
 ---
 
@@ -2836,7 +2853,7 @@ Boot failed: 3 problems
      (expected: string, min length 32)
      fix: Set JWT_SECRET in .env.local, or in your deployment secrets.
      also: Read by jwt, which will not work without it.
-     docs: https://zenjs.dev/errors/ZEN_ENV_INVALID
+     docs: https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#zen_env_invalid
 
   2. ZEN_ENV_INVALID  PORT — "abc" was rejected: expected integer
      (expected: integer, between 1 and 65535)
@@ -2920,7 +2937,7 @@ Genuine config reload (rotating a secret without a restart) is specified for exp
 
 ### 16.5 Secrets
 
-`@zenjs/config-secrets` supplies `ConfigSource` implementations for Vault, AWS Secrets Manager, GCP Secret Manager, and Doppler. Sources are async and run in layer 6.5; boot waits for them. Failed secret resolution is a boot failure, never a silent `undefined` — the failure mode where a missing secret becomes an empty signing key is a security incident, not a config warning.
+`@visionpilot/zen-config-secrets` supplies `ConfigSource` implementations for Vault, AWS Secrets Manager, GCP Secret Manager, and Doppler. Sources are async and run in layer 6.5; boot waits for them. Failed secret resolution is a boot failure, never a silent `undefined` — the failure mode where a missing secret becomes an empty signing key is a security incident, not a config warning.
 
 Not built, and the seam it will use is. `EnvSource` is a named list of entries with a layer, so an async source is a `Promise<EnvSource>` awaited before `resolveConfig` — no redesign, and nothing in the resolver needs to know where a value came from beyond its name.
 
@@ -2976,7 +2993,7 @@ Plugins contribute commands through `app.command()`; they appear under `zen <plu
 | `zen plugin <sub>` | `search`, `add`, `remove`, `graph`, `doctor`, `init` (scaffold a plugin package) |
 | `zen generate <kind>` | `route`, `collection`, `resource`, `plugin`, `middleware`, `schema`, `migration`, `test`. Uses the project's detected conventions, not a fixed template |
 | `zen benchmark` | Run the app under load. `--route`, `--compare <ref>`, `--profile`, `--flamegraph`. Emits a machine-readable report for CI gating |
-| `zen test` | Thin wrapper over the project's runner, preconfigured with `@zenjs/testing`, coverage, and type-tests |
+| `zen test` | Thin wrapper over the project's runner, preconfigured with `@visionpilot/zen-testing`, coverage, and type-tests |
 | `zen repl` | Interactive REPL with the app booted to `ready`: `await get('/users/1')`, `resolve(Db)`, `routes()`, `explain('user.show')` |
 | `zen upgrade` | Codemod-driven version migration (jscodeshift), with a dry-run diff |
 
@@ -3019,7 +3036,7 @@ This single artefact set delivers: near-zero production boot, Workers/CSP compat
 
 ### 17.5 Error rendering
 
-All CLI errors go through the same renderer as runtime errors (§12.6): code, message, source frame, cause chain, suggestion, docs link. A stack trace is shown only with `--verbose` or when the error is a framework bug. Every error code in Annex B has a page at `zenjs.dev/errors/<CODE>`, and the CLI links it directly.
+All CLI errors go through the same renderer as runtime errors (§12.6): code, message, source frame, cause chain, suggestion, docs link. A stack trace is shown only with `--verbose` or when the error is a framework bug. Every error code in Annex B has an entry in [`docs/errors.md`](./docs/errors.md), and the CLI links it directly — the same link every problem document's `type` carries.
 
 ---
 
@@ -3186,11 +3203,13 @@ Configuration is explicit and typed: `trustProxy: 'loopback' | 'linklocal' | 'un
 - **Prototype pollution:** all parsers strip `__proto__`, `constructor`, `prototype` keys, and objects produced by parsers use `Object.create(null)` where they will not be handed to user code as plain objects. `nested: false` for query strings by default (§11.4).
 - **Response injection:** header values are validated for CR/LF at set time (throws `ZEN_HEADER_INVALID`), never sanitised silently. Redirect targets are validated against an allowlist policy when `redirect.allowExternal` is false (default), closing the open-redirect hole.
 - **XSS:** `ctx.html()` accepts only a `SafeHtml` branded type or a string explicitly marked; a template helper (`html\`\``) escapes interpolations by default. JSON responses set `X-Content-Type-Options: nosniff` and the compiled serializer escapes `<`, `>`, `&`, `U+2028/2029` in strings, which prevents the JSON-in-HTML-script class of XSS.
+
+  > **Status, corrected.** Neither half of that bullet is built, and the second is decided against. `ctx.html()` takes a plain string and the `SafeHtml` brand and `html` helper do not exist yet — an application interpolating request data into HTML must escape it. The compiled serializer's output is *byte-identical to `JSON.stringify`* for the fields it emits, on purpose: that identity is what the differential suite and the serializer benchmark assert, and escaping `<` and `&` would send every string containing one down the slow path to protect a use — pasting an API response into a `<script>` — that is the embedding template's to escape. The control that does apply to JSON is the `Content-Type` plus `nosniff`, which `securityHeaders()` sets (§32.4). The same audit found the redirect bullet above unbuilt as well: `ctx.redirect()` rejects a CR or LF in the target (§13.6) but does not yet check it against an allowlist.
 - **Over-serialization:** covered by §13.3 — the highest-value control in this list.
 
 ### 19.6 Authentication and authorization
 
-Authentication is a plugin (`@zenjs/plugin-auth`) providing strategies (session, JWT, API key, OAuth2/OIDC, mTLS) that all resolve to a slot. Nothing in core knows what a user is.
+Authentication is a plugin (`@visionpilot/zen-plugin-auth`) providing strategies (session, JWT, API key, OAuth2/OIDC, mTLS) that all resolve to a slot. Nothing in core knows what a user is.
 
 Authorization is a first-class *route concern* because it must be visible in the AppGraph — for OpenAPI, for `zen routes`, and for the audit question "which endpoints are unauthenticated?":
 
@@ -3217,7 +3236,7 @@ Double-submit cookie plus `Origin`/`Sec-Fetch-Site` verification, on by default 
 
 ### 19.8 Supply chain
 
-- **Zero runtime dependencies in `@zenjs/core`.** Not a slogan — a CI check. Router, validation engine, and adapters have small, audited dependency sets with pinned versions and an allowlist reviewed on every change.
+- **Zero runtime dependencies in `@visionpilot/zen-core`.** Not a slogan — a CI check. Router, validation engine, and adapters have small, audited dependency sets with pinned versions and an allowlist reviewed on every change.
 - Every release is published with npm provenance/attestation and a signed SBOM (CycloneDX).
 - `zen doctor --supply-chain` reports the app's transitive dependency count, known advisories, and any package that gained an install script since the last lockfile.
 - A published security policy: coordinated disclosure, 90-day window, security advisories for every fix, and backports to the last two minor versions.
@@ -3242,9 +3261,9 @@ zen openapi --security    → the same, as an OpenAPI security requirements repo
 | --- | --- | --- | --- |
 | Type | `expectTypeOf` / `tsd` | ms | Inference is correct; no `any` escapes |
 | Unit | node:test / vitest | µs | Handlers are functions returning values |
-| Injection | `@zenjs/testing` | ~50 µs/req | Full pipeline, no sockets |
+| Injection | `@visionpilot/zen-testing` | ~50 µs/req | Full pipeline, no sockets |
 | Integration | real adapter + ephemeral port | ~1 ms/req | Adapter behaviour |
-| Conformance | `@zenjs/adapter-conformance` | — | Adapters are interchangeable |
+| Conformance | `@visionpilot/zen-adapter-conformance` | — | Adapters are interchangeable |
 | Differential | fuzzer | — | Compiled ≡ interpreted |
 | Contract | OpenAPI snapshot + client codegen | — | The API surface did not change silently |
 | Load | `zen benchmark` | — | Performance targets hold |
@@ -3267,7 +3286,7 @@ Injection runs the **entire** pipeline — hooks, middleware, validation, serial
 
 **What it observes must be what the wire observes**, or a passing test is worse than no test. `res.text()` already runs the reply through the compiled serializer for that reason — an `inject()` that showed fields the socket would have filtered would make tests actively misleading about §13.3. The same rule caught a second reader in §32.5: `res.header()` returned the *first* value of a repeated header and `res.headers` kept the *last*, while every HTTP client joins them with `", "` — so an assertion about `Vary` was getting a third of the truth and passing. Both now join the way WHATWG `Headers.get` does, with `Set-Cookie` excluded exactly as the spec excludes it, and `res.headerValues(name)` returns the unjoined list.
 
-There remains one class `inject()` cannot reach at all, and it is worth naming so that the smoke suite's existence is not mistaken for belt-and-braces: anything the *adapter* does. The repeated-header defect above had a twin in `@zenjs/adapter-node`, and only a real socket could see it.
+There remains one class `inject()` cannot reach at all, and it is worth naming so that the smoke suite's existence is not mistaken for belt-and-braces: anything the *adapter* does. The repeated-header defect above had a twin in `@visionpilot/zen-adapter-node`, and only a real socket could see it.
 
 With one honest limit, which is why `scripts/smoke.ts` exists alongside it: `inject()` captures the Reply instead of writing it, so the *cost* of egress is not in anything it measures. `onResponse` still fires and still sees the finished reply, but the stage-10 contract — "it ran after the last byte, and it could not have changed anything" — is only genuinely under test over a real socket.
 
@@ -3374,7 +3393,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 
    Shutdown ordering belongs in this list too, and it lives in `scripts/smoke.ts` rather than here, because "readiness went red before the socket stopped accepting" needs a real socket to be open while the process is shutting down. It was unfalsifiable before §31.4 existed, and it was wrong for exactly that long.
 
-6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Twelve controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
+6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Forty-three controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
 
    This is a different property from every other entry in this list, and it is the one nothing else in the repo checks. Correctness tests answer "is the code right"; this answers "would we find out if it stopped being right", and the two come apart constantly and invisibly. Every pass of this codebase had run some version of it by hand and written down that it was worth automating; §13.4 was the pass that did.
 
@@ -3394,7 +3413,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 ### 21.1 The five-line app
 
 ```ts
-import { zen } from 'zen'
+import { zen } from '@visionpilot/zen'
 
 const app = zen()
 app.get('/', () => 'Hello world')
@@ -3426,7 +3445,7 @@ export const ListQuery = z.object({
 
 ```ts
 // src/features/users/routes.ts
-import { collection, NotFound, Conflict } from 'zen'
+import { collection, NotFound, Conflict } from '@visionpilot/zen'
 import { CurrentUser } from '../auth/slots'
 import { UserService } from './service'
 
@@ -3486,10 +3505,10 @@ export const userRoutes = collection('/users', {
 
 ```ts
 // src/app.ts
-import { zen } from 'zen'
-import { cors, rateLimit, requestId, securityHeaders } from '@zenjs/middleware'
-import { healthPlugin } from 'zen'
-import { LoggerPlugin, OpenAPIPlugin } from '@zenjs/plugins'
+import { zen } from '@visionpilot/zen'
+import { cors, rateLimit, requestId, securityHeaders } from '@visionpilot/zen-middleware'
+import { healthPlugin } from '@visionpilot/zen'
+import { LoggerPlugin, OpenAPIPlugin } from '@visionpilot/zen-plugins'
 import { AuthPlugin } from './features/auth/plugin'
 import { userRoutes } from './features/users/routes'
 import { billingModule } from './features/billing'
@@ -3545,7 +3564,7 @@ app.after((ctx, reply) => reply.status === 500 && !ctx.config.debug
 
 ```ts
 // packages/plugin-cache/src/index.ts
-import { definePlugin, token, slot } from 'zen'
+import { definePlugin, token, slot } from '@visionpilot/zen'
 import { z } from 'zod'
 
 export const CacheToken = token<Cache>('cache')
@@ -3655,15 +3674,15 @@ app.onError(DatabaseError, (err, ctx) => {
 
 ```ts
 // entry.node.ts
-import { serve } from '@zenjs/adapter-node'
+import { serve } from '@visionpilot/zen-adapter-node'
 serve(makeApp(), { port: 3000 })
 
 // entry.workers.ts
-import { toFetch } from '@zenjs/adapter-workers'
+import { toFetch } from '@visionpilot/zen-adapter-workers'
 export default { fetch: toFetch(makeApp()) }
 
 // entry.lambda.ts
-import { toLambda } from '@zenjs/adapter-lambda'
+import { toLambda } from '@visionpilot/zen-adapter-lambda'
 export const handler = toLambda(makeApp())
 ```
 
@@ -3676,7 +3695,7 @@ export const handler = toLambda(makeApp())
 export type AcmeApi = typeof app
 
 // client — zero codegen, types only
-import { createClient } from '@zenjs/client'
+import { createClient } from '@visionpilot/zen-client'
 import type { AcmeApi } from '../server/src/app'
 
 const api = createClient<AcmeApi>({ baseUrl: 'https://api.acme.com' })
@@ -3705,7 +3724,7 @@ interface App<X extends ContextExtensions = {}> {
   after(mw: AfterMiddleware<any, X>): this
 
   get<P extends string, S extends RouteSchema>(path: P, spec: S, h: Handler<S & { __path: P }, X>): this
-  // …post, put, patch, delete, head, options, all
+  // …post, put, patch, delete, head, options, and all — one ordinary route per method
   route(def: RouteDefinition): this
   collection(prefix: string, opts: CollectionOptions, build: (c: Collection<X>) => void): this
   resource(prefix: string, controller: ResourceController, opts?: ResourceOptions): this
@@ -3724,7 +3743,8 @@ interface App<X extends ContextExtensions = {}> {
   seal(): App<Prettify<X>>
   ready(): Promise<FrozenApp<X>>
   graph(): AppGraph                     // available after ready()
-  listen(opts: ListenOptions): Promise<ServerHandle>
+  listen(port: number, host?: string): Promise<ServerHandle>   // app.listen(3000), §1.2
+  listen(opts?: ListenOptions): Promise<ServerHandle>           // port, host, signal
   close(reason?: string): Promise<void>
   readonly state: 'starting' | 'live' | 'draining' | 'stopped'          // §4.5
 }
@@ -4187,24 +4207,24 @@ my-api/
 | Package | Purpose | Deps | Target size (min+gz) | Stability |
 | --- | --- | --- | --- | --- |
 | `zen` | Meta-package: re-exports core + router + node adapter + common middleware | workspace | — | v1 |
-| `@zenjs/core` | Registries, compilers, runtime, context, errors, response engine, content negotiation | **none** | ~28 kB | v1 |
-| `@zenjs/router` | Compiled + interpreted radix routers, path syntax, conflict analysis | core | ~9 kB | v1 |
-| `@zenjs/validation` | Standard Schema integration, strategies, coercion, converters | core | ~7 kB | v1 |
-| `@zenjs/validation-ajv` | Ajv strategy for JSON-Schema-capable schemas | validation, ajv | ~2 kB + ajv | v1 |
-| `@zenjs/openapi` | AppGraph → OAS 3.1, `$ref` dedup, diffing, plugin, viewer — **built** | core | ~11 kB | v1 |
-| `@zenjs/openapi-ui` | Scalar/Swagger/Redoc serving. Folded into `openapi` for now: the built-in viewer has no dependencies and a CDN-backed one is five lines of application code, so a package would be premature | openapi | ~3 kB | future |
-| `@zenjs/di` | Container, tokens, lifetimes, graph analysis | core | ~5 kB | v1 |
-| ~~`@zenjs/config`~~ | **Folded into core as `registry/config-store.ts`.** Principle 1 says a package exists because someone might swap it, and nobody swaps this: `AppGraph.config` is a core contract (§22.1), `ctx.config` is a field on the generated context class (§16.3), and §16.2 requires validation to run inside `ready()` before any plugin does. What would have been left in a separate package is a two-hundred-line pure fold that nothing can replace independently — while the part that genuinely *is* replaceable, `EnvSource`, stays a seam either way (§3.5). Same reasoning as `-health`, one row down | core | — | **built** |
-| `@zenjs/testing` | Injection harness, test context, matchers, overrides | core | ~5 kB | v1 |
-| `@zenjs/client` | Type-only RPC client + fetch runtime | — | ~3 kB | v1 |
-| `@zenjs/cli` | CLI kernel, loader, commands | many (dev only) | — | v1 |
+| `@visionpilot/zen-core` | Registries, compilers, runtime, context, errors, response engine, content negotiation | **none** | ~28 kB | v1 |
+| `@visionpilot/zen-router` | Compiled + interpreted radix routers, path syntax, conflict analysis | core | ~9 kB | v1 |
+| `@visionpilot/zen-validation` | Standard Schema integration, strategies, coercion, converters | core | ~7 kB | v1 |
+| `@visionpilot/zen-validation-ajv` | Ajv strategy for JSON-Schema-capable schemas | validation, ajv | ~2 kB + ajv | v1 |
+| `@visionpilot/zen-openapi` | AppGraph → OAS 3.1, `$ref` dedup, diffing, plugin, viewer — **built** | core | ~11 kB | v1 |
+| `@visionpilot/zen-openapi-ui` | Scalar/Swagger/Redoc serving. Folded into `openapi` for now: the built-in viewer has no dependencies and a CDN-backed one is five lines of application code, so a package would be premature | openapi | ~3 kB | future |
+| `@visionpilot/zen-di` | Container, tokens, lifetimes, graph analysis | core | ~5 kB | v1 |
+| ~~`@visionpilot/zen-config`~~ | **Folded into core as `registry/config-store.ts`.** Principle 1 says a package exists because someone might swap it, and nobody swaps this: `AppGraph.config` is a core contract (§22.1), `ctx.config` is a field on the generated context class (§16.3), and §16.2 requires validation to run inside `ready()` before any plugin does. What would have been left in a separate package is a two-hundred-line pure fold that nothing can replace independently — while the part that genuinely *is* replaceable, `EnvSource`, stays a seam either way (§3.5). Same reasoning as `-health`, one row down | core | — | **built** |
+| `@visionpilot/zen-testing` | Injection harness, test context, matchers, overrides | core | ~5 kB | v1 |
+| `@visionpilot/zen-client` | Type-only RPC client + fetch runtime | — | ~3 kB | v1 |
+| `@visionpilot/zen-cli` | CLI kernel, loader, commands | many (dev only) | — | v1 |
 | `create-zen` | `npm create zen@latest` | — | — | v1 |
 | **Adapters** | | | | |
-| `@zenjs/adapter-node` | `http`/`https`/`http2`, fast path | core | ~7 kB | v1 |
-| `@zenjs/adapter-bun` / `-deno` / `-workers` / `-edge` / `-lambda` / `-faas` | | core | 2–5 kB | v1 / beta |
-| `@zenjs/adapter-conformance` | The suite every adapter must pass | testing | — | v1 |
+| `@visionpilot/zen-adapter-node` | `http`/`https`/`http2`, fast path | core | ~7 kB | v1 |
+| `@visionpilot/zen-adapter-bun` / `-deno` / `-workers` / `-edge` / `-lambda` / `-faas` | | core | 2–5 kB | v1 / beta |
+| `@visionpilot/zen-adapter-conformance` | The suite every adapter must pass | testing | — | v1 |
 | **Middleware** | | | | |
-| `@zenjs/middleware` | `cors` · `securityHeaders` · `requestId` · `rateLimit`, plus the `Store` seam — **built** (§32). One package rather than eight: principle 1 says a package exists because someone might *swap* it, and nobody swaps CORS for a different CORS. What is genuinely replaceable here is the `Store`, and that is an interface either way | core | ~4 kB | **built** |
+| `@visionpilot/zen-middleware` | `cors` · `securityHeaders` · `requestId` · `rateLimit`, plus the `Store` seam — **built** (§32). One package rather than eight: principle 1 says a package exists because someone might *swap* it, and nobody swaps CORS for a different CORS. What is genuinely replaceable here is the `Store`, and that is an interface either way | core | ~4 kB | **built** |
 | ~~`-compression`~~ ~~`-static`~~ | Not in the pack and not planned for it. Both need a platform, and §14.1 already models compression as an *adapter* capability; a middleware package importing `node:zlib` is one the edge adapters cannot load (§32.6) | adapter | — | future |
 | ~~`-timeout`~~ ~~`-body-limit`~~ | **Already core route policy** — §4.4's deadlines and §19.2's body limits. A middleware wrapping either would be a second way to say the same thing, with its own precedence rules for the case where both are set. This row predates both features | core | — | **built (as core)** |
 | ~~`-negotiation`~~ ~~`-csv`~~ | **Core route policy too**, and the boundary is worth stating because it is not the same one as the row above. Negotiation itself is core: it decides which compiled serializer runs, so it cannot live outside the thing that compiles them, and a middleware could not refuse with a 406 before intake without re-implementing stage 5. What a *package* could sensibly contain is an encoder — a good CSV or XML writer is a real library with real opinions — and `registerMediaEncoder` is the seam for exactly that (§13.4.4). No first-party one is planned: `examples/negotiation` ships ~60 lines of CSV to show the shape, and picking a dialect on everyone's behalf is what that seam exists to avoid | core + userland | — | **built (as core)** |
@@ -4217,10 +4237,10 @@ my-api/
 | `-fs-router` | Filesystem routing → RouteDefinitions | core | ~6 kB | beta |
 | `-graphql` `-trpc` `-grpc` | Protocol adapters mounted as routes | core | varies | beta |
 | **Compat / tooling** | | | | |
-| `@zenjs/express-compat` | Wrap Express middleware; mount Zen in Express | core | ~4 kB | v1 |
-| `@zenjs/plugin-test-kit` | Plugin conformance suite | testing | — | v1 |
+| `@visionpilot/zen-express-compat` | Wrap Express middleware; mount Zen in Express | core | ~4 kB | v1 |
+| `@visionpilot/zen-plugin-test-kit` | Plugin conformance suite | testing | — | v1 |
 | `eslint-plugin-zen` | Lint rules for app code (unused schemas, missing response schemas, unsafe defaults) | — | — | beta |
-| `@zenjs/lsp` | Editor integration: route hovers, jump-to-route from a URL string | — | — | future |
+| `@visionpilot/zen-lsp` | Editor integration: route hovers, jump-to-route from a URL string | — | — | future |
 
 ### 24.3 Dependency graph
 
@@ -4251,7 +4271,7 @@ No cycles, no package depending on an adapter, `core` a sink.
 ### 24.4 Versioning policy
 
 - **Semver, strictly.** Public API = exported types, runtime API, error codes, generated OpenAPI shape, and documented default behaviour. Changing any is a major.
-- Adapters and plugins declare `peerDependencies: { "@zenjs/core": "^1" }`.
+- Adapters and plugins declare `peerDependencies: { "@visionpilot/zen-core": "^1" }`.
 - A published compatibility matrix (`docs/compatibility`) generated from lockfiles in CI.
 - **Deprecations run one full major.** Deprecated APIs warn once per process with the replacement and a codemod name; `zen upgrade` applies the codemod.
 - Experimental features live behind `zen({ experimental: { … } })` with explicit opt-in and no semver guarantee, and the flag names appear in `zen doctor`.
@@ -4274,7 +4294,7 @@ Sequenced so that each milestone is independently useful and each one *validates
 
 ### M1 — `0.1` Foundations (8 weeks)
 
-Context + slots · Route Registry + collections · phase/around/after middleware · hooks (all 12 phases) · error engine + Problem Details · response engine (json/text/stream/file/redirect) · Node adapter · `@zenjs/testing` injection · basic CLI (`dev`, `routes`).
+Context + slots · Route Registry + collections · phase/around/after middleware · hooks (all 12 phases) · error engine + Problem Details · response engine (json/text/stream/file/redirect) · Node adapter · `@visionpilot/zen-testing` injection · basic CLI (`dev`, `routes`).
 
 **Exit:** the `rest-api` example runs end to end; injection tests pass; benchmarks published.
 
@@ -4314,7 +4334,7 @@ Standard Schema integration ✅ · coercion profiles ✅ · compiled validators 
 
 ### M4 — `0.4` Ecosystem (8 weeks)
 
-OpenAPI 3.1 generator + UI · type-only client · first-party middleware (cors, security headers, rate-limit, request-id — **built**; compression and static deferred, §32.6) · plugins (logger, auth, jwt, session, csrf, cookie, multipart, health, metrics) · `@zenjs/plugin-test-kit`.
+OpenAPI 3.1 generator + UI · type-only client · first-party middleware (cors, security headers, rate-limit, request-id — **built**; compression and static deferred, §32.6) · plugins (logger, auth, jwt, session, csrf, cookie, multipart, health, metrics) · `@visionpilot/zen-plugin-test-kit`.
 
 **Exit:** a public app can be built with zero third-party middleware.
 
@@ -4332,7 +4352,7 @@ OpenAPI 3.1 generator + UI · type-only client · first-party middleware (cors, 
 >
 > The thing worth carrying forward is smaller than the feature and is about the *tests*. §13.4 was the pass that turned the hand-run negative controls into `scripts/negative-controls.ts`, and the script immediately caught a property fuzzer asserting on a branch its generator had never produced. Every pass had written down that automating this was worth doing; the first one to do it found something the same afternoon.
 
-> **The health plugin was pulled forward too** (§31.4), and for a reason specific to it rather than the general "readers find gaps" argument. It is listed here beside `logger`, `auth` and `metrics` as though it were the same kind of thing, and it is not: those observe a running service, whereas health *owns lifecycle state* and is what §4.5 step 1 flips before the socket closes. Nothing else can own that, and until something did, step 1 was unimplementable and — as it turned out — unimplemented. It also cost about a day, which made deferring it to an eight-week milestone hard to justify while the shutdown sequence was quietly running in the wrong order. It shipped in core rather than as `@zenjs/plugin-health` for the same reason: the registry is lifecycle machinery, and only the two endpoints are a plugin.
+> **The health plugin was pulled forward too** (§31.4), and for a reason specific to it rather than the general "readers find gaps" argument. It is listed here beside `logger`, `auth` and `metrics` as though it were the same kind of thing, and it is not: those observe a running service, whereas health *owns lifecycle state* and is what §4.5 step 1 flips before the socket closes. Nothing else can own that, and until something did, step 1 was unimplementable and — as it turned out — unimplemented. It also cost about a day, which made deferring it to an eight-week milestone hard to justify while the shutdown sequence was quietly running in the wrong order. It shipped in core rather than as `@visionpilot/zen-plugin-health` for the same reason: the registry is lifecycle machinery, and only the two endpoints are a plugin.
 
 ### M5 — `0.5` Developer Experience (6 weeks)
 
@@ -4358,7 +4378,7 @@ API freeze · semver commitment · LTS policy (18 months per major, security bac
 
 Ordered by expected value, not by novelty:
 
-1. **`@zenjs/lsp`** — jump from a URL string in client code to its route definition; hover a route to see its compiled chain. The AppGraph makes this genuinely feasible and nothing else in the ecosystem can do it.
+1. **`@visionpilot/zen-lsp`** — jump from a URL string in client code to its route definition; hover a route to see its compiled chain. The AppGraph makes this genuinely feasible and nothing else in the ecosystem can do it.
 2. **Route-level performance budgets** — declare `budget: { p99: '50ms' }`; CI fails when a benchmark exceeds it.
 3. **Distributed tracing of the pipeline itself** — per-stage spans, so a slow request is attributable to validation vs handler vs serialization without guessing.
 4. **Multi-tenant compilation** — per-tenant route subsets compiled independently for SaaS platforms with tenant-specific APIs.
@@ -4628,7 +4648,7 @@ The strongest architecture loses to the framework people already know. Nothing i
 | Multipart to cloud storage without touching disk | Planned; the streaming interface supports it, the plugin does not yet |
 | Content negotiation beyond `Accept` (language, encoding as first-class) | `Accept` is **built** (§13.4). `Accept-Language` and `Accept-Encoding` use the same grammar and `compile/media-type.ts` would parse them, but nothing consumes them: compression is modelled as an *adapter* capability (§14.1), which is where `Accept-Encoding` belongs, and language negotiation needs a resource model this framework does not have. `Accept-Charset` is deprecated by RFC 9110 §12.5.2 and everything Zen writes is UTF-8 |
 | A route with one declared representation ignores `Accept` entirely | §13.4.1 — deliberate, and RFC 9110 §12.5.1 permits it explicitly. The alternative is every route in every application parsing a header to discover it has nothing to decide. A route that wants the strict answer opts in by writing the variant form with one media type in it, and then gets a 406 |
-| **A 406 costs ~13× the 200 it would otherwise have been** | 35.7 µs against 2.8 µs (§13.4.6). Not a negotiation cost — the matcher answers in nanoseconds — but the same `Error` amplification the 404 row below records, reached by a different route. An `Accept: application/pdf` flood is as cheap to send as a 404 flood and gets the same free multiplier |
+| ~~A 406 costs ~13× the 200 it would otherwise have been~~ | **Fixed.** 35.7 µs against 2.8 µs was the `Error` amplification the 404 row below records. A routine refusal no longer captures a stack, and a 406 costs ~3.6× the 200 (`benchmarks/refusals`, gated structurally) |
 | Media-range parameters other than `q` are ignored | §13.4.3 — `Accept: application/json;profile="urn:x"` matches an `application/json` offer. RFC 9110 makes those parameters part of the range, so this is a real simplification; it is also the one every implementation makes, because offers are `type/subtype` by construction and there would be nothing for a parameter to match against. When a route can declare `;profile=`, `normaliseMediaType` is where it changes |
 | At most 32 `Accept` ranges are parsed | §13.4.3 — browsers send one to five. The adapter caps header size, but an 8 kB `Accept` is ~800 ranges and parsing those per attacker-chosen header is an amplification factor. Ranges past the cap are ignored rather than rejected, so a proxy that concatenated two headers still gets an answer |
 | A media encoder cannot produce bytes, only a string | §13.4.4 — `MediaEncoderFactory` returns `(value) => string`, and egress encodes it as UTF-8. A binary representation is a `ctx.bytes()` reply, which the handler already controls completely; widening the hot path to `string \| Uint8Array` for a case nothing exercises is the surface §9.7 argues against |
@@ -4638,10 +4658,10 @@ The strongest architecture loses to the framework people already know. Nothing i
 | `zen build` reproducibility across Node versions | Verified in CI for the supported matrix only |
 | OpenAPI `securitySchemes` are declared, but no route-level policy generates them | §29 reads `meta.security`; the `authorize` machinery of §19.6 that should populate it does not exist yet, so security requirements are hand-written today |
 | Query parameters are documented from a plain object schema only | A `$ref` or union at the root of a `query` schema cannot be split into `ParameterObject`s; reported as an `info` diagnostic rather than guessed at |
-| **An unmatched request costs ~10× a matched one, and it is the `Error` object** | Measured in §32.5: 24.1 µs against 2.7 µs, of which 15.9 µs is constructing `NotFound` and 8.3 µs of *that* is `Error.captureStackTrace`. A 404 flood is the cheapest hostile traffic there is and it arrives with a free amplification factor of ten. Not fixed here because the fix — not capturing a stack on the routine 404/405 path — changes what a developer sees in dev mode, which is a decision rather than an optimisation. `zen.ts`'s comment calling that path "off the hot path by construction" is also now wrong for a browser-facing service, where every preflight lands there until CORS answers it. **This row has now been reached twice from two directions** — §32.5 found it behind a preflight, §13.4.6 behind a 406 — which is the signal that the amplification is a property of the framework's routine refusal path rather than of either feature, and the strongest argument yet for fixing it |
+| ~~An unmatched request costs ~10× a matched one, and it is the `Error` object~~ | **Fixed** — a 404 now costs ~2.3× a served request, a 405 ~2.6×, and `benchmarks/refusals` fails the build if a framework refusal captures a stack frame again. The history, kept because it is the argument: measured in §32.5: 24.1 µs against 2.7 µs, of which 15.9 µs is constructing `NotFound` and 8.3 µs of *that* is `Error.captureStackTrace`. A 404 flood is the cheapest hostile traffic there is and it arrives with a free amplification factor of ten. Not fixed here because the fix — not capturing a stack on the routine 404/405 path — changes what a developer sees in dev mode, which is a decision rather than an optimisation. `zen.ts`'s comment calling that path "off the hot path by construction" is also now wrong for a browser-facing service, where every preflight lands there until CORS answers it. **This row has now been reached twice from two directions** — §32.5 found it behind a preflight, §13.4.6 behind a 406 — which is the signal that the amplification is a property of the framework's routine refusal path rather than of either feature, and the strongest argument yet for fixing it |
 | Rate limiting is a **fixed window** | Up to `2 × limit` across a window's worth of time straddling a boundary (§32.4). A sliding log is unbounded memory per key and the key is attacker-chosen; a sliding-window counter cannot be expressed as `INCR` + `PEXPIRE`, so it would push every alternate `Store` into a Lua script. The trade is stated in the source, not hidden |
 | No per-route rate limits as a first-class option | A route-scoped `onRequest` hook does it today and `examples/middleware` shows the pattern, but the two counters do not know about each other, so "which limit refused this" is not on the response |
-| `compression` and `static` are not in `@zenjs/middleware` | §32.6. Both need `node:zlib` / `node:fs`; §14.1 already models compression as an adapter capability, which is the right home. They belong to an adapter-coupled package that does not exist yet |
+| `compression` and `static` are not in `@visionpilot/zen-middleware` | §32.6. Both need `node:zlib` / `node:fs`; §14.1 already models compression as an adapter capability, which is the right home. They belong to an adapter-coupled package that does not exist yet |
 | CORS secrecy of the allowlist is by construction, not by policy | A rejected preflight gets a bare 204, so the list cannot be enumerated — but a *timing* difference between a Set lookup and a user predicate is observable in principle. Not modelled, and probably not worth modelling |
 | Private-network preflight (`Access-Control-Allow-Private-Network`) | Chrome-specific and still a draft; not implemented |
 | `onRegister` cannot fire | §9.7 — plugin order resolves before any hook can be registered. Permanent; registering the hook is a boot error naming the phase, not a silent no-op |
@@ -4657,7 +4677,7 @@ The strongest architecture loses to the framework people already know. Nothing i
 | A health check cannot be registered after boot | Consistent with every other registration (§2.2), but it means a dependency discovered at runtime — a tenant-specific database, a dynamically mounted plugin — cannot publish a probe. No design yet; the honest answer today is to register one check that iterates |
 | `dates` coercion is declared and not implemented | §11.4 — no shape language can say "this position wants a `Date`". `z.toJSONSchema(z.date())` throws, so the only thing to guess at is `format: 'date-time'`, which is the one case where the validator provably wants a *string*. `z.coerce.date()` covers it in one call, checked by the library that owns the type |
 | `nested` query parsing is declared and not implemented | §11.4, §19.5 — `qs`-style deep parsing is a prototype-pollution and algorithmic-complexity surface. `arrays: 'bracket'` handles `?a[]=1`, which is the half people use |
-| Coercion plans only top-level properties of a plain object | §11.4 — the four sources it applies to are flat by construction, but it means a `$ref` or a union at the *root* of a query schema is not planned. Silent, because `@zenjs/openapi` already reports the same schema, and two warnings from two subsystems about one schema trains people to ignore both |
+| Coercion plans only top-level properties of a plain object | §11.4 — the four sources it applies to are flat by construction, but it means a `$ref` or a union at the *root* of a query schema is not planned. Silent, because `@visionpilot/zen-openapi` already reports the same schema, and two warnings from two subsystems about one schema trains people to ignore both |
 | Body coercion is per source, and the media-type distinction is per request | §11.4 — the profile says whether a route coerces its body; `Content-Type` decides whether that applies, by excluding anything ending in `json`. A route with a custom parser for a *binary* format that also enabled body coercion would have the plan run against whatever that parser returned — harmless today (the coercer no-ops on non-objects) but not checked |
 | A coercion plan cannot be extended by userland | §11.4 — the op set is closed, because every entry has to be something the *schema language* can request, and a user-defined coercion has no way to be asked for. `z.transform` is the escape hatch, and it runs inside the validator where its failure has somewhere to go |
 | Liveness cannot detect a wedged event loop from inside | §31.4 — if the loop were blocked the reply would not be written at all, so the orchestrator's own probe timeout is what fires. A registered liveness probe can warn early; it cannot report the case it is named for |
@@ -4667,13 +4687,16 @@ The strongest architecture loses to the framework people already know. Nothing i
 | `reloadable` keys and `onConfigChange` are specified and unbuilt | §16.4 — it needs a thirteenth app phase and a subscription model, and building it before anyone has asked would add the one thing §16.4 argues against. Everything requires a restart, and says so |
 | Config resolution is quadratic in leaves, at boot | §16.1 — each new leaf scans the existing set to evict a shadowed subtree. At realistic sizes it is linear in practice (128 leaves × 2 layers is ~250 µs, once) and the constant is dominated by the fold itself; it would matter at thousands of leaves, which no configuration has |
 | A plugin's config namespace is merged at runtime but not accumulated at the type level | §16.3 — `config.mailer.from` resolves and is typed `unknown` unless the application declares the namespace itself. Type-level accumulation through `.use()` is exactly the mapped-type growth §10.4 warns about, and the M2 gate is the reason it was not attempted |
+| Two parameter types' overlap is established from witnesses, not decided | §5.5 — whether two predicates share a value is undecidable in general. The builtins carry witness values chosen to expose every overlap among them; an application type contributes `jsonSchema.examples`. Two application types with no examples cannot be checked, and are reported as `ZEN_ROUTE_TYPES_UNDECIDED` and tried in type-name order rather than guessed at |
+| `ctx.html()` takes any string, and redirect targets are not allowlisted | §19.5 specifies a `SafeHtml` brand with an escaping `html` template helper, and a redirect allowlist; neither is built. A CR or LF in a redirect target or any header is refused (§13.6). Until then, escaping interpolated request data in HTML, and validating where a redirect goes, is the application's |
+| The serializer does not escape `<`, `>`, `&` or U+2028/2029 | §19.5, corrected — decided against, not deferred. Its output is byte-identical to `JSON.stringify` for the fields it emits, which is what the differential suite asserts; the control for JSON is `Content-Type` plus `nosniff` (`securityHeaders()`), and JSON embedded in an HTML `<script>` is the embedding template's to escape |
 
 ---
 # Part IX — Extended Subsystems
 
 ## 29. OpenAPI & Code Generation
 
-> **Status: built** (`@zenjs/openapi`), except client generation (§29.6). Runnable in `examples/openapi`.
+> **Status: built** (`@visionpilot/zen-openapi`), except client generation (§29.6). Runnable in `examples/openapi`.
 
 ### 29.1 Why this is architecture, not a plugin concern
 
@@ -4723,7 +4746,7 @@ Three entries in that table are not obvious.
 
 **A route with no `response` schema is a warning, not an invented `200`.** The generator emits a `default` response saying the payload is undocumented, and reports it. With `strict: true` that fails the boot — which is proportionate, because a route with no response schema is *also* unfiltered on the way out (§13.3).
 
-`graph.paramTypes` deserves a note. `@zenjs/openapi` must not depend on the router (§24.3), so the param-type registry is published on the `CompiledRouter` and carried on the frozen graph. §5.2 promises that one `paramType` declaration serves three consumers — the trie matcher, the parse function, and OpenAPI. Re-declaring the built-in table inside the OpenAPI package would have been the shorter path, and the one where the two copies drift.
+`graph.paramTypes` deserves a note. `@visionpilot/zen-openapi` must not depend on the router (§24.3), so the param-type registry is published on the `CompiledRouter` and carried on the frozen graph. §5.2 promises that one `paramType` declaration serves three consumers — the trie matcher, the parse function, and OpenAPI. Re-declaring the built-in table inside the OpenAPI package would have been the shorter path, and the one where the two copies drift.
 
 ### 29.3 The document says what the wire says
 
@@ -4863,13 +4886,13 @@ app.job(SendWelcomeEmail, { concurrency: 5, retries: 3, backoff: 'exponential' }
 
 Both receive a **context** — not the HTTP one, but the same slot/DI/logging machinery with a `TaskContext`. This means services, tracing, config, and error handling behave identically in a cron job and in a request handler, which is the thing most frameworks fail to provide and the reason background code in Node apps tends to have worse observability than request code.
 
-Leadership election (so one replica runs a cron, not all twelve) is delegated to a pluggable `Coordinator` (Redis/Postgres advisory lock/Durable Object), with a documented single-node default that **warns loudly** when more than one instance is detected. Jobs are an interface, not an implementation — `@zenjs/jobs-bullmq`, `@zenjs/jobs-pgboss`, `@zenjs/jobs-memory`.
+Leadership election (so one replica runs a cron, not all twelve) is delegated to a pluggable `Coordinator` (Redis/Postgres advisory lock/Durable Object), with a documented single-node default that **warns loudly** when more than one instance is detected. Jobs are an interface, not an implementation — `@visionpilot/zen-jobs-bullmq`, `@visionpilot/zen-jobs-pgboss`, `@visionpilot/zen-jobs-memory`.
 
 ---
 
 ## 31. Observability
 
-> **Status: demonstrated, not packaged — except §31.4, which is built.** The hook surface this section needs exists (§9), and `examples/observability` is a complete metrics + request-log + per-stage-timing stack written entirely against the public plugin API — one plugin, ten phases, nothing patched. The first-party `@zenjs/plugin-metrics` and `@zenjs/plugin-tracing` are still M4 work; the point of building the example first was to find out whether the surface was sufficient before shipping a package that depends on it. It was, with one correction: global `onRequest` hooks were not running for unmatched requests, so 404s produced no telemetry at all (§9.2).
+> **Status: demonstrated, not packaged — except §31.4, which is built.** The hook surface this section needs exists (§9), and `examples/observability` is a complete metrics + request-log + per-stage-timing stack written entirely against the public plugin API — one plugin, ten phases, nothing patched. The first-party `@visionpilot/zen-plugin-metrics` and `@visionpilot/zen-plugin-tracing` are still M4 work; the point of building the example first was to find out whether the surface was sufficient before shipping a package that depends on it. It was, with one correction: global `onRequest` hooks were not running for unmatched requests, so 404s produced no telemetry at all (§9.2).
 >
 > Health and readiness (§31.4) went the other way and shipped as `healthPlugin` in core, because it is not observability in the reporting sense: it owns lifecycle state, it is what §4.5 step 1 flips, and a service cannot deploy safely without it. Same finding about surface sufficiency, though — it is written against `Registrar` alone, and needed exactly two additions to it (`health`, `probe`).
 
@@ -4891,7 +4914,7 @@ Per-stage timing has a detail worth specifying, because getting it wrong makes t
 
 ### 31.3 Tracing
 
-OpenTelemetry-compatible via `@zenjs/plugin-tracing` (§9.8). Context propagation uses `AsyncLocalStorage` where available — this is the one place ALS earns its cost, and it is opt-in and confined to the tracing plugin rather than being the framework's data-passing mechanism. Spans: one per request named `METHOD /route/template`, with optional child spans per pipeline stage (validation, handler, serialization), which turns "this endpoint is slow" into "validation is 60% of this endpoint" without a profiler.
+OpenTelemetry-compatible via `@visionpilot/zen-plugin-tracing` (§9.8). Context propagation uses `AsyncLocalStorage` where available — this is the one place ALS earns its cost, and it is opt-in and confined to the tracing plugin rather than being the framework's data-passing mechanism. Spans: one per request named `METHOD /route/template`, with optional child spans per pipeline stage (validation, handler, serialization), which turns "this endpoint is slow" into "validation is 60% of this endpoint" without a profiler.
 
 That last claim no longer needs a tracing backend to be useful. `examples/observability` emits the same breakdown as a `Server-Timing` header, which Chrome and Firefox render in the network panel:
 
@@ -4981,7 +5004,7 @@ There is no compiled/interpreted twin to differentially test here, because there
 
 ## 32. First-Party Middleware
 
-`@zenjs/middleware` — cors, security headers, request id, rate limit. Built. §24.2 originally listed eight members; these are the four that are pure hooks with no platform dependency, and §32.6 says what happened to the other four.
+`@visionpilot/zen-middleware` — cors, security headers, request id, rate limit. Built. §24.2 originally listed eight members; these are the four that are pure hooks with no platform dependency, and §32.6 says what happened to the other four.
 
 The pack exists because M4's exit criterion is "a public app with zero third-party middleware", and until it landed a browser-facing service had to write CORS itself. What is interesting about it is not that a framework ships CORS — every framework does — but that building it found four defects, three of them in code that predates it, and that two of its four design decisions are forced by parts of this document written for other reasons.
 
@@ -5055,7 +5078,7 @@ That last row is a finding about the framework rather than about the pack, and �
 
 **`requestId`** echoes `ctx.id`, which the dispatcher already assigns, and *optionally* adopts an inbound one. Adopting is off by default for the same reason `trustProxy` is (§19.4): an inbound `X-Request-Id` is attacker-controlled and lands in every log line for the request. Even opted in, the value must match `[A-Za-z0-9._-]{8,128}` — which admits every id anybody sends and no newline, space or control character. A value that fails is not an error; the request gets a fresh id and `x-request-id-rejected: 1` says so, because refusing traffic over the shape of a correlation header would be a worse failure than the one being avoided.
 
-**`rateLimit`** uses `Codes.RATE_LIMITED` and `TooManyRequests`, which had been exported from `@zenjs/core` since 0.1 and read by nothing — the same state `COERCION_DEFAULTS` and `Codes.CONFIG_INVALID` were in before the features that needed them, and the third time that has predicted the next thing to build. Using them means the refusal is an ordinary `HttpError`: it goes through the error engine, the RFC 9457 envelope, registered `onError` hooks and `onSend`, and it lands in the same error dashboards as everything else. It refuses *before* body intake (§4.2 stage 5), so a request that is going to be rejected is rejected without its body being read.
+**`rateLimit`** uses `Codes.RATE_LIMITED` and `TooManyRequests`, which had been exported from `@visionpilot/zen-core` since 0.1 and read by nothing — the same state `COERCION_DEFAULTS` and `Codes.CONFIG_INVALID` were in before the features that needed them, and the third time that has predicted the next thing to build. Using them means the refusal is an ordinary `HttpError`: it goes through the error engine, the RFC 9457 envelope, registered `onError` hooks and `onSend`, and it lands in the same error dashboards as everything else. It refuses *before* body intake (§4.2 stage 5), so a request that is going to be rejected is rejected without its body being read.
 
 It is a **fixed-window** counter, and the boundary burst that implies — up to `2 × limit` across a window's worth of time straddling a boundary — is stated in the source rather than in a footnote; §28.8 records the gap. The `Store` seam is §3.5's, narrowed to one method so that a Redis implementation is `INCR` + `PEXPIRE` rather than a transaction. The in-memory default evicts by **dropping the map when the window rolls**: one assignment, no scan, no timer, and memory bounded by the distinct keys inside a single window. That matters because the key is chosen by the client, so a limiter whose eviction is a sweep is a memory DoS with a pause under exactly the load that created it.
 
@@ -5069,7 +5092,7 @@ Convention: *build the reader, not just the writer.* Every consumer of the graph
 
 2. **A plugin's boot diagnostic lost its `hint` and `consequence`.** §12.7 requires both, and `ready()` rebuilt a thrown plugin error into a diagnostic from the message alone — so every rule in §12.7 applied to the framework's own diagnostics and to none of a plugin's, which is the half of the ecosystem a user actually reads. `ZenErrorInit` now carries them and `ready()` prefers them.
 
-3. **`@zenjs/adapter-node` collapsed every repeated header but `Set-Cookie`.** `SmallHeaderBag.entries()` is documented as flattened — a repeated name is how the bag says "several values" — and the adapter called `setHeader` for everything except the one header somebody had noticed. Nothing else had ever produced a repeated header: `ctx.res.vary()` has always been `appendHeader` and nothing called it. CORS produced the second one, a preflight varying on three request headers, and over a real socket only the third arrived. **`inject()` could not have found it** — `InjectedResponse` used `Object.fromEntries`, which keeps the last value for the same reason — so this is a defect only `scripts/smoke.ts` could see, and it saw it on the first run. `InjectedResponse.header` now joins repeated values the way WHATWG `Headers.get` does, so an assertion written against `inject()` says the same thing as one written against `fetch`.
+3. **`@visionpilot/zen-adapter-node` collapsed every repeated header but `Set-Cookie`.** `SmallHeaderBag.entries()` is documented as flattened — a repeated name is how the bag says "several values" — and the adapter called `setHeader` for everything except the one header somebody had noticed. Nothing else had ever produced a repeated header: `ctx.res.vary()` has always been `appendHeader` and nothing called it. CORS produced the second one, a preflight varying on three request headers, and over a real socket only the third arrived. **`inject()` could not have found it** — `InjectedResponse` used `Object.fromEntries`, which keeps the last value for the same reason — so this is a defect only `scripts/smoke.ts` could see, and it saw it on the first run. `InjectedResponse.header` now joins repeated values the way WHATWG `Headers.get` does, so an assertion written against `inject()` says the same thing as one written against `fetch`.
 
 4. **An unmatched request costs roughly ten times a matched one, and it is not the routing.**
 
@@ -5081,7 +5104,7 @@ of which: constructing NotFound      15.94 µs
           its stack capture           8.26 µs
 ```
 
-`zen.ts` describes the unmatched path as "off the hot path by construction" because it "runs on 404s and 405s only". That was true when it was written and is no longer true for a browser-facing service, where every preflight lands there until something answers it — and it means the cheapest hostile traffic there is comes with a free amplification factor of ten. Recorded in §28.8 rather than fixed here: not capturing a stack changes what a developer sees in dev mode, which is a decision rather than an optimisation.
+`zen.ts` describes the unmatched path as "off the hot path by construction" because it "runs on 404s and 405s only". That was true when it was written and is no longer true for a browser-facing service, where every preflight lands there until something answers it — and it means the cheapest hostile traffic there is comes with a free amplification factor of ten. Recorded in §28.8 rather than fixed here: not capturing a stack changes what a developer sees in dev mode, which is a decision rather than an optimisation. (Since fixed — see §28.8: a 404 now costs ~2.3× a served request rather than ~10×.)
 
 The fourth is also the reason §32.3's headline reads the way it does. Answering a preflight is cheaper than dropping it.
 
@@ -5126,13 +5149,13 @@ The check lives in its own module rather than in either plugin, because which of
 
 ## Annex B — Error Code Catalogue
 
-Codes are public API and semver-protected. Each has a documentation page at `zenjs.dev/errors/<CODE>`. Abridged:
+Codes are public API and semver-protected. Each has an entry in [`docs/errors.md`](./docs/errors.md), which a test keeps complete — that page, not this abridged table, is the full list. Abridged:
 
 **Boot / registration**
 
 | Code | Meaning |
 | --- | --- |
-| `ZEN_ROUTE_DUPLICATE` | Two routes with the same method and path |
+| `ZEN_ROUTE_DUPLICATE` | Two routes with the same method and path, or the same `name` (a name identifies one route, §5.5) |
 | `ZEN_ROUTE_AMBIGUOUS` | Two routes match the same request with no priority rule to separate them |
 | `ZEN_ROUTE_INVALID_PATH` | Malformed path syntax |
 | `ZEN_PARAM_MISMATCH` | `params` schema keys do not match the path template |
@@ -5154,6 +5177,9 @@ Codes are public API and semver-protected. Each has a documentation page at `zen
 | `ZEN_CONFIG_INVALID` | A `defineConfig` thunk threw while being computed from the environment (§16.2). A thunk is meant to be a pure function of a validated environment; anything that can fail belongs where it has an error channel |
 | `ZEN_CAPABILITY_UNAVAILABLE` | A plugin requires a capability the target runtime lacks |
 | `ZEN_APP_FROZEN` | Registration attempted after boot |
+| `ZEN_APP_NOT_READY` | `dispatch` or `graph()` used before `ready()` |
+| `ZEN_BOOT_FAILED` | The aggregate: a `BootError` carrying every diagnostic above that applies, rendered with `fix:` and `also:` lines (§12.7) |
+| `ZEN_HOOK_PHASE_UNKNOWN` | A hook registered for a phase that does not exist (`onReqest`), or an application phase declared on a route or collection, where it could never fire — with the phase that was probably meant (§9.7) |
 
 **Request-time**
 
@@ -5175,7 +5201,12 @@ Codes are public API and semver-protected. Each has a documentation page at `zen
 | `ZEN_HEADER_INVALID` | 500 | Attempted to set a header containing CR/LF |
 | `ZEN_REPLY_SENT` | 500 | Attempted to modify a Reply after egress |
 | `ZEN_CONTEXT_ESCAPED` | 500 | A pooled context was used after release (dev only) |
+| `ZEN_BODY_INVALID` | 400 | The body did not parse as its content type, or nests past the depth limit (§19.3) |
+| `ZEN_CONFLICT` | 409 | `Conflict` — the request clashes with the resource's current state |
+| `ZEN_HANDLER_NO_RETURN` | 500 | A handler returned `undefined`; return a value, a `Reply`, or `ctx.empty()` |
 | `ZEN_INTERNAL` | 500 | Unclassified error |
+
+Two boot *warnings*, logged rather than refused: `ZEN_ROUTE_SHADOWED_BY_WILDCARD` (a route wins over a wildcard on its prefix — usually intended) and `ZEN_ROUTE_TYPES_UNDECIDED` (two parameter types in one position whose overlap cannot be established, §5.5).
 
 ## Annex C — Benchmark Methodology
 

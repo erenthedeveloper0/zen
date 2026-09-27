@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   parseAccept, qualityFor, selectOffer, offersOf, makeNegotiator, NEGOTIATION_CACHE_LIMIT,
   type AcceptRange, type Offer, type Representation,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 
 /**
  * Content negotiation, fuzzed — rfcs/0001 §13.4, §20.5.

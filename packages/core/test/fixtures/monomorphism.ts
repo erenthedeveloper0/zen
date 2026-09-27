@@ -9,8 +9,8 @@
  * nobody. `%HaveSameMap` is reached through `new Function` so the source stays
  * valid TypeScript.
  */
-import { compileContext, CodeGen, DEFAULT_CAPABILITIES, slot, PlainContext } from '@zenjs/core'
-import type { RawRequest } from '@zenjs/core'
+import { compileContext, CodeGen, DEFAULT_CAPABILITIES, slot, PlainContext } from '@visionpilot/zen-core'
+import type { RawRequest } from '@visionpilot/zen-core'
 
 const haveSameMap = new Function('a', 'b', 'return %HaveSameMap(a, b)') as (a: object, b: object) => boolean
 

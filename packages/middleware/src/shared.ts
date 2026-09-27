@@ -1,4 +1,4 @@
-import type { ReplyBuilder, Reply, LowercaseName } from '@zenjs/core'
+import type { ReplyBuilder, Reply, LowercaseName } from '@visionpilot/zen-core'
 
 /**
  * What this pack touches on a context, declared structurally — §10.4.

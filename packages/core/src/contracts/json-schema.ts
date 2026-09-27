@@ -8,7 +8,7 @@
  * already produce, and it is what §29's OpenAPI emitter will need anyway, so it
  * earns its place as the IR rather than a bespoke Zen format.
  *
- * Mirrored here rather than depended upon: `@zenjs/core` stays at zero runtime
+ * Mirrored here rather than depended upon: `@visionpilot/zen-core` stays at zero runtime
  * dependencies, and the subset below is Draft 2020-12 plus the two OpenAPI 3.0
  * spellings (`nullable`, `definitions`) that real toolchains still emit.
  *

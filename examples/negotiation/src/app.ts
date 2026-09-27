@@ -1,4 +1,4 @@
-import { zen } from 'zen'
+import { zen } from '@visionpilot/zen'
 import './shared/zod.ts'
 import './media/csv.ts'
 import { SalesService, reportRoutes } from './features/reports/index.ts'

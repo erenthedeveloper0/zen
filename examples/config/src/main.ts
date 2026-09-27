@@ -55,6 +55,5 @@ console.log(`
   — the object redacts when it is *serialised*, not when it is read (§16.2).
 `)
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => { void app.close(signal).then(() => process.exit(0)) })
-}
+// SIGTERM and SIGINT drain and exit on their own: `zen()` installs the process
+// lifecycle when the app starts listening (§4.5, §12.8).

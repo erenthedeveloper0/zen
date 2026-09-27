@@ -44,7 +44,7 @@ import { makeApp } from './app.ts'
  *   curl -si localhost:3000/api/ping -H 'Origin: http://localhost:5173' | head -14
  *
  *   # 7. Where did the allowlist come from? Not a grep — a table.
- *   npm run explain -w @zenjs-example/middleware
+ *   npm run explain -w @visionpilot/zen-example-middleware
  */
 const { app } = makeApp()
 const handle = await app.listen()
@@ -67,7 +67,7 @@ console.log(`
   the distinction §16.2 draws: a value asked for by name is readable, and the
   same value inside any projection of the config object is not. Compare:
 
-    npm run explain -w @zenjs-example/middleware
+    npm run explain -w @visionpilot/zen-example-middleware
 
   where it is ${'*'.repeat(8)}.
 `)

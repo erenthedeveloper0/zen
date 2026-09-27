@@ -1,25 +1,79 @@
 {
-  "name": "zen",
-  "version": "0.1.0",
-  "description": "Zen — a compiler-first web framework for Node, Bun, Deno and the edge.",
+  "name": "@visionpilot/zen",
+  "version": "0.1.0-alpha.1",
+  "description": "Zen: a compiler-first web framework for Node.js. Routing, validation, serialization and the request context are compiled at boot.",
+  "keywords": [
+    "web",
+    "framework",
+    "http",
+    "server",
+    "api",
+    "rest",
+    "typescript",
+    "openapi",
+    "validation",
+    "compiler",
+    "zen"
+  ],
+  "homepage": "https://github.com/VisionPilot/Zen.js/tree/main/packages/zen#readme",
+  "bugs": {
+    "url": "https://github.com/VisionPilot/Zen.js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VisionPilot/Zen.js.git",
+    "directory": "packages/zen"
+  },
   "license": "MIT",
+  "author": {
+    "name": "VisionPilot",
+    "url": "https://github.com/VisionPilot"
+  },
+  "contributors": [
+    {
+      "name": "Eren Sümer",
+      "url": "https://github.com/ErenSumer"
+    }
+  ],
   "type": "module",
   "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md"],
-  "engines": { "node": ">=22.6.0" },
-  "dependencies": {
-    "@zenjs/adapter-node": "0.1.0",
-    "@zenjs/core": "0.1.0",
-    "@zenjs/middleware": "0.1.0",
-    "@zenjs/router": "0.1.0"
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@visionpilot/zen-adapter-node": "0.1.0-alpha.1",
+    "@visionpilot/zen-core": "0.1.0-alpha.1",
+    "@visionpilot/zen-middleware": "0.1.0-alpha.1",
+    "@visionpilot/zen-router": "0.1.0-alpha.1"
+  },
+  "peerDependencies": {
+    "typescript": ">=5.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   }
 }

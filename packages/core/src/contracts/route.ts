@@ -39,10 +39,18 @@ export interface ParamType<T = unknown> {
 
 export type Prettify<T> = { [K in keyof T]: T[K] } & {}
 
+/**
+ * The static type of a typed path param. The builtins are known; a type the
+ * application registered with `app.paramType()` is `unknown`, because its
+ * `parse` can return anything — an `ObjectId`, a `bigint` — and typing it as
+ * `string` would be the framework widening what it did not narrow (I8).
+ * Declare a `params` schema to type it precisely.
+ */
 type ParamTypeOf<T extends string> =
   T extends 'int' | 'float' ? number :
   T extends 'date' ? Date :
-  string
+  T extends 'uuid' | 'ulid' | 'slug' | 'hex' ? string :
+  unknown
 
 type SegmentParams<S extends string> =
   S extends `:${infer Name}<${infer Ty}>?` ? { [K in Name]?: ParamTypeOf<Ty> } :
@@ -241,7 +249,7 @@ export interface RouteRecord {
    *
    * Non-null, it is here for the same reason `coercion` and `timeout` are: it
    * is a function of static registration, so the step the pipeline emits, the
-   * line `explainRoute` prints, and the `content` map `@zenjs/openapi` writes
+   * line `explainRoute` prints, and the `content` map `@visionpilot/zen-openapi` writes
    * all read one structure and cannot disagree about which media types this
    * route serves (§2.4).
    */

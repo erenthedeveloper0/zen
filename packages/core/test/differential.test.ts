@@ -4,8 +4,8 @@ import {
   compilePipeline, simplePipeline, CodeGen, DEFAULT_CAPABILITIES, PlainContext, markSync,
   jsonReply, NO_HOOKS, PIPELINE_PHASES,
   type HookPlan, type PipelineSpec, type PipelineStep, type Reply, type RawRequest,
-} from '@zenjs/core'
-import type { Deadline } from '@zenjs/core'
+} from '@visionpilot/zen-core'
+import type { Deadline } from '@visionpilot/zen-core'
 
 /**
  * Differential testing — rfcs/0001 §20.5.

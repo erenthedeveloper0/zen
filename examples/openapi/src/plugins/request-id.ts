@@ -1,4 +1,4 @@
-import { definePlugin, type Reply } from 'zen'
+import { definePlugin, type Reply } from '@visionpilot/zen'
 
 /**
  * Plugins are compiled before the application's decoration set exists, so their

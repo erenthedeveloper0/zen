@@ -1,5 +1,5 @@
-import { zen } from 'zen'
-import type { ZenApp } from 'zen'
+import { zen } from '@visionpilot/zen'
+import type { ZenApp } from '@visionpilot/zen'
 import { z } from './shared/zod.ts'
 import { config } from './config/coercion.config.ts'
 import { catalogRoutes } from './features/catalog/index.ts'

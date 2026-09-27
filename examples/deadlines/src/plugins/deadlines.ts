@@ -1,5 +1,5 @@
-import { definePlugin } from 'zen'
-import type { AppGraph, Reply, TimeoutInfo } from 'zen'
+import { definePlugin } from '@visionpilot/zen'
+import type { AppGraph, Reply, TimeoutInfo } from '@visionpilot/zen'
 
 /**
  * Deadline instrumentation as pure hooks — rfcs/0001 §4.4, §9.

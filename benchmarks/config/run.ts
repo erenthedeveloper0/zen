@@ -33,15 +33,15 @@
  *      "deeply" is an O(leaves) walk that somebody will eventually propose
  *      removing.
  *
- * Every schema here is hand-written. `@zenjs/core` has no runtime dependencies
+ * Every schema here is hand-written. `@visionpilot/zen-core` has no runtime dependencies
  * and its benchmarks keep that honest; more importantly, putting Zod on one
  * side of a comparison and not the other would measure Zod.
  */
 import {
   createApp, markSync, defineConfig, resolveConfig, explainConfig, REDACTED,
   type ConfigOverlay, type EnvSource, type ZenApp,
-} from '@zenjs/core'
-import { ZenRouter, parsePath } from '@zenjs/router'
+} from '@visionpilot/zen-core'
+import { ZenRouter, parsePath } from '@visionpilot/zen-router'
 
 const pathParser = {
   parse: (path: string) => {

@@ -52,7 +52,7 @@ export function buildSerializerTable(
         message: `Response schema key "${key}" on ${options.routeId} is not a status code.`,
         hint:
           'Response schemas are keyed by numeric status. There is no "2XX" or "default" key: the serializer binds one ' +
-          'contract to one status, and error responses come from the error engine, which @zenjs/openapi documents as 4XX/5XX.',
+          'contract to one status, and error responses come from the error engine, which @visionpilot/zen-openapi documents as 4XX/5XX.',
       })
       continue
     }

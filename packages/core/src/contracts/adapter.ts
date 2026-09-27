@@ -1,11 +1,12 @@
 import type { Capabilities } from './capabilities.ts'
 import type { LowercaseName, RemoteInfo } from './http.ts'
 import type { Reply } from './reply.ts'
+import type { Logger } from './logger.ts'
 
 /**
  * The runtime ⇄ adapter boundary — rfcs/0001 §3.3 (B2) and §14.
  *
- * `@zenjs/core` never sees `http.IncomingMessage`, `Request`, or a Lambda event.
+ * `@visionpilot/zen-core` never sees `http.IncomingMessage`, `Request`, or a Lambda event.
  * It sees `RawRequest`: a narrow, *lazy* accessor interface. This is what lets
  * the Node adapter skip constructing a WHATWG `Request` (~3-6µs and several
  * allocations) on the platform that carries most production traffic, while an
@@ -55,4 +56,26 @@ export interface RuntimeAdapter {
   readonly name: string
   readonly caps: Capabilities
   listen(dispatch: Dispatch, opts: ListenOptions): Promise<ServerHandle>
+}
+
+/** What a host integration may do to a running application. */
+export interface HostControl {
+  /** Run §4.5's shutdown sequence. Safe to call more than once. */
+  close(reason: string): Promise<void>
+  readonly log: Logger
+}
+
+/**
+ * The host process's half of the lifecycle — rfcs/0001 §4.5, §12.8.
+ *
+ * §4.5 opens "on `SIGTERM`, the Lifecycle Manager runs a documented sequence",
+ * and §12.8 says handlers for uncaught exceptions are installed by default.
+ * Neither can live in core, which does not know what a process is — workerd has
+ * no signals and no `process` (§3.3 B2). So core defines the seam and a host
+ * package supplies it: `listen()` calls `install` once the server is up, and
+ * `close()` calls what it returned once shutdown has finished, so a test that
+ * starts and stops an app leaves no listeners behind.
+ */
+export interface HostLifecycle {
+  install(control: HostControl): () => void
 }

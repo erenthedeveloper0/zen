@@ -6,7 +6,7 @@ import {
   explainRoute, markSync, CodeGen, DEFAULT_CAPABILITIES, COERCION_DEFAULTS, COERCION_OFF,
   jsonSchema,
   type CoercePlan, type CoercionProfile, type JsonSchema, type RouteRecord,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { makeApp, shaped, silentLogger } from './helpers.ts'
 
 /**
@@ -525,7 +525,7 @@ describe('§11.4 — honesty about what it cannot read', () => {
     assert.match(coercionWarnings[0] ?? '', /fix: register a converter/)
   })
 
-  test('a schema that is readable but not an object is silent — @zenjs/openapi already says so', async () => {
+  test('a schema that is readable but not an object is silent — @visionpilot/zen-openapi already says so', async () => {
     const app = makeApp({ logger: recording() as never })
     app.get('/a', { query: shaped({ anyOf: [{ type: 'object' }, { type: 'null' }] }) }, markSync(() => ({ ok: true })))
     await app.ready()

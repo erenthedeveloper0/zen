@@ -9,11 +9,19 @@ export interface BodyOptions {
    *  buffering then rejecting (§19.3). */
   readonly maxSize: number
   readonly maxDepth: number
+  /**
+   * Fields in a form (`application/x-www-form-urlencoded`) body. The query
+   * string has had a cap since 0.1 (§19.2's "param count", hash flooding); a
+   * form is a query string with a different content type and had none, so a
+   * 1 MB body of `a=&a=&…` built a quarter of a million entries.
+   */
+  readonly maxFields: number
 }
 
 export const BODY_DEFAULTS: BodyOptions = {
   maxSize: 1024 * 1024, // 1 MB — §19.2
   maxDepth: 32,
+  maxFields: 1000,
 }
 
 export type BodyParser = (bytes: Uint8Array, ctx: PlainContext, opts: BodyOptions) => unknown
@@ -51,7 +59,11 @@ export function makeIntake(parsers: ReadonlyMap<string, BodyParser>, opts: BodyO
 
     const contentType = ctx.raw.header('content-type')
     const media = contentType === undefined ? 'application/json' : mediaTypeOf(contentType)
-    const parser = parsers.get(media)
+    // A `+json` structured suffix (RFC 6839) *is* JSON — `application/merge-patch+json`,
+    // `application/vnd.api+json` — and refusing it with a 415 made every client
+    // that labels its bodies precisely look broken. Consulted only on a miss, so
+    // an explicitly registered parser for one of them still wins.
+    const parser = parsers.get(media) ?? (media.endsWith('+json') ? parsers.get('application/json') : undefined)
     if (parser === undefined) {
       throw new UnsupportedMediaType(`No parser registered for content type "${media}"`, {
         details: { available: [...parsers.keys()] },
@@ -117,11 +129,27 @@ export const textParser: BodyParser = (bytes) => decoder.decode(bytes)
 
 export const rawParser: BodyParser = (bytes) => bytes
 
-export const formParser: BodyParser = (bytes) => {
+export const formParser: BodyParser = (bytes, _ctx, opts) => {
   const text = decoder.decode(bytes)
   const out: Record<string, string | string[]> = Object.create(null) as Record<string, string | string[]>
-  for (const pair of text.split('&')) {
+  // `?? BODY_DEFAULTS` so a parser invoked with a hand-built options object from
+  // before the field existed still has a bound rather than none.
+  const maxFields = opts.maxFields ?? BODY_DEFAULTS.maxFields
+  let fields = 0
+  // Scanned with `indexOf` rather than `split('&')`, which would materialise
+  // every pair before the bound below could refuse the body.
+  for (let start = 0; start <= text.length;) {
+    let end = text.indexOf('&', start)
+    if (end === -1) end = text.length
+    const pair = text.slice(start, end)
+    start = end + 1
     if (pair === '') continue
+    // Refused rather than truncated, unlike the query string: a form is data
+    // the client meant to submit, and silently keeping the first thousand
+    // fields of it is data loss that looks like success.
+    if (++fields > maxFields) {
+      throw new PayloadTooLarge(`Form body has more than ${maxFields} fields`)
+    }
     const eq = pair.indexOf('=')
     const key = decodeFormComponent(eq === -1 ? pair : pair.slice(0, eq))
     const value = eq === -1 ? '' : decodeFormComponent(pair.slice(eq + 1))

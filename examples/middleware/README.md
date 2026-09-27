@@ -7,8 +7,8 @@ supply all of them.
 
 ```bash
 npm run example:middleware
-npm run explain -w @zenjs-example/middleware
-npm test -w @zenjs-example/middleware
+npm run explain -w @visionpilot/zen-example-middleware
+npm test -w @visionpilot/zen-example-middleware
 ```
 
 ---
@@ -94,7 +94,7 @@ charging for them would silently halve the budget in the documentation.
 ### 4. Where the allowlist came from
 
 ```bash
-npm run explain -w @zenjs-example/middleware
+npm run explain -w @visionpilot/zen-example-middleware
 ```
 
 Five sections. The first prints the resolved chain for `GET /api/notes` —
@@ -122,7 +122,7 @@ design exists to fill in.
   `.env` and `.env.*` are gitignored, as they should be, so this is what keeps
   the example runnable from a fresh clone. `src/config/sources.ts` says so.
 - **No compression, no static files.** Both need a platform — `node:zlib`,
-  `node:fs` — so they are not in `@zenjs/middleware` at all. §14.1 already puts
+  `node:fs` — so they are not in `@visionpilot/zen-middleware` at all. §14.1 already puts
   compression on the adapter boundary as a capability, which is the right home
   for it.
 

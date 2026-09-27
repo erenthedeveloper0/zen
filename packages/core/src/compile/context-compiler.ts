@@ -3,7 +3,8 @@ import type { RouteInfo } from '../contracts/context.ts'
 import { CodeGen, type CodeUnit } from './codegen.ts'
 import type { Deadline } from '../runtime/deadline.ts'
 import {
-  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, type ContextEnv,
+  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, forwardedClient, forwardedProtocol, requestUrl,
+  type ContextEnv,
 } from '../runtime/context.ts'
 import { pathnameOf } from '../primitives/path.ts'
 import { parseQuery } from '../runtime/query.ts'
@@ -11,6 +12,8 @@ import { parseCookies } from '../runtime/cookies.ts'
 import {
   jsonReply, textReply, htmlReply, bytesReply, emptyReply, redirectReply, fileReply, streamReply,
 } from '../runtime/reply.ts'
+import { createSseChannel } from '../runtime/sse.ts'
+import { trackDisposal } from '../primitives/disposal.ts'
 
 export interface Decoration {
   readonly name: string
@@ -64,6 +67,9 @@ export function compileContext(opts: CompileContextOptions): ContextClass {
       parseCookies,
       buildHeaders,
       slotEmpty,
+      forwardedClient,
+      forwardedProtocol,
+      requestUrl,
       ReplyStage,
       jsonReply,
       textReply,
@@ -73,6 +79,8 @@ export function compileContext(opts: CompileContextOptions): ContextClass {
       redirectReply,
       fileReply,
       streamReply,
+      createSseChannel,
+      trackDisposal,
       accessors: decorations.map((d) => d.accessor),
     },
   }
@@ -146,17 +154,23 @@ return class Ctx {
   get headers() { const v = this.$headers; return v !== UNSET ? v : (this.$headers = buildHeaders(this.raw)) }
   get cookies() { const v = this.$cookies; return v !== UNSET ? v : (this.$cookies = parseCookies(this.raw.header('cookie'))) }
   get body() { return this.$body }
-  get url() { const v = this.$url; return v !== UNSET ? v : (this.$url = new URL(this.raw.url, (this.secure ? 'https://' : 'http://') + this.host)) }
+  get url() { const v = this.$url; return v !== UNSET ? v : (this.$url = requestUrl(this.raw.url, this.secure, this.host)) }
   get host() { const h = this.raw.header('host'); return h !== undefined ? h : 'localhost' }
-  get secure() { return this.env.trustProxy && this.raw.header('x-forwarded-proto') === 'https' }
+  get secure() {
+    const trust = this.env.trustProxy
+    if (trust === false || trust === 0) return false
+    const proto = this.raw.header('x-forwarded-proto')
+    return proto !== undefined && forwardedProtocol(proto) === 'https'
+  }
   get config() { return this.env.config }
   get deadline() { const d = this.$deadline; return d !== null ? d.at : null }
   get timeLeft() { const d = this.$deadline; return d !== null ? d.at - performance.now() : Infinity }
   get negotiated() { const n = this.$negotiated; return n !== null ? n.media : null }
   get ip() {
-    if (this.env.trustProxy) {
+    const trust = this.env.trustProxy
+    if (trust !== false && trust !== 0) {
       const fwd = this.raw.header('x-forwarded-for')
-      if (fwd !== undefined) { const c = fwd.indexOf(','); return (c === -1 ? fwd : fwd.slice(0, c)).trim() }
+      if (fwd !== undefined) return forwardedClient(fwd, trust)
     }
     const a = this.raw.remote.address
     return a !== undefined ? a : ''
@@ -173,7 +187,7 @@ return class Ctx {
   find(slot) { return this.$s[slot.index] }
   set(slot, value) {
     this.$s[slot.index] = value
-    if (slot.dispose !== undefined) { (this.$disposers === null ? (this.$disposers = []) : this.$disposers).push(slot) }
+    if (slot.dispose !== undefined) trackDisposal(this, slot.name, slot.dispose, value)
   }
   has(slot) { return this.$s[slot.index] !== undefined }
 
@@ -188,6 +202,7 @@ return class Ctx {
   redirect(to, status) { return redirectReply(to, status === undefined ? 302 : status) }
   file(path, init) { return fileReply(path, init) }
   stream(source, init) { return streamReply(source, init) }
+  sse(init) { return createSseChannel(init) }
   respond(reply) { return reply }
 
   get res() { return this.$stage !== null ? this.$stage : (this.$stage = new ReplyStage(this)) }

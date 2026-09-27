@@ -2,7 +2,7 @@ import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { openapiDocument } from '@zenjs/openapi'
+import { openapiDocument } from '@visionpilot/zen-openapi'
 import { build } from '../src/app.ts'
 import { openapiOptions } from '../src/config/zen.config.ts'
 

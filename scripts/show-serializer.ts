@@ -7,8 +7,8 @@
  * serializer *cannot* emit an undeclared field, and the argument for that claim
  * is the source itself: there is no key enumeration in it to leak through.
  */
-import { buildProgram, generateSerializerSource, walkSerializer, compileSerializer, CodeGen, DEFAULT_CAPABILITIES } from '@zenjs/core'
-import type { JsonSchema } from '@zenjs/core'
+import { buildProgram, generateSerializerSource, walkSerializer, compileSerializer, CodeGen, DEFAULT_CAPABILITIES } from '@visionpilot/zen-core'
+import type { JsonSchema } from '@visionpilot/zen-core'
 
 const User: JsonSchema = {
   type: 'object',

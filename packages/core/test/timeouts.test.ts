@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   BootError, explainRoute, markSync, slot, steps,
   type Reply, type TimeoutInfo,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { makeApp, uniqueName } from './helpers.ts'
 
 /**

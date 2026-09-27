@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it, before } from 'node:test'
 
-import { openapiDocument } from '@zenjs/openapi'
-import type { OpenApiDocument, OpenApiSchema } from '@zenjs/openapi'
+import { openapiDocument } from '@visionpilot/zen-openapi'
+import type { OpenApiDocument, OpenApiSchema } from '@visionpilot/zen-openapi'
 
 import { build } from '../src/app.ts'
 import { openapiOptions } from '../src/config/zen.config.ts'
-import type { ZenApp } from 'zen'
+import type { ZenApp } from '@visionpilot/zen'
 
 let app: ZenApp
 let document: OpenApiDocument
@@ -257,7 +257,7 @@ describe('the API still behaves like an API', () => {
     assert.equal((await app.inject('GET', '/users/999')).status, 404)
     const wrongMethod = await app.inject('PUT', '/users/1')
     assert.equal(wrongMethod.status, 405)
-    assert.equal(wrongMethod.header('allow'), 'GET, PATCH, DELETE')
+    assert.equal(wrongMethod.header('allow'), 'GET, PATCH, DELETE, HEAD')
   })
 
   it('rejects a path param that is not an integer before the handler', async () => {

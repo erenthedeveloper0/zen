@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { dotenvChain, parseDotenv, type EnvSource } from 'zen'
+import { dotenvChain, parseDotenv, type EnvSource } from '@visionpilot/zen'
 
 /**
  * The fifteen lines §3.2 assigns to the host rather than to the framework.
  *
  * Identical in shape to `examples/config/src/config/sources.ts`, and repeated
  * rather than shared for the reason §23.4 gives: an example is read on its own.
- * `@zenjs/core` has no `node:` imports because `fs` and `process` do not exist
+ * `@visionpilot/zen-core` has no `node:` imports because `fs` and `process` do not exist
  * on workerd, so core owns the *policy* — `dotenvChain` states the precedence,
  * `parseDotenv` states the grammar and hands back line numbers — and this file
  * owns the I/O.

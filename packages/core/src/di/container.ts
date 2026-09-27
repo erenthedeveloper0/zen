@@ -4,6 +4,7 @@ import type {
 import { ZenError } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { allocateCell } from '../api/slot.ts'
+import { trackDisposal, type DisposalCarrier } from '../primitives/disposal.ts'
 
 /**
  * Declare a typed service identifier.
@@ -24,6 +25,15 @@ interface Entry<T> {
   readonly eager: boolean
   instance: T | undefined
   resolved: boolean
+  /**
+   * A singleton whose async factory is still running.
+   *
+   * Without it, two requests that both arrive before the first build finishes
+   * each call the factory — two connection pools behind one "singleton", each
+   * request holding a different one — and the dispose list gains the entry
+   * twice, so shutdown disposed the second instance twice and never the first.
+   */
+  pending: Promise<T> | null
 }
 
 const UNRESOLVED = Symbol('zen.unresolved')
@@ -44,6 +54,7 @@ export class ZenContainer implements Container {
       eager: normalised.eager ?? false,
       instance: undefined,
       resolved: false,
+      pending: null,
     })
   }
 
@@ -87,7 +98,11 @@ export class ZenContainer implements Container {
       )
     }
 
-    if (entry.lifetime === 'singleton' && entry.resolved) return entry.instance
+    if (entry.lifetime === 'singleton') {
+      if (entry.resolved) return entry.instance
+      // Single-flight: a build already under way is joined, never repeated.
+      if (entry.pending !== null) return entry.pending
+    }
 
     if (entry.lifetime === 'scoped') {
       if (scope === undefined) {
@@ -124,31 +139,66 @@ export class ZenContainer implements Container {
             { status: 500, expose: false },
           )
         }
-        return Promise.all(deps).then((settled) =>
-          this.#finish(entry, entry.factory(...(settled as never[])), scope),
+        return this.#inFlight(
+          entry,
+          scope,
+          Promise.all(deps).then((settled) => entry.factory(...(settled as never[]))),
         )
       }
 
-      return this.#finish(entry, entry.factory(...(deps as never[])), scope)
+      const produced = entry.factory(...(deps as never[]))
+      return isPromise(produced) ? this.#inFlight(entry, scope, produced) : this.#store(entry, produced, scope)
     } finally {
       this.#resolving.delete(token)
     }
   }
 
-  #finish(entry: Entry<unknown>, produced: unknown, scope: ScopeCarrier | undefined): unknown {
-    if (isPromise(produced)) {
-      return produced.then((value) => this.#store(entry, value, scope))
-    }
-    return this.#store(entry, produced, scope)
+  /**
+   * An async build, published where the next caller will find it *before*
+   * anything is awaited — that ordering is the whole of single-flight.
+   *
+   * A singleton publishes on its entry; a scoped service in its own cell of the
+   * request's slot array, so two `resolveAsync` calls inside one request share
+   * one instance exactly as two synchronous ones always did.
+   */
+  #inFlight(entry: Entry<unknown>, scope: ScopeCarrier | undefined, build: Promise<unknown>): Promise<unknown> {
+    const index = entry.token.index
+    const settled: Promise<unknown> = build.then(
+      (value) => {
+        if (entry.lifetime === 'singleton') entry.pending = null
+        return this.#store(entry, value, scope)
+      },
+      (error: unknown) => {
+        // A failed build is not cached. The next caller tries again, which is
+        // what a database that was briefly unreachable at first use needs.
+        if (entry.lifetime === 'singleton') entry.pending = null
+        else if (entry.lifetime === 'scoped' && scope !== undefined && scope.$s[index] === settled) {
+          scope.$s[index] = undefined
+        }
+        throw error
+      },
+    )
+    if (entry.lifetime === 'singleton') entry.pending = settled
+    else if (entry.lifetime === 'scoped' && scope !== undefined) scope.$s[index] = settled
+    return settled
   }
 
   #store(entry: Entry<unknown>, value: unknown, scope: ScopeCarrier | undefined): unknown {
     if (entry.lifetime === 'singleton') {
+      // Queued for disposal once, on the transition to resolved — never per
+      // call, or shutdown disposes one instance twice.
+      if (!entry.resolved && entry.dispose !== undefined) this.#disposeOrder.push(entry)
       entry.instance = value
       entry.resolved = true
-      if (entry.dispose !== undefined) this.#disposeOrder.push(entry)
     } else if (entry.lifetime === 'scoped' && scope !== undefined) {
       scope.$s[entry.token.index] = value
+      // §15.3: "scoped — disposed at stage 10, reverse creation order". The
+      // `dispose` option used to be accepted here and never called, so a
+      // per-request transaction or pooled connection was simply dropped —
+      // released only when the pool itself noticed, if ever.
+      if (entry.dispose !== undefined && scope.$disposers !== undefined) {
+        trackDisposal(scope as DisposalCarrier, entry.token.name, entry.dispose, value)
+      }
     }
     return value
   }
@@ -232,15 +282,31 @@ export class ZenContainer implements Container {
   }
 
   /** Reverse dependency order — dependents tear down before their dependencies. */
+  /**
+   * Dispose singletons in reverse creation order — §4.5 step 5.
+   *
+   * Every disposer runs even when an earlier one throws. A pool whose `end()`
+   * rejects must not leave the cache client and the message consumer behind it
+   * open, which is what stopping at the first failure did. The failures are
+   * reported together afterwards, as one `AggregateError`.
+   */
   async dispose(): Promise<void> {
+    const failures: unknown[] = []
     for (let i = this.#disposeOrder.length - 1; i >= 0; i--) {
       const entry = this.#disposeOrder[i]
       if (entry?.dispose === undefined) continue
-      await entry.dispose(entry.instance)
+      try {
+        await entry.dispose(entry.instance)
+      } catch (error) {
+        failures.push(error)
+      }
       entry.resolved = false
       entry.instance = undefined
     }
     this.#disposeOrder.length = 0
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `${failures.length} service(s) failed to dispose`)
+    }
   }
 
   #suggest(name: string): string | undefined {

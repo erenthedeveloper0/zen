@@ -664,10 +664,21 @@
           },
           "errors": {
             "type": "array",
-            "description": "Present on validation failures: one entry per failing field.",
+            "description": "Present on validation failures: one entry per failing field, across every source that failed.",
             "items": {
               "type": "object",
               "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "params",
+                    "query",
+                    "headers",
+                    "cookies",
+                    "body"
+                  ],
+                  "description": "Which part of the request the issue is in."
+                },
                 "path": {
                   "type": "array",
                   "items": {

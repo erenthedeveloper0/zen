@@ -1,5 +1,5 @@
-import { jsonSchema } from 'zen'
-import type { Collection } from 'zen'
+import { jsonSchema } from '@visionpilot/zen'
+import type { Collection } from '@visionpilot/zen'
 import { callProvider } from '../../shared/upstream.ts'
 
 /**

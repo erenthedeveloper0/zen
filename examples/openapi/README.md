@@ -58,7 +58,7 @@ serializer IR node for node.
 registerSchemaConverter('zod', (schema, io) => z.toJSONSchema(schema as z.ZodType, { io }))
 ```
 
-`@zenjs/core` and `@zenjs/openapi` ask a Standard Schema for `~standard.vendor`
+`@visionpilot/zen-core` and `@visionpilot/zen-openapi` ask a Standard Schema for `~standard.vendor`
 and look up a converter that userland registered. Swapping to Valibot or ArkType
 changes this file and nothing else.
 

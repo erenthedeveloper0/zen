@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { definePlugin, token, satisfies, resolvePlugins, DEFAULT_CAPABILITIES } from '@zenjs/core'
+import { definePlugin, token, satisfies, resolvePlugins, DEFAULT_CAPABILITIES } from '@visionpilot/zen-core'
 import { makeApp, uniqueName } from './helpers.ts'
 
 describe('plugin registration', () => {

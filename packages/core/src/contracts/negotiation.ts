@@ -68,7 +68,7 @@ import type { JsonSchema } from './json-schema.ts'
  * compiled serializer of §13.3 — the same one, with the same guarantee that an
  * undeclared field cannot be emitted. Everything else needs an encoder, supplied
  * through `registerMediaEncoder` for the same reason schema conversion is
- * supplied through `registerSchemaConverter`: `@zenjs/core` has no runtime
+ * supplied through `registerSchemaConverter`: `@visionpilot/zen-core` has no runtime
  * dependencies and is not going to grow a CSV writer (B3, §19.8).
  *
  * A declared media type with no encoder is a **boot error**, not a silent
@@ -105,7 +105,7 @@ export type ResponseSpec = Readonly<Record<StatusCode, ResponseDeclaration>>
  * `null` on `RouteRecord.negotiation` means the route declared no variant form
  * and emits no negotiation code. Non-null, it is what *will happen*: the offers
  * in preference order and the statuses that vary by media type. `explainRoute`
- * renders it, `@zenjs/openapi` documents it, and the runtime matches against it
+ * renders it, `@visionpilot/zen-openapi` documents it, and the runtime matches against it
  * — one structure, three readers, no way for them to disagree.
  */
 export interface NegotiationRecord {
@@ -122,7 +122,7 @@ export interface NegotiationRecord {
 
 /**
  * Turns a value into the bytes of one media type — the seam §13.4 needs and
- * `@zenjs/core` cannot fill (B3).
+ * `@visionpilot/zen-core` cannot fill (B3).
  *
  * A **factory**, not a function, and that is the interesting part of the
  * signature. It is called once per (route, status) at boot with the declared

@@ -1,4 +1,4 @@
-import type { ParamType } from '@zenjs/core'
+import type { ParamType } from '@visionpilot/zen-core'
 
 /**
  * Built-in path parameter types — rfcs/0001 §5.2.
@@ -19,9 +19,18 @@ const HEX = /^[0-9a-f]+$/i
 // Every pattern above is linear-time: no nested quantifiers, no backtracking
 // blowup. `eslint-plugin-zen/no-unbounded-regex` enforces that in CI (§19.3).
 
+/**
+ * §11.4.1's precision rule, applied to the path: `/orders/9007199254740993` is
+ * an ordinary Postgres `bigint`, and `Number()` turns it into `…992` — the
+ * request then acts on the wrong row. Sixteen digits used to pass the length
+ * check and round silently. A value that does not survive the round trip does
+ * not match, so the route 404s instead of answering for a different id; a
+ * route that genuinely takes 64-bit ids declares an untyped `:id` and parses
+ * it as a `BigInt` itself.
+ */
 export const intType: ParamType<number> = {
   name: 'int',
-  test: (s) => s.length > 0 && s.length <= 16 && INT.test(s),
+  test: (s) => s.length > 0 && s.length <= 17 && INT.test(s) && Number.isSafeInteger(Number(s)),
   parse: (s) => Number(s),
   jsonSchema: { type: 'integer' },
 }

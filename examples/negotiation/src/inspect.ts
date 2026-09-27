@@ -1,9 +1,9 @@
-import { explainRoute } from 'zen'
+import { explainRoute } from '@visionpilot/zen'
 import { makeApp } from './app.ts'
 import { CSV, V1, V2 } from './features/reports/index.ts'
 
 /**
- * `npm run explain -w @zenjs-example/negotiation` — rfcs/0001 §2.4, §8.5, §13.4.
+ * `npm run explain -w @visionpilot/zen-example-negotiation` — rfcs/0001 §2.4, §8.5, §13.4.
  *
  * Five questions a service author asks about content negotiation, answered off
  * the frozen graph rather than by reading `routes.ts` and hoping:

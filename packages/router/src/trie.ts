@@ -1,7 +1,7 @@
 import type {
   HttpMethod, MatchResult, ParamType, ParamsObject, PathSegment, RouteRecord,
-} from '@zenjs/core'
-import { safeDecode, splitSegments } from '@zenjs/core'
+} from '@visionpilot/zen-core'
+import { decodeComponent, splitSegments } from '@visionpilot/zen-core'
 
 export interface RouteEntry {
   readonly route: RouteRecord
@@ -13,7 +13,17 @@ export interface RouteEntry {
 
 export interface TrieNode {
   statics: Map<string, TrieNode> | null
-  /** Typed params, in insertion order. Tried before the untyped param child. */
+  /**
+   * Typed params, ordered by type name. Tried before the untyped param child.
+   *
+   * By name and not by insertion, because insertion order *is* registration
+   * order, and §5.6's promise is that registration order never decides which
+   * route answers. `/items/:id<int>` beside `/items/:key<slug>` used to send
+   * `/items/42` to whichever was registered first — two files imported the
+   * other way round served a different handler. Types that provably overlap
+   * like that are now a boot error (`conflicts.ts`); this order is what decides
+   * the pairs nothing can prove either way, and it is the same on every boot.
+   */
   typed: Array<{ name: string; type: ParamType; node: TrieNode }> | null
   param: { name: string; node: TrieNode } | null
   wildcard: { name: string; node: TrieNode } | null
@@ -79,6 +89,7 @@ export function insert(
       if (child === undefined) {
         child = { name: segment.value, type, node: createNode() }
         node.typed.push(child)
+        node.typed.sort((x, y) => (x.type.name < y.type.name ? -1 : x.type.name > y.type.name ? 1 : 0))
       }
       node = child.node
       continue
@@ -174,7 +185,7 @@ function walk(
         const get = methods.get('GET')
         if (get !== undefined) return get
       }
-      for (const m of methods.keys()) allowed.add(m)
+      addAllowed(methods, allowed)
     }
     return null
   }
@@ -219,7 +230,14 @@ function walk(
         captures.push(rest)
         return entry
       }
-      for (const m of methods.keys()) allowed.add(m)
+      if (method === 'HEAD') {
+        const get = methods.get('GET')
+        if (get !== undefined) {
+          captures.push(rest)
+          return get
+        }
+      }
+      addAllowed(methods, allowed)
     }
   }
 
@@ -227,16 +245,33 @@ function walk(
 }
 
 /**
+ * The methods a 405's `Allow` names for one node — including `HEAD` wherever a
+ * `GET` exists, because the matcher serves it there (§4.2) and RFC 9110 §10.2.1
+ * says `Allow` lists what the resource supports. The header used to omit it, so
+ * a client following the 405's own advice never learned it could ask for
+ * headers alone — while the CORS preflight, which reads the graph, said it could.
+ */
+export function addAllowed(methods: ReadonlyMap<HttpMethod, unknown>, allowed: Set<HttpMethod>): void {
+  for (const m of methods.keys()) allowed.add(m)
+  if (methods.has('GET')) allowed.add('HEAD')
+}
+
+/**
  * Split first, decode second. Decoding first would turn `%2F` into a separator
  * and let `/files/a%2F..%2Fetc` escape its route — a path-traversal class bug
  * that several frameworks have shipped.
+ *
+ * Percent-decoding only: `+` in a path is a plus. It is a space in form
+ * encoding and nowhere else, and decoding it as one turned `/files/a+b%20c`
+ * into `a b c` — but only when the segment also held a `%`, so the same file
+ * name answered differently depending on an unrelated character.
  */
 export function splitAndDecode(path: string): string[] | null {
   const raw = splitSegments(path)
   for (let i = 0; i < raw.length; i++) {
     const segment = raw[i] as string
     if (segment.indexOf('%') === -1) continue
-    const decoded = safeDecode(segment)
+    const decoded = decodeComponent(segment)
     if (decoded === null) return null
     raw[i] = decoded
   }

@@ -3,6 +3,7 @@ import type { RawRequest } from '../contracts/adapter.ts'
 import type { MediaType, Negotiator, Representation } from '../contracts/negotiation.ts'
 import { parseAccept, qualityFor } from '../compile/media-type.ts'
 import { NotAcceptable, type HttpError } from '../errors/http-errors.ts'
+import { withoutStack } from '../errors/zen-error.ts'
 
 /**
  * Per-request content negotiation — rfcs/0001 §13.4, §4.2 stage 5.
@@ -227,8 +228,10 @@ export function makeNegotiationStep(
  * that the server is broken.
  */
 export function notAcceptable(available: readonly MediaType[]): HttpError {
-  return new NotAcceptable(
+  // A routine refusal: its stack is always this function's, so it is not
+  // captured — see `withoutStack` (§28.8).
+  return withoutStack(() => new NotAcceptable(
     `This route can produce ${available.join(', ')}, and the request's Accept header allows none of them.`,
     { details: { available } },
-  )
+  ))
 }

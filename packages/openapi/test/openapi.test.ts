@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import { CodeGen, DEFAULT_CAPABILITIES, buildSerializerTable, definePlugin, type JsonSchema } from '@zenjs/core'
-import { openapiDocument, openapiPlugin, diffDocuments, renderReference } from '@zenjs/openapi'
-import type { OpenApiDocument } from '@zenjs/openapi'
+import { CodeGen, DEFAULT_CAPABILITIES, buildSerializerTable, definePlugin, type JsonSchema } from '@visionpilot/zen-core'
+import { openapiDocument, openapiPlugin, diffDocuments, renderReference } from '@visionpilot/zen-openapi'
+import type { OpenApiDocument } from '@visionpilot/zen-openapi'
 
 import { collectRefs, deref, makeApp, operation, responseSchema, schema } from './helpers.ts'
 
@@ -181,9 +181,12 @@ describe('document structure (§29.2)', () => {
   })
 
   it('renames a colliding operationId rather than dropping the operation', async () => {
+    // Two routes cannot share a `name` — that is a boot error now, because the
+    // name is the route's identity (§5.5) — but an explicit operationId can
+    // still collide, and the document must not lose an operation when it does.
     const { document, diagnostics } = await documentFor((app) => {
-      app.get('/a', { name: 'same', response: { 200: PublicUser } }, () => null as never)
-      app.get('/b', { name: 'same', response: { 200: PublicUser } }, () => null as never)
+      app.get('/a', { name: 'a', meta: { operationId: 'same' }, response: { 200: PublicUser } }, () => null as never)
+      app.get('/b', { name: 'b', meta: { operationId: 'same' }, response: { 200: PublicUser } }, () => null as never)
     })
 
     const ids = [operation(document, '/a', 'get')['operationId'], operation(document, '/b', 'get')['operationId']]

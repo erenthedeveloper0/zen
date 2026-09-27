@@ -1,4 +1,4 @@
-import { Codes } from './codes.ts'
+import { Codes, docsUrl } from './codes.ts'
 
 export interface ZenErrorInit {
   readonly status?: number | undefined
@@ -45,7 +45,20 @@ export class ZenError extends Error {
   readonly consequence: string | undefined
 
   constructor(code: string, message: string, init: ZenErrorInit = {}) {
-    super(message, init.cause !== undefined ? { cause: init.cause } : undefined)
+    // One stack capture, not two. `super()` captures a stack as a side effect
+    // of constructing an `Error`, and `captureStackTrace` below captured it
+    // again to hide the constructor frames — so every `ZenError` paid for its
+    // stack twice, which made `new NotFound()` ~3.7× the cost of a plain
+    // `new Error()`. The first capture is suppressed; the second is the one
+    // whose frames are worth reading.
+    const limits = Error as unknown as { stackTraceLimit?: number | undefined }
+    const limit = limits.stackTraceLimit
+    limits.stackTraceLimit = 0
+    try {
+      super(message, init.cause !== undefined ? { cause: init.cause } : undefined)
+    } finally {
+      limits.stackTraceLimit = limit
+    }
     this.name = new.target.name
     this.code = code
     this.status = init.status ?? 500
@@ -62,7 +75,7 @@ export class ZenError extends Error {
   /** The client-facing projection. Never includes `meta`, `cause`, or stack. */
   toProblem(instance: string, requestId: string): Record<string, unknown> {
     const problem: Record<string, unknown> = {
-      type: `https://zenjs.dev/errors/${this.code}`,
+      type: docsUrl(this.code),
       title: this.expose ? this.message : defaultTitle(this.status),
       status: this.status,
       instance,
@@ -71,6 +84,38 @@ export class ZenError extends Error {
     }
     if (this.expose && this.details !== undefined) problem['errors'] = this.details
     return problem
+  }
+}
+
+/**
+ * Build an error without capturing a stack — rfcs/0001 §28.8.
+ *
+ * For the framework's *routine refusals* only: the 404 and 405 the dispatcher
+ * answers when nothing matched, the 406 negotiation answers at stage 5, the
+ * 404 for a file that is not there. Their stack is always the same few frames
+ * of the dispatcher, it names nothing in the application, and capturing it was
+ * most of what made a 404 cost ~6× a served request and a 406 ~10× — a free
+ * amplification factor on the cheapest hostile traffic there is (§32.5,
+ * §13.4.6).
+ *
+ * That was recorded as "a decision about what a developer sees in dev mode",
+ * and the decision turns out to have one answer: a developer sees nothing
+ * useful in that stack in any mode, because it never leaves the dispatcher.
+ * An error the *application* throws — `throw new NotFound('User 7 not found')`
+ * in a handler — is built normally and keeps its stack, which is the one that
+ * points somewhere worth reading.
+ *
+ * `Error.stackTraceLimit` is V8's (and JavaScriptCore's). Where it is not
+ * honoured, setting it is harmless and the error simply keeps its stack.
+ */
+export function withoutStack<T>(build: () => T): T {
+  const limits = Error as unknown as { stackTraceLimit?: number | undefined }
+  const limit = limits.stackTraceLimit
+  limits.stackTraceLimit = 0
+  try {
+    return build()
+  } finally {
+    limits.stackTraceLimit = limit
   }
 }
 
@@ -120,7 +165,7 @@ export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
     if (diagnostic.consequence !== undefined) {
       lines.push(`     also: ${diagnostic.consequence}`)
     }
-    lines.push(`     docs: https://zenjs.dev/errors/${diagnostic.code}`)
+    lines.push(`     docs: ${docsUrl(diagnostic.code)}`)
     lines.push('')
   })
 

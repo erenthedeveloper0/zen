@@ -174,7 +174,7 @@ export function resolvePlugins(
 /**
  * A deliberately small semver range check: `*`, `1.2.3`, `^1.2.3`, `~1.2.3`,
  * `>=1.2.3`. Enough for plugin dependency declarations, and small enough to
- * keep `@zenjs/core` at zero runtime dependencies (§19.8).
+ * keep `@visionpilot/zen-core` at zero runtime dependencies (§19.8).
  */
 export function satisfies(version: string, range: string): boolean {
   const trimmed = range.trim()

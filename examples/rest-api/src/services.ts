@@ -1,4 +1,4 @@
-import { token, Conflict, NotFound } from 'zen'
+import { token, Conflict, NotFound } from '@visionpilot/zen'
 import type { NewUserInput, PatchUserInput, UserRow } from './domain.ts'
 
 /**

@@ -70,8 +70,19 @@ export const Codes = {
 
 export type ZenCode = (typeof Codes)[keyof typeof Codes]
 
-export const DOCS_BASE = 'https://zenjs.dev/errors/'
+/**
+ * Where every code is documented — one section per code, in the repository.
+ *
+ * This is also the `type` URI of every RFC 9457 problem document Zen writes, so
+ * it is part of the error contract (I7) and has to be a URL the project
+ * controls. It used to be `https://zenjs.dev/errors/`, a domain nobody had
+ * registered: every error response from every Zen application pointed at an
+ * address the first person to buy it would decide the content of.
+ * `docs/errors.md` has a heading per code, and a test asserts it stays complete.
+ */
+export const DOCS_BASE = 'https://github.com/VisionPilot/Zen.js/blob/main/docs/errors.md#'
 
+/** The documentation link for a code — GitHub's anchor for its heading. */
 export function docsUrl(code: string): string {
-  return DOCS_BASE + code
+  return DOCS_BASE + code.toLowerCase()
 }

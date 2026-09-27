@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { registerSchemaConverter } from 'zen'
+import { registerSchemaConverter } from '@visionpilot/zen'
 
 /**
  * Teach Zen how to read Zod's shape — rfcs/0001 §11.1, §13.3, §16.2.

@@ -1,0 +1,108 @@
+name: Release
+
+# Publishing is triggered by pushing a version tag — `v0.1.0-alpha.2` — made by
+# `node scripts/version.ts 0.1.0-alpha.2` (see RELEASING.md). Nothing else
+# publishes, and a tag that disagrees with the package versions is refused.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # Every CI gate, unchanged. A release is a commit that already passed them.
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    # A GitHub environment with required reviewers: a human approves every
+    # release, which is the one control that stops a compromised dependency in
+    # the build from shipping one.
+    environment: npm-publish
+    permissions:
+      contents: write     # the GitHub release
+      id-token: write     # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22 bundles npm 10.
+      - run: npm install -g npm@^11.5.1
+
+      - run: npm ci
+      - run: npm run typecheck
+
+      - name: Tag matches every package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          node scripts/check-release.ts "$tag"
+
+      - name: Packaging is clean (what actually ships)
+        run: node scripts/check-pack.ts
+
+      # A prerelease must never land on `latest`: `npm install @visionpilot/zen`
+      # would then install a pre-alpha for anyone who did not ask for one, and
+      # there is no undo.
+      - name: Derive the dist-tag from the version
+        id: tag
+        run: |
+          v=$(node -p "require('./packages/core/package.json').version")
+          case "$v" in
+            *-alpha*) echo "dist=alpha" >> "$GITHUB_OUTPUT" ;;
+            *-beta*)  echo "dist=beta"  >> "$GITHUB_OUTPUT" ;;
+            *-rc*)    echo "dist=next"  >> "$GITHUB_OUTPUT" ;;
+            *-*)      echo "::error::unrecognised prerelease $v"; exit 1 ;;
+            *)        echo "dist=latest" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # Dependency order, one at a time: the internal pins are exact, so a
+      # package whose dependency is not yet on the registry installs broken.
+      # A version already published is skipped, so a run that failed half way
+      # can simply be re-run.
+      - name: Publish, in dependency order
+        env:
+          # Empty unless an NPM_TOKEN secret exists — used only to bootstrap the
+          # first publish, before trusted publishing can be configured on the
+          # packages. Delete the secret once it is.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in core router adapter-node openapi middleware zen; do
+            name=$(node -p "require('./packages/$dir/package.json').name")
+            version=$(node -p "require('./packages/$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "── $name@$version already published, skipping"
+              continue
+            fi
+            echo "── publishing $name@$version (tag ${{ steps.tag.outputs.dist }})"
+            npm publish --workspace "packages/$dir" \
+              --tag "${{ steps.tag.outputs.dist }}" \
+              --provenance --access public
+            # The registry's read replicas lag a few seconds behind a publish;
+            # the next package depends on this one.
+            for i in $(seq 1 30); do
+              npm view "$name@$version" version >/dev/null 2>&1 && break
+              sleep 2
+            done
+          done
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --notes "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)." \
+            $prerelease

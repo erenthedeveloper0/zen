@@ -1,4 +1,4 @@
-import { zen, slot, NotFound, type Context } from 'zen'
+import { zen, slot, NotFound, type Context } from '@visionpilot/zen'
 
 // ─── A slot: the typed replacement for `req.user = x` (rfcs/0001 §7.4) ───────
 interface User {
@@ -74,6 +74,5 @@ console.log(`\n  zen listening on ${handle.url}`)
 console.log(`  routes: ${app.graph().routes.length}`)
 console.log(`  try:    curl ${handle.url}/users/1\n`)
 
-process.on('SIGINT', () => {
-  void app.close('SIGINT').then(() => process.exit(0))
-})
+// SIGTERM and SIGINT drain and exit on their own: `zen()` installs the process
+// lifecycle when the app starts listening (§4.5, §12.8).

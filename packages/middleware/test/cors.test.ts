@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { defineConfig } from '@zenjs/core'
+import { defineConfig } from '@visionpilot/zen-core'
 import { cors, securityHeaders } from '../src/index.ts'
 import { bootFailure, makeApp, varyTokens } from './helpers.ts'
 

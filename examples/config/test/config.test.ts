@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { BootError, REDACTED, explainConfig, parseDotenv, type EnvSource } from 'zen'
+import { BootError, REDACTED, explainConfig, parseDotenv, type EnvSource } from '@visionpilot/zen'
 import { makeApp } from '../src/app.ts'
 import config from '../src/config/zen.config.ts'
 import type { AppConfig, AppEnv } from '../src/config/types.ts'
@@ -11,7 +11,7 @@ import { z } from '../src/shared/zod.ts'
  *
  * This suite exists for two reasons the core suite cannot serve.
  *
- * **Real Zod.** `@zenjs/core` has no runtime dependencies and its tests keep
+ * **Real Zod.** `@visionpilot/zen-core` has no runtime dependencies and its tests keep
  * that honest, so the core suite validates against a hand-written schema. The
  * claims §16.2 makes are about what a *real* schema library produces:
  * `z.coerce.number().int().min(1).max(100)` converting `'25'` to `25` and

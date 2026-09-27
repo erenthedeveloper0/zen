@@ -7,7 +7,7 @@ import {
   compileContext, CodeGen, DEFAULT_CAPABILITIES, PlainContext, ZenContainer, SmallHeaderBag,
   parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply,
   type RawRequest, type ContextEnv,
-} from '@zenjs/core'
+} from '@visionpilot/zen-core'
 import { silentLogger, uniqueName } from './helpers.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -24,7 +24,7 @@ function rawRequest(url: string, headers: Record<string, string> = {}): RawReque
   }
 }
 
-function makeEnv(trustProxy = false): ContextEnv {
+function makeEnv(trustProxy: boolean | number = false): ContextEnv {
   return { log: silentLogger(), maxQueryParams: 100, trustProxy, container: new ZenContainer() }
 }
 
@@ -61,11 +61,15 @@ describe('differential: compiled context ≡ PlainContext', () => {
     ['/caf%C3%A9?city=S%C3%A3o%20Paulo', {}],
     ['/x', { host: 'api.example.com', cookie: 'sid=abc; theme=dark' }],
     ['/x', { host: 'api.example.com', 'x-forwarded-for': '203.0.113.7, 10.0.0.1', 'x-forwarded-proto': 'https' }],
+    // The absolute form (RFC 9112 §3.2.2) and a cookie that is base64: both
+    // twins must read the path out of the one and keep the `+` in the other.
+    ['http://api.example.com/orders/7?expand=lines', { host: 'api.example.com' }],
+    ['/x', { host: 'api.example.com', cookie: 'session=ab+cd/ef==; plain=a+b' }],
   ]
 
   test('every accessor agrees on every probe', () => {
     for (const [url, headers] of PROBES) {
-      for (const trustProxy of [false, true]) {
+      for (const trustProxy of [false, true, 0, 1, 2, 5]) {
         const env = makeEnv(trustProxy)
         const signal = new AbortController().signal
         const a = new Compiled(rawRequest(url, headers), null, { id: '1' }, env, signal)
@@ -104,6 +108,35 @@ describe('differential: compiled context ≡ PlainContext', () => {
     for (const Klass of [Compiled, Interpreted]) {
       const ctx = new Klass(rawRequest('/'), null, {}, makeEnv(), new AbortController().signal)
       assert.throws(() => ctx.get(Empty), /ZEN_SLOT_EMPTY|was read before it was set/)
+    }
+  })
+
+  test('a disposable slot queues every value it held, once each, in both (§7.4)', () => {
+    // The queue used to hold the *slot*, and settle read its current value — so
+    // a slot set twice disposed its second value twice and leaked its first.
+    const noop = (): void => {}
+    const Tx = slot<string>(uniqueName('ctx.tx'), { dispose: noop })
+    for (const Klass of [Compiled, Interpreted]) {
+      const ctx = new Klass(rawRequest('/'), null, {}, makeEnv(), new AbortController().signal)
+      ctx.set(Tx, 'first')
+      ctx.set(Tx, 'second')
+      ctx.set(Tx, 'second')
+      ctx.set(Tx, undefined as never)
+      assert.deepEqual(
+        (ctx.$disposers ?? []).map((entry) => entry.value),
+        ['first', 'second'],
+        `${Klass === Compiled ? 'compiled' : 'interpreted'}: each value once; undefined is nothing to release`,
+      )
+    }
+  })
+
+  test('an invalid Host header makes ctx.url a 400, not a TypeError (RFC 9112 §3.2)', () => {
+    for (const Klass of [Compiled, Interpreted]) {
+      const ctx = new Klass(rawRequest('/x', { host: 'exa mple' }), null, {}, makeEnv(), new AbortController().signal)
+      assert.throws(() => ctx.url, (error: unknown) => {
+        assert.equal((error as { status?: number }).status, 400)
+        return true
+      })
     }
   })
 })
@@ -242,6 +275,15 @@ describe('cookies', () => {
     assert.deepEqual({ ...parseCookies('a="quoted"; b=S%C3%A3o') }, { a: 'quoted', b: 'São' })
   })
 
+  test('a `+` is a plus — only form encoding spells a space that way', () => {
+    // Base64 session ids are full of `+`. Decoding it as a space turned a valid
+    // session into one no server would recognise.
+    assert.deepEqual(
+      { ...parseCookies('session=ab+cd/ef==; mixed=a+b%20c') },
+      { session: 'ab+cd/ef==', mixed: 'a+b c' },
+    )
+  })
+
   test('first value wins for duplicates', () => {
     assert.deepEqual({ ...parseCookies('a=1; a=2') }, { a: '1' })
   })
@@ -311,5 +353,39 @@ describe('egress (§13.6)', () => {
     const reply = prepareForWire(contextFor('GET'), emptyReply(204))
     assert.equal(reply.body.kind, 'empty')
     assert.equal(reply.headers.has('content-type'), false)
+  })
+})
+
+describe('trustProxy as a hop count (§19.4)', () => {
+  // The client sent "spoofed"; the one load balancer in front (10.0.0.1, the
+  // socket peer) appended the address it actually saw.
+  const headers = { 'x-forwarded-for': 'spoofed, 203.0.113.7', 'x-forwarded-proto': 'https, http' }
+  const ipWith = (trustProxy: boolean | number): string =>
+    new PlainContext(rawRequest('/', headers), null, {}, makeEnv(trustProxy), 0, new AbortController().signal).ip
+
+  test('off by default: the socket address, whatever the headers say', () => {
+    assert.equal(ipWith(false), '10.0.0.1')
+    assert.equal(ipWith(0), '10.0.0.1')
+  })
+
+  test('one trusted hop reads the address the load balancer saw, which the client cannot choose', () => {
+    assert.equal(ipWith(1), '203.0.113.7')
+  })
+
+  test('`true` reads the leftmost entry — the one the client wrote', () => {
+    assert.equal(ipWith(true), 'spoofed')
+  })
+
+  test('more hops than entries falls back to the leftmost', () => {
+    assert.equal(ipWith(2), 'spoofed')
+    assert.equal(ipWith(9), 'spoofed')
+  })
+
+  test('X-Forwarded-Proto is read from its first entry, and only when trusted', () => {
+    const secure = (trustProxy: boolean | number) =>
+      new PlainContext(rawRequest('/', headers), null, {}, makeEnv(trustProxy), 0, new AbortController().signal).secure
+    assert.equal(secure(false), false)
+    assert.equal(secure(1), true)
+    assert.equal(secure(true), true)
   })
 })

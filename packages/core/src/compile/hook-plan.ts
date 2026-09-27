@@ -1,5 +1,7 @@
 import type { HookPlan, HookRecord, PipelinePhase, RequestPhase, RouteHooks } from '../contracts/hook.ts'
-import { PIPELINE_PHASES, POST_FAMILY, REQUEST_PHASES, UNAVAILABLE_PHASES, isRequestPhase } from '../contracts/hook.ts'
+import {
+  APP_PHASES, PIPELINE_PHASES, POST_FAMILY, REQUEST_PHASES, UNAVAILABLE_PHASES, isRequestPhase,
+} from '../contracts/hook.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 
@@ -81,6 +83,20 @@ export function routeHookRecords(hooks: RouteHooks | undefined): HookRecord[] {
       out.push({ phase, fn, scope: 'route', name: fn.name === '' ? undefined : fn.name })
     }
   }
+  // Every other key too. They cannot run here — the loop above is the whole of
+  // what a scoped hook can be — but reading only known keys meant a typo'd
+  // `preHandlr` or an `onReady` written on a route was dropped without a trace.
+  // Recorded, they reach `diagnoseUnknown` and `diagnoseMisplaced`, and the boot
+  // is refused with the name that was meant.
+  for (const key of Object.keys(hooks)) {
+    if (isRequestPhase(key)) continue
+    const entry = (hooks as Record<string, unknown>)[key]
+    const list = (Array.isArray(entry) ? entry : [entry]) as readonly unknown[]
+    for (const fn of list) {
+      const named = typeof fn === 'function' && fn.name !== '' ? fn.name : undefined
+      out.push({ phase: key as RequestPhase, fn: fn as Function, scope: 'route', name: named })
+    }
+  }
   return out
 }
 
@@ -152,6 +168,105 @@ export function diagnoseUnavailable(records: Iterable<HookRecord>): Diagnostic[]
     })
   }
   return out
+}
+
+/**
+ * Hooks registered for a phase that does not exist — §9.7's sibling.
+ *
+ * `app.hook('onReqest', fn)` type-checks nowhere, but it runs everywhere a
+ * phase name arrives as a string: JavaScript, a plugin compiled against an
+ * older type surface, `as any`. It used to be filed under the application-phase
+ * table, which is keyed by name and read by name, so the hook was stored and
+ * never called — exactly the failure §9.7 refuses for a phase that exists and
+ * cannot fire. `ZEN_HOOK_PHASE_UNKNOWN` has been in Annex B since 0.1 with
+ * nothing producing it; this is its producer.
+ */
+export function diagnoseUnknown(records: Iterable<HookRecord>): Diagnostic[] {
+  const out: Diagnostic[] = []
+  const reported = new Set<string>()
+  for (const record of records) {
+    const phase = record.phase as string
+    if (KNOWN_PHASES.has(phase) || reported.has(phase)) continue
+    reported.add(phase)
+    const guess = closest(phase, [...KNOWN_PHASES])
+    out.push({
+      severity: 'error',
+      code: Codes.HOOK_PHASE_UNKNOWN,
+      message:
+        `A hook is registered for "${phase}", which is not a hook phase` +
+        (record.name === undefined ? '' : ` (hook: ${record.name})`) + '.',
+      hint: guess === null
+        ? `Use one of: ${[...KNOWN_PHASES].join(', ')}.`
+        : `Did you mean "${guess}"?`,
+      consequence: 'Registered under an unknown name, the hook would have been stored and never called.',
+    })
+  }
+  return out
+}
+
+/**
+ * Application phases written where only request phases can go — a route's or a
+ * collection's `hooks: { … }`.
+ *
+ * `onReady` fires once for the application; there is no route for it to be
+ * scoped to, so a route declaring one was declaring a hook that could never
+ * run. Registered through `app.hook()` it does run, which is the fix the
+ * diagnostic names.
+ */
+export function diagnoseMisplaced(records: Iterable<HookRecord>): Diagnostic[] {
+  const out: Diagnostic[] = []
+  const reported = new Set<string>()
+  for (const record of records) {
+    const phase = record.phase as string
+    if (!APP_PHASE_SET.has(phase) || reported.has(phase)) continue
+    reported.add(phase)
+    out.push({
+      severity: 'error',
+      code: Codes.HOOK_PHASE_UNKNOWN,
+      message:
+        `"${phase}" is an application phase, so it cannot be declared in a route's or a collection's hooks` +
+        (record.name === undefined ? '' : ` (hook: ${record.name})`) + '.',
+      hint: `Register it once for the application: app.hook('${phase}', fn).`,
+      consequence: 'Declared on a route, the hook would have been stored and never called.',
+    })
+  }
+  return out
+}
+
+const KNOWN_PHASES: ReadonlySet<string> = new Set<string>([...REQUEST_PHASES, ...APP_PHASES])
+const APP_PHASE_SET: ReadonlySet<string> = new Set<string>(APP_PHASES)
+
+/** The known phase within two edits of `input`, if any. */
+function closest(input: string, candidates: readonly string[]): string | null {
+  let best: string | null = null
+  let bestDistance = 3
+  const lower = input.toLowerCase()
+  for (const candidate of candidates) {
+    const d = distance(lower, candidate.toLowerCase())
+    if (d < bestDistance) {
+      best = candidate
+      bestDistance = d
+    }
+  }
+  return best
+}
+
+function distance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 1; i <= a.length; i++) {
+    let previous = row[0] as number
+    row[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const current = row[j] as number
+      row[j] = Math.min(
+        (row[j] as number) + 1,
+        (row[j - 1] as number) + 1,
+        previous + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1),
+      )
+      previous = current
+    }
+  }
+  return row[b.length] as number
 }
 
 export type { PipelinePhase }

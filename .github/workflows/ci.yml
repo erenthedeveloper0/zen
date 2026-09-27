@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml runs every gate below before it publishes anything.
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,12 +19,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: ['22.x', '24.x']
+        # Both LTS lines and the current release. Node >= 22.18 runs the
+        # TypeScript sources directly (type stripping unflagged); `22.x`
+        # resolves to the newest 22, which is what contributors have.
+        node: ['22.x', '24.x', '26.x']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -35,7 +40,7 @@ jobs:
       - name: Typecheck & build
         run: npm run typecheck
 
-      # 611 tests: unit, integration, differential (compiled ≡ interpreted —
+      # ~970 tests: unit, integration, differential (compiled ≡ interpreted —
       # random hook plans crossed with random middleware chains, and random
       # chains where the deadline blows at a random position, which must agree
       # on *which* boundary abandoned the request), type-level, the
@@ -52,6 +57,12 @@ jobs:
       # the hand-written test passed against.
       - name: Test
         run: npm test
+
+      # The Node adapter's own suite runs inside `npm test` above, over real
+      # sockets: a request body must not abort ctx.signal, a client leaving
+      # mid-stream must not crash the process, a missing file is a 404 rather
+      # than a dropped connection, and shutdown does not wait on idle
+      # keep-alive connections. None of those is visible to inject().
 
       # Real sockets, real HTTP — proves the adapter and wire format, which
       # inject() deliberately bypasses. Includes the §13.3 leak check (a route
@@ -77,8 +88,8 @@ jobs:
     name: type-check performance gate (M2)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: npm
@@ -196,10 +207,26 @@ jobs:
       - name: Content negotiation cost
         run: node benchmarks/negotiation/run.ts
 
+      # §28.8 — the refusal path. A 404 used to cost ~10× a served request,
+      # almost all of it the stack of an Error nobody would read: a free
+      # amplification factor for the cheapest hostile traffic there is. The job
+      # fails if a refusal the framework makes (404, 405, 406) captures a stack
+      # again, or if an error an application throws stops keeping its own.
+      - name: Refusal cost
+        run: node benchmarks/refusals/run.ts
+
+      # The pre-release audit's fixes on the request path, gated on what is
+      # emitted rather than on a timing: a route without `around` stays
+      # byte-identical beside one with it, `next()` gains its promise only where
+      # the downstream compiled synchronous, an absolute-form target routes like
+      # the origin form, and a request with nothing to release queues nothing.
+      - name: Request path cost
+        run: node benchmarks/request-path/run.ts
+
       # HANDOFF convention #3 — "a test that passes against the bug is not a
-      # test". Twelve known defects are patched into the source one at a time;
-      # each must make its named suite fail. A control that *passes* means the
-      # assertion it points at is not load-bearing, and the job fails.
+      # test". Forty-three known defects are patched into the source one at a
+      # time; each must make its named suite fail. A control that *passes*
+      # means the assertion it points at is not load-bearing, and the job fails.
       #
       # It caught three things on its first run, which is why it is a script and
       # a CI step rather than something each pass does by hand: a property
@@ -207,15 +234,40 @@ jobs:
       # existed for, an assertion aimed at a code path that could not reach the
       # behaviour it claimed to cover, and a control whose patch did not compile
       # (which reads exactly like a passing control unless something checks).
+      # The audit pass that added seventeen more found a fourth: a test that
+      # probed for a free port with the very call it was testing, so the bug
+      # and the probe agreed and the test passed against the defect.
       - name: Negative controls
         run: node scripts/negative-controls.ts
 
-  zero-dependencies:
-    name: '@zenjs/core has zero runtime dependencies'
+  packaging:
+    name: packages install and run from their tarballs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+      # npm-registry.md §2 and §8. The workspace resolves every package through
+      # symlinks and never packs, so nothing else here sees a tarball: no build
+      # cache with absolute paths, no source map without its source, README and
+      # LICENSE present — then all six tarballs installed in a scratch project
+      # outside the workspace, serving a real request, and a consumer
+      # type-checked against the published declarations on the oldest
+      # TypeScript the manifests declare.
+      - name: Pack, install, run, type-check on TypeScript 5.0
+        run: node scripts/check-pack.ts --typescript 5.0
+
+  zero-dependencies:
+    name: '@visionpilot/zen-core has zero runtime dependencies'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
 
@@ -224,20 +276,20 @@ jobs:
         run: |
           deps=$(node -p "JSON.stringify(require('./packages/core/package.json').dependencies || {})")
           echo "core dependencies: $deps"
-          test "$deps" = "{}" || { echo "::error::@zenjs/core gained a runtime dependency: $deps"; exit 1; }
+          test "$deps" = "{}" || { echo "::error::@visionpilot/zen-core gained a runtime dependency: $deps"; exit 1; }
 
-      - name: Assert core imports nothing from node:
+      - name: "Assert core imports nothing from node:"
         run: |
           if grep -rn "from 'node:" packages/core/src; then
-            echo "::error::@zenjs/core must not import platform APIs — that is the adapter's job (§3.3 B2)"
+            echo "::error::@visionpilot/zen-core must not import platform APIs — that is the adapter's job (§3.3 B2)"
             exit 1
           fi
 
       # §24.3 — the dependency graph has no cycles and openapi is a leaf on core.
       # Depending on the router would be the shortest way to reach param-type
       # schemas, and the one where the two copies of that table drift (§5.2).
-      - name: Assert @zenjs/openapi depends on core alone
+      - name: Assert @visionpilot/zen-openapi depends on core alone
         run: |
           deps=$(node -p "Object.keys(require('./packages/openapi/package.json').dependencies || {}).join(',')")
           echo "openapi dependencies: $deps"
-          test "$deps" = "@zenjs/core" || { echo "::error::@zenjs/openapi must depend on @zenjs/core alone, got: $deps"; exit 1; }
+          test "$deps" = "@visionpilot/zen-core" || { echo "::error::@visionpilot/zen-openapi must depend on @visionpilot/zen-core alone, got: $deps"; exit 1; }

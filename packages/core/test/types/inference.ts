@@ -6,9 +6,9 @@
  * an error fails the build just as loudly as a new error does, which is what
  * makes the negative cases meaningful.
  */
-import type { StandardSchemaV1 } from '@zenjs/core'
-import { createApp, slot, token, definePlugin, defineConfig, type Context, type ExtractParams } from '@zenjs/core'
-import { ZenRouter, parsePath } from '@zenjs/router'
+import type { StandardSchemaV1 } from '@visionpilot/zen-core'
+import { createApp, slot, token, definePlugin, defineConfig, type Context, type ExtractParams } from '@visionpilot/zen-core'
+import { ZenRouter, parsePath } from '@visionpilot/zen-router'
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 

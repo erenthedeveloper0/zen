@@ -1,5 +1,5 @@
-import { slot } from 'zen'
-import type { Collection, Reply, TimeoutInfo } from 'zen'
+import { slot } from '@visionpilot/zen'
+import type { Collection, Reply, TimeoutInfo } from '@visionpilot/zen'
 import { QuoteToken } from './service.ts'
 import { QuoteEnvelopeView, QuoteQuery } from './schemas.ts'
 import type { Quote } from '../../shared/upstream.ts'

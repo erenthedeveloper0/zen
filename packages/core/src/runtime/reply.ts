@@ -1,4 +1,4 @@
-import type { BodyPayload, Reply, ReplyInit, SetCookie, StreamSource } from '../contracts/reply.ts'
+import type { BodyPayload, FileReplyInit, Reply, ReplyInit, SetCookie, StreamSource } from '../contracts/reply.ts'
 import { SmallHeaderBag } from './headers.ts'
 
 export class MutableReply<T = unknown> implements Reply<T> {
@@ -34,8 +34,8 @@ export function streamReply(value: StreamSource, init?: ReplyInit): Reply<null> 
   return new MutableReply<null>(200, { kind: 'stream', value, media: init?.media ?? 'application/octet-stream' }, init)
 }
 
-export function fileReply(path: string, init?: ReplyInit): Reply<null> {
-  return new MutableReply<null>(200, { kind: 'file', path, media: init?.media }, init)
+export function fileReply(path: string, init?: FileReplyInit): Reply<null> {
+  return new MutableReply<null>(200, { kind: 'file', path, media: init?.media, root: init?.root }, init)
 }
 
 export function emptyReply(status: 204 | 205 | 304 = 204): Reply<null> {
