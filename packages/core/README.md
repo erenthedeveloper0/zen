@@ -28,6 +28,11 @@ npm install @erenthedeveloper0/zen-core@alpha
 - **The runtime.** Deadlines with a real `AbortSignal`, body intake with limits
   enforced during the read, content negotiation, server-sent events, RFC 9457
   problem documents, health and readiness.
+- **Injection defences.** The `html` template tag escapes every interpolation
+  for where it sits and refuses the places no escaping helps — inside
+  `<script>`, in an `onclick` — and `ctx.html()` takes only the `SafeHtml` it
+  builds. `ctx.redirect()` stays on the origin unless `redirect.allowExternal`
+  names another.
 - **Configuration.** Layered resolution with per-value provenance, a
   schema-validated environment checked before any plugin runs, and secrets that
   redact themselves when serialised.

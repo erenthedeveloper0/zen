@@ -223,8 +223,19 @@ jobs:
       - name: Request path cost
         run: node benchmarks/request-path/run.ts
 
+      # §19.5 — three gates, and the first two are security gates living in a
+      # benchmark for the reason §11.4's and §32.3's are: the unsafe version of
+      # each is the faster one. The job fails if a hostile value escapes its
+      # hole in any of seven positions — judged by the WHATWG URL parser and a
+      # grammar for escaped text, not by the code under test — if a hostile
+      # redirect reaches an origin its policy does not name, under an http page
+      # or an https one; and if configuring a redirect policy changes a byte of
+      # generated code, which is what keeps it off the request path.
+      - name: Injection defences cost
+        run: node benchmarks/injection/run.ts
+
       # CONTRIBUTING.md convention 3 — "a test that passes against the bug is not a
-      # test". Forty-four known defects are patched into the source one at a
+      # test". Fifty-seven known defects are patched into the source one at a
       # time; each must make its named suite fail. A control that *passes*
       # means the assertion it points at is not load-bearing, and the job fails.
       #

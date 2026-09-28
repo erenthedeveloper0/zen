@@ -63,6 +63,7 @@
     "controls": "node scripts/negative-controls.ts",
     "bench:refusals": "node benchmarks/refusals/run.ts",
     "bench:request-path": "node benchmarks/request-path/run.ts",
+    "bench:injection": "node benchmarks/injection/run.ts",
     "check:pack": "node scripts/check-pack.ts --typescript 5.0",
     "check:release": "node scripts/check-release.ts",
     "release:version": "node scripts/version.ts",

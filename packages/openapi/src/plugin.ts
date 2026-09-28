@@ -1,5 +1,5 @@
-import type { AppGraph, Diagnostic, Plugin } from '@erenthedeveloper0/zen-core'
-import { BootError, definePlugin } from '@erenthedeveloper0/zen-core'
+import type { AppGraph, Diagnostic, Plugin, SafeHtml } from '@erenthedeveloper0/zen-core'
+import { BootError, definePlugin, unsafeHtml } from '@erenthedeveloper0/zen-core'
 import { openapiDocument, type OpenApiOptions, type OpenApiResult } from './document.ts'
 import type { DocDiagnostic } from './schema.ts'
 import { renderReference } from './ui.ts'
@@ -35,7 +35,7 @@ interface Served {
   result: OpenApiResult | null
   json: string
   etag: string
-  html: string
+  html: SafeHtml
 }
 
 export const openapiPlugin: Plugin<OpenApiPluginOptions, {}> = definePlugin<OpenApiPluginOptions, {}>({
@@ -45,7 +45,7 @@ export const openapiPlugin: Plugin<OpenApiPluginOptions, {}> = definePlugin<Open
   setup(app, options) {
     const jsonPath = options.json === undefined ? '/openapi.json' : options.json
     const uiPath = options.ui === undefined ? '/docs' : options.ui
-    const served: Served = { result: null, json: '{}', etag: '', html: '' }
+    const served: Served = { result: null, json: '{}', etag: '', html: unsafeHtml('') }
 
     if (jsonPath !== false) {
       app.route({
@@ -80,9 +80,14 @@ export const openapiPlugin: Plugin<OpenApiPluginOptions, {}> = definePlugin<Open
       served.result = result
       served.json = JSON.stringify(result.document, null, 2)
       served.etag = weakEtag(served.json)
-      served.html = uiPath === false
+      // `unsafeHtml`, once, at boot: the page inlines the document in a JSON
+      // island and a script, which `html` rightly refuses to fill from holes,
+      // and `renderReference` escapes both itself (`<` as `<` in the
+      // island, every text value through `escapeHtml`). The mark is the
+      // statement that it did, made where a reviewer can check it (§19.5).
+      served.html = unsafeHtml(uiPath === false
         ? ''
-        : renderReference(result.document, { jsonPath: jsonPath === false ? null : jsonPath })
+        : renderReference(result.document, { jsonPath: jsonPath === false ? null : jsonPath }))
 
       if (options.strict === true && result.diagnostics.length > 0) {
         throw new BootError(result.diagnostics.map(toBootDiagnostic))
@@ -106,7 +111,7 @@ interface DocsContext {
   readonly headers: Readonly<Record<string, string | undefined>>
   empty(status?: 204 | 205 | 304): unknown
   text(body: string, init?: { media?: string; headers?: Record<string, string> }): unknown
-  html(body: string): unknown
+  html(body: SafeHtml): unknown
 }
 
 function toBootDiagnostic(diagnostic: DocDiagnostic): Diagnostic {

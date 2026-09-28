@@ -2,8 +2,10 @@ import type { RawRequest } from '../contracts/adapter.ts'
 import type { Logger } from '../contracts/logger.ts'
 import type { HeaderValue } from '../contracts/http.ts'
 import type {
-  FileReplyInit, Reply, ReplyInit, SetCookie, StreamSource, SseInit,
+  FileReplyInit, RedirectInit, RedirectStatus, Reply, ReplyInit, SetCookie, StreamSource, SseInit,
 } from '../contracts/reply.ts'
+import type { SafeHtml } from '../contracts/html.ts'
+import type { RedirectPolicy } from './redirect.ts'
 import type { RouteInfo, ReplyBuilder } from '../contracts/context.ts'
 import type { Slot } from '../contracts/slot.ts'
 import type { Container, Token } from '../contracts/container.ts'
@@ -52,6 +54,13 @@ export interface ContextEnv {
    * shape change in either twin.
    */
   readonly config: Readonly<Record<string, unknown>>
+  /**
+   * Where `ctx.redirect()` may send a client — §19.5, compiled at boot from
+   * `redirect.allowExternal`. Here for the reason `config` is: identical for
+   * every request, so a getter's worth of reach rather than a field on the
+   * context. Absent means the default, same-origin only.
+   */
+  readonly redirect?: RedirectPolicy | undefined
 }
 
 /**
@@ -260,10 +269,12 @@ export class PlainContext {
   // ── response builders: pure ───────────────────────────────────────────────
   json<T>(body: T, init?: ReplyInit): Reply<T> { return jsonReply(body, init) }
   text(body: string, init?: ReplyInit): Reply<string> { return textReply(body, init) }
-  html(body: string, init?: ReplyInit): Reply<string> { return htmlReply(body, init) }
+  /** §19.5 — `SafeHtml` only; see `htmlReply`. */
+  html(body: SafeHtml, init?: ReplyInit): Reply<string> { return htmlReply(body, init) }
   bytes(body: Uint8Array, init?: ReplyInit): Reply<Uint8Array> { return bytesReply(body, init) }
   empty(status: 204 | 205 | 304 = 204): Reply<null> { return emptyReply(status) }
-  redirect(to: string, status: 301 | 302 | 303 | 307 | 308 = 302): Reply<null> { return redirectReply(to, status) }
+  /** §19.5 — checked against the app's `redirect` policy; see `redirectReply`. */
+  redirect(to: string, init?: RedirectStatus | RedirectInit): Reply<null> { return redirectReply(to, init, this.env.redirect) }
   file(path: string, init?: FileReplyInit): Reply<null> { return fileReply(path, init) }
   stream(source: StreamSource, init?: ReplyInit): Reply<null> { return streamReply(source, init) }
   /** §13.5 — the channel is created here and nothing else; see `runtime/sse.ts`. */

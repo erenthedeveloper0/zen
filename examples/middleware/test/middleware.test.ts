@@ -1,6 +1,6 @@
 import { test, describe, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import type { EnvSource, ZenApp } from '@erenthedeveloper0/zen'
+import { html, type Context, type EnvSource, type ZenApp } from '@erenthedeveloper0/zen'
 import { makeApp } from '../src/app.ts'
 import type { AppConfig } from '../src/config/types.ts'
 
@@ -233,6 +233,56 @@ describe('configuration reaches the plugins (§16, Registrar.config)', () => {
     }
     // …and is still readable by name, which is the whole distinction.
     assert.equal(app.config.admin.token, 'a-sixteen-plus-character-token')
+  })
+})
+
+describe('pages that escape what they print, and redirects that stay home (§19.5)', () => {
+  test('a note stored with a script in it is printed as text', async () => {
+    const created = await app.inject('POST', '/api/notes', {
+      body: { title: '<script>alert(1)</script>', body: '<img src=x onerror=alert(2)>' },
+    })
+    assert.equal(created.status, 201)
+    const page = await app.inject('GET', `/notes/${created.json<{ id: number }>().id}`)
+    assert.equal(page.status, 200)
+    assert.equal(page.header('content-type'), 'text/html; charset=utf-8')
+    assert.match(page.text(), /<h1>&lt;script&gt;alert\(1\)&lt;\/script&gt;<\/h1>/)
+    assert.doesNotMatch(page.text(), /<script>|<img/, 'nothing the note carried became markup')
+    assert.equal(page.header('x-content-type-options'), 'nosniff', 'the pack covers pages too')
+  })
+
+  test('a back link from the query string cannot run script, and an ordinary one works', async () => {
+    const hostile = await app.inject('GET', `/notes/1?from=${encodeURIComponent('javascript:alert(document.cookie)')}`)
+    assert.match(hostile.text(), /<a href="about:invalid#zen-unsafe-url">Back<\/a>/)
+    const fine = await app.inject('GET', `/notes/1?from=${encodeURIComponent('/notes/2')}`)
+    assert.match(fine.text(), /<a href="\/notes\/2">Back<\/a>/)
+  })
+
+  test('?next= is followed when it stays on this origin, and replaced when it does not', async () => {
+    const home = await app.inject('GET', `/login?next=${encodeURIComponent('/notes/2')}`)
+    assert.equal(home.status, 303)
+    assert.equal(home.header('location'), '/notes/2')
+
+    for (const hostile of ['https://evil.example/login', '//evil.example', '/\\evil.example']) {
+      const away = await app.inject('GET', `/login?next=${encodeURIComponent(hostile)}`)
+      assert.equal(away.header('location'), '/notes/1', `${hostile} must not leave`)
+    }
+  })
+
+  test('the identity provider is reachable because app.ts names it, and nothing else is', async () => {
+    const sso = await app.inject('GET', '/login/sso')
+    assert.equal(sso.status, 302)
+    assert.match(sso.header('location') ?? '', /^https:\/\/id\.notes\.example\/authorize\?/)
+  })
+
+  test('ctx.html() takes SafeHtml, not a string — a claim the compiler makes', () => {
+    // Type-checked by `npm run typecheck`, which is the whole proof: the
+    // directive fails the build if a string ever becomes acceptable here.
+    const page = (ctx: Context) => {
+      // @ts-expect-error — a string is not HTML the framework can vouch for
+      void ctx.html('<p>hello</p>')
+      return ctx.html(html`<p>hello, ${ctx.path}</p>`)
+    }
+    assert.equal(typeof page, 'function')
   })
 })
 

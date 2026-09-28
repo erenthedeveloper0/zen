@@ -199,7 +199,7 @@ return class Ctx {
   html(body, init) { return htmlReply(body, init) }
   bytes(body, init) { return bytesReply(body, init) }
   empty(status) { return emptyReply(status === undefined ? 204 : status) }
-  redirect(to, status) { return redirectReply(to, status === undefined ? 302 : status) }
+  redirect(to, init) { return redirectReply(to, init, this.env.redirect) }
   file(path, init) { return fileReply(path, init) }
   stream(source, init) { return streamReply(source, init) }
   sse(init) { return createSseChannel(init) }

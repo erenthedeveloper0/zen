@@ -34,7 +34,7 @@ is that seam, and it is three lines in `packages/core/src/api/zen.ts`.
 
 ---
 
-## Four things worth running
+## Five things worth running
 
 ### 1. The preflight, including the one to a path that does not exist
 
@@ -104,6 +104,35 @@ security, CORS, limit, because the pack orders itself through §10.5's
 matrix of which responses carry which headers, which is the table this whole
 design exists to fill in.
 
+### 5. Pages that print what users wrote, and a `?next=` that stays home
+
+The notes are user content — whatever somebody `POST`ed — so the page that
+renders one is the textbook stored-XSS case, and `/login?next=…` is the
+textbook open redirect. `src/features/pages/routes.ts` has both, and neither
+needs the application to remember anything
+([§19.5](../../ARCHITECTURE.md#195-injection-and-pollution-defences)):
+
+```bash
+curl -s -X POST localhost:3000/api/notes -H 'content-type: application/json' \
+     -d '{"title":"<script>alert(1)</script>","body":"hi"}'
+curl -s localhost:3000/notes/4 | grep '<h1>'                    # <h1>&lt;script&gt;…</h1>
+curl -s 'localhost:3000/notes/1?from=javascript:alert(1)' | grep Back   # href="about:invalid#zen-unsafe-url"
+curl -si 'localhost:3000/login?next=//evil.example' | grep -i location # /notes/1 — the fallback
+curl -si localhost:3000/login/sso | grep -i location            # https://id.notes.example/…
+```
+
+The page is an `html` template, so the title and body are escaped for where
+they sit, and the back link — a URL from the query string in an `href` — has its
+`javascript:` replaced rather than escaped, because escaping it changes nothing.
+`/login` checks `next` with `isLocalUrl` and falls back to a page; if it had not,
+`ctx.redirect()` would have refused `//evil.example` itself, with a 500 and no
+`Location`. And `/login/sso` reaches the identity provider only because `app.ts`
+says `redirect: { allowExternal: ['https://id.notes.example'] }` — one line, in
+the file a reviewer reads.
+
+The page also carries `nosniff` and the rest of `securityHeaders()`: the pack
+stages its headers on every response, and a page is one more response.
+
 ---
 
 ## What the example does not do, and why
@@ -140,6 +169,7 @@ src/
     sources.ts            the fifteen host lines that read .env files (§3.2)
     types.ts              AppConfig, derived from the definition
   features/notes/         routes, schemas, service — none of which mention CORS
+  features/pages/         the same notes as HTML, with html`…`; the ?next= redirect
   shared/zod.ts           one schema converter, read by four subsystems
 test/
   middleware.test.ts      the composition, plus the type-level claims

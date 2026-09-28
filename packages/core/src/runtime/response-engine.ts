@@ -1,7 +1,8 @@
 import type { Reply } from '../contracts/reply.ts'
 import type { Representation } from '../contracts/negotiation.ts'
-import { MutableReply, isReply, jsonReply, textReply, bytesReply, emptyReply } from './reply.ts'
+import { MutableReply, isReply, jsonReply, textReply, htmlReply, bytesReply, emptyReply } from './reply.ts'
 import { isSseChannel } from './sse.ts'
+import { isSafeHtml } from './html.ts'
 import { ZenError } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 
@@ -29,6 +30,11 @@ export function finalize(value: unknown, allowUndefined = false): Reply {
   if (t === 'string') return textReply(value as string)
   if (value instanceof Uint8Array) return bytesReply(value)
   if (isAsyncIterable(value)) {
+    // §19.5 — `() => html`<h1>Hi</h1>`` is a page, as `() => 'Hi'` is text. A
+    // fragment is an async iterable of its markup precisely so that this
+    // check lives in this branch: made on every returned object it cost +16%
+    // of `finalize` for every JSON response (`benchmarks/injection`).
+    if (isSafeHtml(value)) return htmlReply(value)
     // A returned `ctx.sse()` channel is also an async iterable, and without this
     // it would go out as `application/octet-stream` with none of its headers.
     // Checked inside this branch so no other return value pays for it.

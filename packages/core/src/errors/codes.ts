@@ -62,6 +62,12 @@ export const Codes = {
   SLOT_EMPTY: 'ZEN_SLOT_EMPTY',
   SERIALIZATION: 'ZEN_SERIALIZATION',
   HEADER_INVALID: 'ZEN_HEADER_INVALID',
+  /** `ctx.html()` was given something other than `SafeHtml`, or an `html`
+   *  template put a value where escaping cannot make it safe — §19.5. */
+  HTML_UNSAFE: 'ZEN_HTML_UNSAFE',
+  /** `ctx.redirect()` would have sent the client off this origin, to an origin
+   *  `redirect.allowExternal` does not name — the open redirect, refused. §19.5. */
+  REDIRECT_EXTERNAL: 'ZEN_REDIRECT_EXTERNAL',
   REPLY_SENT: 'ZEN_REPLY_SENT',
   CONTEXT_ESCAPED: 'ZEN_CONTEXT_ESCAPED',
   HANDLER_NO_RETURN: 'ZEN_HANDLER_NO_RETURN',

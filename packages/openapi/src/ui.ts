@@ -1,3 +1,4 @@
+import { escapeHtml } from '@erenthedeveloper0/zen-core'
 import type { OpenApiDocument } from './types.ts'
 
 /**
@@ -43,14 +44,6 @@ export function renderReference(document: OpenApiDocument, options: { jsonPath: 
 </body>
 </html>
 `
-}
-
-function escapeHtml(raw: string): string {
-  return raw.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
-}
-
-const HTML_ESCAPES: Readonly<Record<string, string>> = {
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }
 
 const STYLE = `

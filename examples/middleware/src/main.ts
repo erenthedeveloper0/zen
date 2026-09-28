@@ -58,6 +58,9 @@ console.log(`
     DELETE /api/notes/:id      401s without the admin token
     GET    /api/ping           something cheap to rate-limit
     GET    /healthz /readyz    liveness and readiness
+    GET    /notes/:id          a note as a page — try one titled <script>
+    GET    /login?next=…       follows next only if it stays on this origin
+    GET    /login/sso          the one redirect allowed to leave
 
   allowed origins   ${(app.config.cors.origin as readonly string[]).join(', ')}
   rate limit        ${String(app.config.rateLimit.limit)} requests per ${String(app.config.rateLimit.window)}

@@ -139,6 +139,30 @@ export interface ReplyInit {
   readonly media?: string | undefined
 }
 
+/** The statuses `ctx.redirect()` sends — §13.2. */
+export type RedirectStatus = 301 | 302 | 303 | 307 | 308
+
+/**
+ * `ctx.redirect(to, init)` — §19.5.
+ *
+ * A status alone is still written `ctx.redirect(to, 303)`; this form exists
+ * for the one decision a redirect can carry, which is whether it may leave the
+ * application at all.
+ */
+export interface RedirectInit {
+  readonly status?: RedirectStatus | undefined
+  /**
+   * Send the client off this origin although the application's
+   * `redirect.allowExternal` does not name the target's origin.
+   *
+   * For a target the application built entirely itself — a tenant's custom
+   * domain read from its own database. Never for one any part of which came
+   * from the request: that is the open redirect this check exists to close,
+   * and the flag is spelled so that a reviewer asks where the target came from.
+   */
+  readonly allowExternal?: boolean | undefined
+}
+
 /** `ctx.file(path, init)` — §13.5. */
 export interface FileReplyInit extends ReplyInit {
   /**

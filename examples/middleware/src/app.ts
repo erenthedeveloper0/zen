@@ -4,6 +4,7 @@ import './shared/zod.ts'
 import config from './config/zen.config.ts'
 import { envSources } from './config/sources.ts'
 import { NoteService, noteRoutes } from './features/notes/index.ts'
+import { pageRoutes } from './features/pages/index.ts'
 
 /**
  * The composition root — rfcs/0001 §23.4, §32.
@@ -68,6 +69,10 @@ export function makeApp(options: AppOptions = {}) {
     // §19.2. A deadline is the one hardened default that is off unless asked
     // for, and a public service should ask.
     timeout: '10s',
+    // §19.5. `ctx.redirect()` stays on this origin unless an origin is named
+    // here — the one line that lets sign-in reach the identity provider, and
+    // the reason `/login?next=https://evil.example` cannot.
+    redirect: { allowExternal: ['https://id.notes.example'] },
   })
 
   // ── the pack ──────────────────────────────────────────────────────────────
@@ -85,6 +90,11 @@ export function makeApp(options: AppOptions = {}) {
 
   app.collection('/api/notes', { name: 'notes', tags: ['notes'] }, (notes) => {
     noteRoutes(notes, service)
+  })
+
+  // The same notes, as pages a browser loads — escaped by construction (§19.5).
+  app.collection('/', { name: 'pages' }, (pages) => {
+    pageRoutes(pages, service)
   })
 
   /**

@@ -47,10 +47,12 @@ two minor versions.
 The threat model is RFC 0001 [§19.1](./ARCHITECTURE.md#191-threat-model). In
 short, in scope: malformed or malicious HTTP input, resource exhaustion through
 request shape, response injection, over-serialization (a field reaching the
-wire that its schema does not declare), path traversal in file responses, and
-insecure defaults. Out of scope: the correctness of an application's own
-authorization logic, SQL injection in an application's queries, and TLS
-termination.
+wire that its schema does not declare), a value reaching an `html` template's
+output as markup or as a script-capable URL, a `ctx.redirect()` that leaves the
+origin its policy allows, path traversal in file responses, and insecure
+defaults. Out of scope: the correctness of an application's own authorization
+logic, SQL injection in an application's queries, markup an application marks
+with `unsafeHtml()`, and TLS termination.
 
 ## Supply chain
 
@@ -58,7 +60,8 @@ termination.
 CI. Releases are published from GitHub Actions with
 [npm provenance](https://docs.npmjs.com/generating-provenance-statements), so
 `npm audit signatures` can verify which workflow, commit and repository built
-the tarball you installed. The one exception is the first, `0.1.0-alpha.1`:
-npm can attach a trusted publisher only to a package that already exists, so it
-is published by the maintainer from the tagged commit and carries no
-provenance.
+the tarball you installed. The exceptions are the first releases: npm can attach
+a trusted publisher only to a package that already exists, so `0.1.0-alpha.1` —
+and any release published before trusted publishing was configured — was
+published by the maintainer from the tagged commit and carries no provenance.
+`npm audit signatures` says which.

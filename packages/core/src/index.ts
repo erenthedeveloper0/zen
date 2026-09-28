@@ -22,6 +22,7 @@ export {
 export { parseDuration, formatDuration, type Duration } from './primitives/time.ts'
 export { parseDotenv, dotenvChain, type DotenvResult, type EnvEntry } from './primitives/dotenv.ts'
 export { generateRequestId } from './primitives/id.ts'
+export { UrlReference, classifyReference, isLocalUrl, type ReferenceKind } from './primitives/url-reference.ts'
 
 // ── errors ──────────────────────────────────────────────────────────────────
 export { Codes, docsUrl, type ZenCode } from './errors/codes.ts'
@@ -104,6 +105,13 @@ export {
   MutableReply, isReply, jsonReply, textReply, htmlReply, bytesReply,
   emptyReply, redirectReply, fileReply, streamReply,
 } from './runtime/reply.ts'
+
+// ── injection defences (§19.5) ──────────────────────────────────────────────
+export { html, unsafeHtml, escapeHtml, isSafeHtml, NEUTRAL_URL } from './runtime/html.ts'
+export {
+  compileRedirectPolicy, redirectRefusal, SAME_ORIGIN_ONLY,
+  type RedirectOptions, type RedirectPolicy,
+} from './runtime/redirect.ts'
 export {
   finalize, encodeBody, attachSerializer, attachNegotiated, payloadOf, replacePayload, NO_PAYLOAD,
 } from './runtime/response-engine.ts'

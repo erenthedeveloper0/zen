@@ -56,6 +56,7 @@ import {
   BODY_DEFAULTS, DEFAULT_PARSERS, makeIntake, withParseHooks, type BodyOptions, type BodyParser,
 } from '../runtime/body.ts'
 import { ConsoleLogger } from '../runtime/logger.ts'
+import { compileRedirectPolicy, type RedirectOptions, type RedirectPolicy } from '../runtime/redirect.ts'
 import { ErrorEngine } from '../runtime/error-engine.ts'
 import { prepareForWire, stripBodyIfNeeded } from '../runtime/egress.ts'
 import { encodeBody, finalize } from '../runtime/response-engine.ts'
@@ -91,6 +92,17 @@ export interface ZenOptions<C = unknown> {
    * safe when every proxy *overwrites* the header rather than appending to it.
    */
   readonly trustProxy?: boolean | number | undefined
+  /**
+   * Where `ctx.redirect()` may send a client — §19.5.
+   *
+   * By default, nowhere but this origin: a path, a query or a fragment, and
+   * any other target is `ZEN_REDIRECT_EXTERNAL`. That is what makes
+   * `ctx.redirect(ctx.query.next)` a bug rather than an open redirect. An
+   * application that sends clients to an identity provider says so here:
+   *
+   *     zen({ redirect: { allowExternal: ['https://accounts.google.com'] } })
+   */
+  readonly redirect?: RedirectOptions | undefined
   readonly maxQueryParams?: number | undefined
   readonly body?: Partial<BodyOptions> | undefined
   readonly parsers?: ReadonlyMap<string, BodyParser> | undefined
@@ -324,6 +336,8 @@ export class ZenApp<X = {}> {
   readonly #health: HealthRegistry
   /** Deferred so a bad check joins every other boot problem, not its own restart. */
   readonly #healthDiagnostics: Diagnostic[] = []
+  /** §19.5 — compiled once; its diagnostics are reported by `ready()` with the rest. */
+  readonly #redirect: { readonly policy: RedirectPolicy; readonly diagnostics: readonly Diagnostic[] }
   /**
    * The resolved configuration — §16.
    *
@@ -386,6 +400,7 @@ export class ZenApp<X = {}> {
     const timeout = timeoutOptions(opts.timeout)
     this.#timeoutHeader = timeout.header
     this.#health = new HealthRegistry({ logger: this.#log, ...opts.health })
+    this.#redirect = compileRedirectPolicy(opts.redirect)
     this.#rootScope = {
       id: 'root' as CollectionId,
       prefix: '/',
@@ -977,6 +992,10 @@ export class ZenApp<X = {}> {
     // refactor caused, instead of costing four restarts (§12.7).
     diagnostics.push(...this.#healthDiagnostics)
 
+    // §19.5 — an allowlist entry that can never match looks configured, so a
+    // malformed one is refused here, with the spelling that would match.
+    diagnostics.push(...this.#redirect.diagnostics)
+
     // ── hooks: reject phases this build cannot fire, before anything else ──
     // A hook that silently never runs is indistinguishable from one whose
     // condition never occurred, which is how a team ends up believing it has
@@ -1291,6 +1310,8 @@ export class ZenApp<X = {}> {
         // Shared by every context in the process — see `ContextEnv.config` for
         // why this is not a field on the context itself.
         config: config.config,
+        // §19.5 — the same argument: one policy per app, reached through env.
+        redirect: this.#redirect.policy,
       },
       errors,
     }

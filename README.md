@@ -135,6 +135,8 @@ emitted at all — not skipped by a runtime `if`, *absent from the source*.
 | `console.log(config)` in a log aggregator | Marked secrets redact **themselves** on serialisation — `toJSON` and inspect hooks at every level — while the code that opens the connection still gets the real value by name |
 | `/v2/` prefixes, and `res.format({...})` | **Representations are declared, not branched on.** One route can serve `v1+json`, `v2+json` and `text/csv`; `Accept` picks one before the handler runs, both JSON versions go through the same compiled serializer, and a route that declares one representation emits no negotiation code at all |
 | `Accept: text/csv;q=0` served as CSV anyway | The **most specific** matching range decides, per RFC 9110 §12.5.1 — so `q=0` under a permissive wildcard means "anything except this". Scoring by the highest `q` is the obvious implementation and it serves the one format the client refused. CI gate, not a test |
+| `res.send('<p>' + req.query.name + '</p>')` | **HTML escaped by construction.** `ctx.html()` takes `SafeHtml`, which the `html` tag builds by escaping every hole *for where it sits*: a `javascript:` URL in an `href` is replaced rather than escaped, and a template that puts a value inside `<script>` or an `onclick` — where no escaping helps — is refused on its first render |
+| `res.redirect(req.query.next)` | **Redirects stay on the origin** unless one line lists where else they may go. `//evil.example`, `/\evil.example` and the other spellings that slip past a regular expression are read the way the browser reads the `Location` header, and refused |
 
 Full reasoning, including the arguments that lost, is in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -182,6 +184,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 - **First-party middleware**: `cors`, `securityHeaders`, `requestId`, `rateLimit` — each a global hook rather than middleware, so a preflight to a path with no route is answered and a 404 flood counts against the limit; and each *staging* its headers, so they are on the 404 and the 429 as well as the 200
 - **Content negotiation**: one route, several representations, chosen from `Accept` before the handler runs — versioned JSON for free through the same compiled serializer, an encoder seam for everything else, `Vary: Accept` on every response including the 406, and *no emitted code at all* on a route that declares one representation
 - **Compiled response serializers**: undeclared fields cannot be emitted, because the generated function has no key enumeration to emit them *through*
+- **Injection defences**: an `html` template tag that escapes each interpolation for the position it sits in and refuses the positions where no escaping helps, a `ctx.html()` that takes only its `SafeHtml`, and a `ctx.redirect()` that will not leave the origin unless `redirect.allowExternal` says where
 - **OpenAPI 3.1**: `AppGraph → document` as a pure function, `$ref` deduplication, a dependency-free reference viewer, and breaking-change detection
 - Body intake emitted **only** when a route declares a body; prototype-pollution stripping
 - Node adapter with lazy `RawRequest` (no WHATWG `Request` construction), client disconnects wired to `ctx.signal`, and shutdown that drains and then closes keep-alive connections rather than waiting on them
@@ -757,6 +760,86 @@ Measured (`node benchmarks/refusals/run.ts`, paired arms, one machine):
 The CI gate is structural, not timed: it fails if a framework refusal captures a
 stack frame, or if an application's error stops keeping its own.
 
+### HTML that cannot carry a script, and redirects that stay home
+
+The two oldest bugs in server-rendered HTML are a string that reaches a page
+unescaped and a redirect that goes wherever the query string says. Neither is
+something an application should have to remember
+([§19.5](./ARCHITECTURE.md#195-injection-and-pollution-defences)):
+
+```ts
+import { html, isLocalUrl, NotFound } from '@erenthedeveloper0/zen'
+import { z } from 'zod'
+
+app.get('/notes/:id<int>', (ctx) => {
+  const note = notes.find(ctx.params.id)
+  if (note === undefined) throw new NotFound()
+  return html`<h1>${note.title}</h1>
+              <p>${note.body}</p>
+              <a href="${ctx.query['from']}">Back</a>`
+})
+
+app.get('/login', { query: z.object({ next: z.string().default('/') }) },
+  (ctx) => ctx.redirect(isLocalUrl(ctx.query.next) ? ctx.query.next : '/'))
+```
+
+`html` is a tagged template, and the *template* is what gets analysed — once,
+the first time it renders, the way the HTML tokenizer will read it — so every
+hole is escaped for where it sits:
+
+| a hole in | gets |
+| --- | --- |
+| element content | escaped; a nested `` html`…` `` is written as markup, which is how fragments compose |
+| a quoted attribute | escaped, including a nested fragment — markup means nothing there |
+| `href`, `src`, `action`, … | escaped, and replaced with `about:invalid#zen-unsafe-url` if its scheme could run script — `javascript:`, `JaVa\tScRiPt:`, `data:` |
+| `<script src>`, `<form action>`, `<base href>`, … | the same, and the value may not choose the origin: a link elsewhere is normal, a script from elsewhere is the attack |
+| `<script>`, `onclick="…"`, an unquoted value, a tag or attribute name | **refused** — `ZEN_HTML_UNSAFE` on the first render, because no escaping function makes a value safe there |
+
+That last row is the one a helper that only escapes cannot have.
+`onclick="go('${x}')"` is entity-decoded *before* the script runs, so an escaped
+quote is a quote again by the time it matters; `<div ${attrs}>` needs no special
+character at all to become `onmouseover=alert(1)`. Those templates are bugs in
+the template, so they fail in the first test that renders them.
+
+`ctx.html()` takes the `SafeHtml` that `html` returns and nothing else — a plain
+string is a compile error, and a `ZEN_HTML_UNSAFE` for a caller without types.
+Markup the application already trusts, a template engine's output say, is marked
+with `unsafeHtml(markup)`, which is spelled for a code review. A handler may also
+just return `` html`…` ``, the way it returns a string.
+
+`ctx.redirect()` sends a path, a query or a fragment. Anything that leaves the
+origin — including `//evil.example`, `/\evil.example` and a tab between two
+slashes, each of which has slipped past a regular expression somewhere — is
+refused unless its origin is listed:
+
+```ts
+const app = zen({ redirect: { allowExternal: ['https://accounts.google.com'] } })
+```
+
+The reference is read the way the browser reads the `Location` header, by a
+scanner that is fuzzed against the WHATWG URL parser; an absolute URL to the
+application's own host is treated as external, because only the `Host` header
+could say otherwise and the client writes that.
+
+Measured (`node benchmarks/injection/run.ts`, paired arms, one machine):
+
+| | |
+| --- | --- |
+| a hostile value in 7 positions × 12 payloads | **never escapes its hole** — judged by the WHATWG parser (gate) |
+| a hostile redirect under 3 policies | **never reaches an origin it was not allowed** (gate) |
+| `escapeHtml` against a regex `replace` | 1.5–2.7× faster |
+| `` html`…` `` with six holes and an `href` | 1.6× the same card built by hand — which writes `javascript:` into the `href` |
+| `ctx.redirect('/path')` | +16 ns |
+| a JSON handler, for `` () => html`…` `` | **inside noise** |
+
+Two of those rows came out of the benchmark rather than into it. The first
+`escapeHtml` was a character scan alone and lost the clean-text case by 30×,
+because the regex engine finds "nothing to escape" in a kilobyte in ~70 ns; it
+now searches first. And checking every object a handler returns for `SafeHtml`
+cost 13.5% of `finalize` on every JSON response in every application — so a
+fragment is now an async iterable of its own markup, and the check moved into
+the branch `finalize` already takes for streams.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-06.png">
   <img alt="" src="./.github/images/image-05.png" width="100%" height="4">
@@ -768,9 +851,9 @@ stack frame, or if an application's error stops keeping its own.
 git clone https://github.com/erenthedeveloper0/zen.git && cd Zen.js
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 973 tests
-node scripts/smoke.ts              # 71 checks over a real socket
-node scripts/negative-controls.ts  # break 44 things on purpose; every suite must notice
+npm test                           # 1,060 tests
+node scripts/smoke.ts              # 77 checks over a real socket
+node scripts/negative-controls.ts  # break 57 things on purpose; every suite must notice
 node scripts/check-pack.ts         # what each npm tarball contains — installed and run outside the repo
 node benchmarks/typecheck/run.ts   # the M2 gate
 node benchmarks/serializer/run.ts  # serializer throughput
@@ -784,6 +867,7 @@ node benchmarks/middleware/run.ts  # what the pack costs, and the never-reflect 
 node benchmarks/negotiation/run.ts # what Accept costs, and the never-serve-a-refusal gate
 node benchmarks/refusals/run.ts    # what a 404/405/406 costs, and the no-stack gate
 node benchmarks/request-path/run.ts # what the audit's fixes cost, and where their code is not emitted
+node benchmarks/injection/run.ts   # what escaping and redirect checks cost, and the never-escape gates
 node scripts/show-generated.ts     # read what the pipeline compiler emitted
 node scripts/show-serializer.ts    # read what the serializer compiler emitted
 npm run explain                    # print the resolved chain for every route
@@ -827,7 +911,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `cors` · `security` · `request-id` · `rate-limit`.`test.ts` | That a preflight to a path with **no route** is answered, that a disallowed origin is refused without the response saying so, that `Vary: Origin` is present even on a request that had none, that the headers reach the 404 / 422 / 401 / 429 / 500, that an inbound request id is validated before it is trusted, and that a rate limiter sees the requests a router does not |
 | `pack.test.ts` | The claim the design rests on, as a count rather than a description: a `.use()` middleware ran **1 of 3** requests and a global hook ran **3 of 3**. Plus that the pack reorders itself when registered backwards, that a 429 still carries CORS headers, and that an app which does not register it compiles a byte-identical pipeline |
 | `rate-limit-differential.test.ts` | The evicting store ≡ a never-evicting reference over 2 000 random request streams, with coverage assertions on boundaries crossed and keys reused across one — and the single clock-step case where they legitimately differ, pinned in its own test with its direction (it can only undercount) |
-| `examples/middleware` | The composition rather than the plugins: an allowlist arriving from `CORS_ORIGINS` through a Zod-validated environment, a preflight advertising only the methods the graph actually serves, a 404 flood consuming the budget, and — checked by `tsc` — that `ctx.config.cors.origin` is a `string[]` |
+| `examples/middleware` | The composition rather than the plugins: an allowlist arriving from `CORS_ORIGINS` through a Zod-validated environment, a preflight advertising only the methods the graph actually serves, a 404 flood consuming the budget, a note stored with a `<script>` in it rendered as text, a `?next=` that cannot leave the origin, and — checked by `tsc` — that `ctx.config.cors.origin` is a `string[]` and that `ctx.html('<p>')` does not compile |
 | `negotiation.test.ts` | The matcher against RFC 9110 §12.5.1 — specificity beating quality, ties going to the server, `q=0` never served — plus `Vary: Accept` on the 406 and on a request that sent none, a plain-form 404 keeping `application/problem+json`, a 406 refusing *before* body intake, and that a route with one representation emits no negotiation code |
 | `negotiation-properties.test.ts` | Six invariants over 2 000 random offer sets × `Accept` headers, the load-bearing one being that a refused representation is never chosen; and a real differential — the cached negotiator against the uncached matcher over 2 000 random *streams*, because the bugs a cache introduces are order-dependent |
 | `examples/negotiation` | Three representations of one resource against **real Zod**: a client pinned to `v1` staying pinned, CSV columns taken from the same schema the JSON fields come from, a field the database has and neither format contains, a spreadsheet-formula cell neutralised, and — checked by `tsc` — that `ctx.negotiated` is `string \| null` |
@@ -838,7 +922,9 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `lifecycle.test.ts` (meta-package) | A real child process: `SIGTERM` drains and exits 0, an uncaught exception or unhandled rejection drains and exits 1, and nothing is installed on the process until `listen()` |
 | `error-docs.test.ts` | Every error code any package can produce has its entry in [docs/errors.md](./docs/errors.md) — the page every problem document links to |
 | `logger.test.ts` | The default logger never throws — a cycle or a `bigint` in an error's metadata still produces the log line *and* the error response — and metadata cannot overwrite a line's `code` or `status` |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. Forty-four known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge. Then a property suite whose judge is the WHATWG URL parser and a grammar for escaped text, neither of which shares code with the tag |
+| `redirect.test.ts` | Paths, queries and fragments sent; every spelling that has slipped past a regex refused (`//`, `/\`, a tab, a leading space, `https:host`, userinfo); the allowlist's look-alikes refused; a malformed allowlist entry a boot error with the spelling that would match — and a real differential: the reference scanner against the WHATWG URL parser over 2,000 random targets, with its coverage asserted |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. Fifty-seven known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">
@@ -864,10 +950,10 @@ examples/
   health/          liveness vs readiness, per-probe budgets, a watchable drain
   coercion/        ?page=2 is a number, ?sku=00713 is not — and the same app both ways
   config/          layered config, env validation, provenance, redaction
-  middleware/      a browser-facing API: preflights, 429s that browsers can read
+  middleware/      a browser-facing API: preflights, 429s browsers can read, pages that escape
   negotiation/     one resource in three representations, and the encoder seam
 benchmarks/        serializer, OpenAPI, hook, deadline, health, coercion, config,
-                   middleware, negotiation, refusal and request-path cost; the M2 gate
+                   middleware, negotiation, refusal, request-path and injection cost; the M2 gate
 scripts/           smoke test, negative controls, codegen inspectors, and release
                    tooling: version.ts, check-release.ts, check-pack.ts
 docs/errors.md     every error code — where each problem document's `type` points

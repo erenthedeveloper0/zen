@@ -295,6 +295,40 @@ client sees a generic 500, and the path is in the logs and, in development, in
 a character that would end it early — CR, LF, NUL, or `;` in a cookie attribute.
 Refused rather than silently stripped (§19.5).
 
+## ZEN_HTML_UNSAFE
+
+**500.** HTML the framework could not vouch for (§19.5), for one of three reasons:
+
+- `ctx.html()` was given something other than `SafeHtml` — a string, say.
+  Build the page with the `html` template tag, which escapes what it
+  interpolates — `ctx.html(html`<p>${text}</p>`)` — or mark markup that is
+  already safe, such as a template engine's output, with `unsafeHtml(markup)`.
+- An `html` template put a hole where no escaping makes a value safe: inside
+  `<script>` or `<style>`, in an `on*` event handler, in `srcdoc`, in a tag or
+  attribute name, in an unquoted attribute value, in a comment, in an SVG
+  animation's `to`/`values`, in a `<meta http-equiv="refresh">`, or where it
+  could choose the host a `<script src>`, `<base href>` or `<form action>`
+  loads from or posts to. The message names the hole and the text before it.
+  The template is refused on its first render, whatever the values.
+- `html` was called as a function rather than as a tagged template, or an
+  `html` template ends inside a tag, a comment or a `<script>`.
+
+Never exposed: the client sees a generic 500, and the message is in the logs.
+
+## ZEN_REDIRECT_EXTERNAL
+
+**500.** `ctx.redirect()` would have sent the client off this origin, to an
+origin the application did not allow (§19.5) — the open redirect, refused.
+A path, a query or a fragment is always allowed; anything with a scheme or an
+authority (`https://…`, `//…`, and the spellings browsers treat the same way,
+such as `/\evil.example`) must have its origin listed in
+`zen({ redirect: { allowExternal: ['https://accounts.example'] } })`.
+
+When the target came from the request, validate it and fall back:
+`ctx.redirect(isLocalUrl(next) ? next : '/')`. For a target the application
+built entirely itself, `ctx.redirect(url, { allowExternal: true })` skips the
+check for that one call. Never exposed, and no `Location` header is sent.
+
 ## ZEN_REPLY_SENT
 
 Reserved (§7.3): modifying staged response metadata after egress. Not produced yet.

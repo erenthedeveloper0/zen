@@ -42,6 +42,16 @@ JavaScript. Stages a route does not use are not emitted at all.
 - **Deadlines**, **health and readiness endpoints**, **validated configuration**,
   **content negotiation**, **server-sent events**, **file responses** with
   `ETag`/`Range`, and **graceful shutdown** that drains before it refuses.
+- **HTML escaped by construction and redirects that stay home**: `ctx.html()`
+  takes the `SafeHtml` the `html` tag builds — every interpolation escaped for
+  where it sits, a `javascript:` link replaced — and `ctx.redirect()` will not
+  leave the origin unless you list where else it may go.
+
+```ts
+import { html } from '@erenthedeveloper0/zen'
+
+app.get('/hello', (ctx) => html`<p>Hello, ${ctx.query['name']}</p>`)   // ?name=<script> is text
+```
 - **Boot-time diagnostics**, aggregated: every registration problem in one run,
   each with a fix.
 

@@ -4,8 +4,10 @@ import type { Logger } from './logger.ts'
 import type { Slot } from './slot.ts'
 import type { Token } from './container.ts'
 import type {
-  FileReplyInit, Reply, ReplyInit, SetCookie, StreamSource, SseChannel, SseEvent, SseInit,
+  FileReplyInit, RedirectInit, RedirectStatus, Reply, ReplyInit, SetCookie, StreamSource, SseChannel, SseEvent,
+  SseInit,
 } from './reply.ts'
+import type { SafeHtml } from './html.ts'
 import type {
   RouteSchema, InferParams, InferQuery, InferHeaders, InferCookies, InferBody, RouteId,
 } from './route.ts'
@@ -118,10 +120,32 @@ export interface BaseContext<S extends RouteSchema = RouteSchema, P extends stri
   // ── Response builders: pure. They return, they do not send. ───────────────
   json<T>(body: T, init?: ReplyInit): Reply<T>
   text(body: string, init?: ReplyInit): Reply<string>
-  html(body: string, init?: ReplyInit): Reply<string>
+  /**
+   * An HTML page (§19.5). The body is `SafeHtml`, not a string — build it with
+   * the `html` template tag, which escapes what it interpolates:
+   *
+   *     ctx.html(html`<p>Hello, ${ctx.query.name}</p>`)
+   *
+   * Markup that is already safe — a template engine's output — says so with
+   * `unsafeHtml(markup)`. A plain string is a type error, and a `ZEN_HTML_UNSAFE`
+   * at runtime for a caller without types, rather than a script tag.
+   */
+  html(body: SafeHtml, init?: ReplyInit): Reply<string>
   bytes(body: Uint8Array, init?: ReplyInit): Reply<Uint8Array>
   empty(status?: 204 | 205 | 304): Reply<null>
-  redirect(to: string, status?: 301 | 302 | 303 | 307 | 308): Reply<null>
+  /**
+   * A redirect (§19.5). It stays on this origin — a path, a query, a fragment —
+   * unless the target's origin is in the app's `redirect.allowExternal`, and
+   * anything else is a `ZEN_REDIRECT_EXTERNAL` rather than an open redirect:
+   *
+   *     ctx.redirect('/dashboard')                    // 302
+   *     ctx.redirect(`/orders/${id}`, 303)            // after a POST
+   *     ctx.redirect(isLocalUrl(next) ? next : '/')   // a `?next=` from the request
+   *
+   * `{ allowExternal: true }` lets one redirect leave for a target the
+   * application built entirely itself.
+   */
+  redirect(to: string, init?: RedirectStatus | RedirectInit): Reply<null>
   /**
    * A file on disk. Pass `root` whenever any part of `path` came from the
    * request — see `FileReplyInit.root`. The adapter answers 404 for a missing

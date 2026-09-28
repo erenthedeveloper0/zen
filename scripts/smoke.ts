@@ -7,7 +7,7 @@
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 import {
-  zen, slot, NotFound, jsonSchema, healthPlugin, nodeAdapter, defineConfig, registerMediaEncoder,
+  zen, slot, NotFound, jsonSchema, healthPlugin, nodeAdapter, defineConfig, registerMediaEncoder, html,
 } from '@erenthedeveloper0/zen'
 import { cors, rateLimit, requestId, securityHeaders } from '@erenthedeveloper0/zen-middleware'
 import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
@@ -156,6 +156,12 @@ app.get('/profile', { response: { 200: PublicUser } }, () => ({
   stripeCustomerId: 'cus_must_not_ship',
 }) as never)
 app.get('/boom', () => { throw new Error('secret internals') })
+
+// §19.5 — the injection defences, on the wire. What a browser receives is the
+// claim: the escaped page as the body a socket carries, and — for the redirect
+// — a `Location` header a real client would follow, or none at all.
+app.get('/page', (ctx) => html`<p>${ctx.query['name'] ?? ''}</p><a href="${ctx.query['back'] ?? '/'}">back</a>`)
+app.get('/go', (ctx) => ctx.redirect(String(ctx.query['to'] ?? '/')))
 
 // §13.4 — content negotiation, over a real socket.
 //
@@ -360,6 +366,22 @@ await check('GET /config (no secret on the wire)', '/config', {
 await check('GET /profile (no leak)', '/profile', { status: 200, body: '{"id":1,"name":"ada"}' })
 await check('GET /stream', '/stream', { status: 200, body: 'chunk 1\nchunk 2\nchunk 3\n' })
 await check('GET /boom (no leak)', '/boom', { status: 500, body: /^(?!.*secret internals).*ZEN_INTERNAL/s })
+await check('GET /page (§19.5 escaped)', `/page?name=${encodeURIComponent('<script>alert(1)</script>')}`, {
+  status: 200, body: /^<p>&lt;script&gt;alert\(1\)&lt;\/script&gt;<\/p>/,
+})
+await check('GET /page (text/html)', '/page?name=ada', { status: 200, header: ['content-type', /^text\/html; charset=utf-8$/] })
+await check('GET /page (javascript: href)', `/page?back=${encodeURIComponent('javascript:alert(1)')}`, {
+  status: 200, body: /<a href="about:invalid#zen-unsafe-url">back<\/a>/,
+})
+await check('GET /go (a path is followed)', '/go?to=%2Fjson', {
+  status: 302, header: ['location', /^\/json$/], init: { redirect: 'manual' },
+})
+await check('GET /go (// is refused)', `/go?to=${encodeURIComponent('//evil.example')}`, {
+  status: 500, body: /ZEN_REDIRECT_EXTERNAL/, init: { redirect: 'manual' },
+})
+await check('GET /go (no Location leaves)', `/go?to=${encodeURIComponent('/\\evil.example')}`, {
+  status: 500, header: ['location', /^$/], init: { redirect: 'manual' },
+})
 await check('GET /nope (404)', '/nope', { status: 404 })
 await check('POST / (405 + Allow)', '/', { status: 405, init: { method: 'POST' } })
 await check('HEAD / (no body)', '/', { status: 200, body: '', init: { method: 'HEAD' } })

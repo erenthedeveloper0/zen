@@ -176,12 +176,18 @@ at boot and ships HTML, CSS and ~90 lines of script.
 If you want Scalar anyway, `ui: false` plus one route does it:
 
 ```ts
-app.get('/docs', (ctx) => ctx.html(`
+import { html } from '@erenthedeveloper0/zen'
+
+app.get('/docs', (ctx) => ctx.html(html`
   <!doctype html><html><body>
     <script id="api-reference" data-url="/openapi.json"></script>
     <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
   </body></html>`))
 ```
+
+`ctx.html()` takes the `SafeHtml` the `html` tag builds rather than a string
+([§19.5](../../ARCHITECTURE.md#195-injection-and-pollution-defences)). This page
+has no holes, so there is nothing to escape; the tag is what vouches for it.
 
 ---
 

@@ -92,6 +92,14 @@ whose notes are that CHANGELOG entry, under the install line. A package
 already published at that version is skipped, so a run that failed half way can
 simply be re-run.
 
+**Until trusted publishing is configured** on all six packages, the workflow
+has no credential to publish with, and its publish step fails after approval.
+Publish by hand instead — the loop in [The first publish](#the-first-publish-from-the-command-line),
+from a worktree of the tag — wait until `npm view @erenthedeveloper0/zen@<version>`
+answers, then approve the waiting run or re-run it: it finds every package
+already published, skips them, and creates the GitHub release. That version
+carries no provenance.
+
 ## After a release
 
 ```bash

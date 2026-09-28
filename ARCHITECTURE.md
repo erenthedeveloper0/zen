@@ -1026,9 +1026,9 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
   // ── Response builders (pure — they return, they do not send) ────────────
   json<T>(body: T, init?: ReplyInit): Reply<T>
   text(body: string, init?: ReplyInit): Reply<string>
-  html(body: string, init?: ReplyInit): Reply<string>
+  html(body: SafeHtml, init?: ReplyInit): Reply<string>   // built with html`…` — §19.5.1
   empty(status?: 204 | 205 | 304): Reply<null>
-  redirect(to: string, status?: 301|302|303|307|308): Reply<null>
+  redirect(to: string, init?: RedirectStatus | RedirectInit): Reply<null>   // same-origin unless allowed — §19.5.2
   file(path: string, init?: FileReplyInit): Reply<FileBody>
   stream(source: StreamSource, init?: ReplyInit): Reply<StreamBody>
   sse(init?: SseInit): SseChannel
@@ -2202,6 +2202,7 @@ Handler return values are normalised at the entry to stage 9:
 | `Reply` | itself |
 | `undefined` (declared `void` route) | `{ status: 204, body: empty }` |
 | `string` | `text/plain; charset=utf-8` (or `text/html` if the route declares it) |
+| `SafeHtml` (`` html`…` ``) | `text/html; charset=utf-8` — recognised in the async-iterable branch, so an object return pays nothing for it (§19.5.1) |
 | `Uint8Array`/`Buffer` | `application/octet-stream` |
 | `ReadableStream`/`Readable` | `stream` |
 | `Response` (WHATWG) | pass-through, adapter-native |
@@ -3177,6 +3178,8 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 | CSP | **not set by default**; `zen doctor` warns for HTML responses | A wrong CSP is worse than none; we prompt instead of guessing |
 | CORS | **deny all** until configured — **built** (§32.4), and the default is the *absence* of the plugin: with none registered no `Access-Control-Allow-*` header is emitted and every browser denies. Registering it without an allowlist is a boot error, because a silent deny-all is indistinguishable from a bug | The single most-abused permissive default in the ecosystem |
 | Cookies | `HttpOnly`, `SameSite=Lax`, `Secure` when HTTPS, `__Host-` prefix for session cookies | |
+| HTML responses | `ctx.html()` takes `SafeHtml` only; the `html` tag escapes each hole for where it sits and refuses the positions escaping cannot fix — **built** (§19.5.1) | A string handed to an HTML response is how stored and reflected XSS both start, and "remember to escape" is a rule nobody remembers every time |
+| Redirects | same-origin only, until `redirect.allowExternal` names an origin — **built** (§19.5.2) | An open redirect is a phishing link with the application's own domain in it |
 | Error responses | messages hidden unless `expose: true` | |
 | `trust proxy` | **off** | §19.4 |
 | Stack traces | never in production responses | |
@@ -3201,11 +3204,70 @@ Configuration is explicit and typed: `trustProxy: 'loopback' | 'linklocal' | 'un
 ### 19.5 Injection and pollution defences
 
 - **Prototype pollution:** all parsers strip `__proto__`, `constructor`, `prototype` keys, and objects produced by parsers use `Object.create(null)` where they will not be handed to user code as plain objects. `nested: false` for query strings by default (§11.4).
-- **Response injection:** header values are validated for CR/LF at set time (throws `ZEN_HEADER_INVALID`), never sanitised silently. Redirect targets are validated against an allowlist policy when `redirect.allowExternal` is false (default), closing the open-redirect hole.
-- **XSS:** `ctx.html()` accepts only a `SafeHtml` branded type or a string explicitly marked; a template helper (`html\`\``) escapes interpolations by default. JSON responses set `X-Content-Type-Options: nosniff` and the compiled serializer escapes `<`, `>`, `&`, `U+2028/2029` in strings, which prevents the JSON-in-HTML-script class of XSS.
-
-  > **Status, corrected.** Neither half of that bullet is built, and the second is decided against. `ctx.html()` takes a plain string and the `SafeHtml` brand and `html` helper do not exist yet — an application interpolating request data into HTML must escape it. The compiled serializer's output is *byte-identical to `JSON.stringify`* for the fields it emits, on purpose: that identity is what the differential suite and the serializer benchmark assert, and escaping `<` and `&` would send every string containing one down the slow path to protect a use — pasting an API response into a `<script>` — that is the embedding template's to escape. The control that does apply to JSON is the `Content-Type` plus `nosniff`, which `securityHeaders()` sets (§32.4). The same audit found the redirect bullet above unbuilt as well: `ctx.redirect()` rejects a CR or LF in the target (§13.6) but does not yet check it against an allowlist.
+- **Response injection:** header values are validated for CR/LF at set time (throws `ZEN_HEADER_INVALID`), never sanitised silently. A redirect stays on the application's origin unless `redirect.allowExternal` names the target's origin — nothing, by default — closing the open-redirect hole (§19.5.2).
+- **XSS:** `ctx.html()` accepts only `SafeHtml`, which two functions produce: the `html` template tag, which escapes every interpolation for the position it sits in and refuses a template that puts one where escaping cannot help, and `unsafeHtml()`, the explicit mark for markup the application vouches for (§19.5.1). JSON responses carry `X-Content-Type-Options: nosniff` (`securityHeaders()`, §32.4); the compiled serializer does **not** escape `<`, `>`, `&` or U+2028/2029 — decided against, below.
 - **Over-serialization:** covered by §13.3 — the highest-value control in this list.
+
+> **Status: built** in `0.1.0-alpha.2` — both defences, after two releases in which this section described them and neither existed, which the pre-release audit recorded rather than hid. The serializer escaping stays **decided against**: its output is *byte-identical to `JSON.stringify`* for the fields it emits, on purpose — that identity is what the differential suite and the serializer benchmark assert — and escaping `<` and `&` would send every string containing one down the slow path to protect a use, pasting an API response into a `<script>`, that is the embedding template's to escape. The one place in the framework that does embed JSON in a page — the OpenAPI viewer's data island — escapes `<` as `<` itself, and says so where it marks the page with `unsafeHtml`.
+
+#### 19.5.1 HTML escaped by construction
+
+```ts
+app.get('/notes/:id<int>', (ctx) =>
+  html`<h1>${note.title}</h1><p>${note.body}</p><a href="${ctx.query.from}">Back</a>`)
+```
+
+`html` is a tagged template, and the template — not the value — is the unit of analysis. The written text is code and the holes are data, so the first time a template renders, its written text is read once, the way the HTML tokenizer (WHATWG §13.2.5) will read it; each hole is classified by where it sits; and the classification is cached against the template object, which the language makes unique per call site. Every later render is a loop over the holes. That is §1.4 applied to one more thing: what can be known before the first request is not rediscovered on each one.
+
+| A hole in… | gets |
+| --- | --- |
+| element content | escaped (`& < > " '` → entities). A `SafeHtml` value is written verbatim, which is how fragments nest; `null`, `undefined`, `true` and `false` write nothing, so `` ${isAdmin && html`…`} `` reads as it looks |
+| a quoted attribute value | escaped, `SafeHtml` included — markup means nothing there, and a nested fragment's own quote would end the value |
+| a URL attribute (`href`, `src`, `action`, `xlink:href`, …) | escaped, and the value — assembled from every hole and every written piece of it — replaced with `about:invalid#zen-unsafe-url` when its scheme could run script: anything but http, https, mailto, tel, or none |
+| `<script src>`, `<base href>`, `<form action>`, `formaction`, `<object data>`, `<embed src>` | the same, and stricter: the value must stay on this origin unless the written text already names the host. A link to another site is ordinary; a script from one is the whole attack |
+| `<script>`, `<style>`, an `on*` handler, `srcdoc`, a tag or attribute name, an unquoted value, a comment, an SVG animation's `to`/`values`, a `<meta http-equiv="refresh">` | **refused** — `ZEN_HTML_UNSAFE` on the first render, whatever the values |
+
+The refused positions are the ones where no escaping function exists. `onclick="go('${x}')"` is entity-decoded *before* the JavaScript runs, so an escaped quote is a quote again by the time it matters; an unquoted `href=${x}` ends at the first space in `x`; `<script>var a = ${x}` needs no special character at all to become `alert(1)`. A template that *ends* inside a tag, a comment or a `<script>` is refused too: a fragment is inserted where markup goes, and the template it is nested in was classified on the assumption that the fragment leaves the tokenizer where it found it. Refusals happen at render because a template has no earlier moment — it is called, not registered — but they are structural: the first call in a test, with any values at all, is refused.
+
+Three decisions worth stating, each because the other choice is defensible:
+
+- **Only `<script>` and `<style>` are read as raw text.** HTML reads `<title>`, `<textarea>`, `<noscript>` and a few others as text too — but not inside `<svg>` or `<math>`, where the same names are ordinary elements whose content is tags. A reader that followed the HTML rule would, inside an `<svg>`, take a `<script>` for text and let a hole into it. Reading everything else as markup can only mean escaping a string that was safe anyway; the other direction cannot happen. The first version followed the HTML rule and refused markup inside `<title>` to compensate, which refused `<noscript><img src="/pixel"></noscript>` — an ordinary pattern — and caught nothing the simpler rule does not.
+- **A URL check reads the whole value, the way a browser will.** Leading C0 controls and spaces stripped, tab and newline removed anywhere, a backslash a slash, the scheme case-folded — `primitives/url-reference.ts`, shared with §19.5.2 and differentially tested against the WHATWG parser. Holes are read as the escaped values they are, so an `&` in one is a literal `&`; written text is read as markup, where `&#106;avascript:` *is* `javascript:`, so an `&` there before the scheme is decided makes it undecidable, and the value is neutralised. Neutralised rather than refused, because a URL arrives at request time from data, and a refusal would sell an attacker a 500 per request.
+- **`SafeHtml` is nominal twice.** At the type level its brand is a `unique symbol` nothing outside core can produce, so `ctx.html('<p>' + name)` does not compile; at runtime it is a private-field check, which `Object.create` cannot satisfy and a JSON body cannot reach. `unsafeHtml(markup)` is the one way to vouch for a string, spelled so that it reads as a decision in review — §19.2's rule for relaxing a default. A handler may return `` html`…` `` directly, the way it returns a string (§13.2): a fragment is an async iterable of its own markup, so `finalize` meets it in the branch it already takes for streams and `ctx.sse()`, and a JSON handler pays nothing for the check.
+
+Nothing here generates code, so there is no interpreted twin (§20.5); an oracle stands in for one. What it does not do is recorded in §28.8: it does not decide *which* http(s) resource a link, an image, a frame or a stylesheet points at — only the six origin-bound attributes above are held to the origin — and CSS in a `style` attribute is escaped, not parsed.
+
+#### 19.5.2 Redirects that stay home
+
+```ts
+zen({ redirect: { allowExternal: ['https://accounts.google.com'] } })
+```
+
+The open redirect is the vulnerability in nearly every login flow — `/login?next=https://evil.example` — and a phishing link that carries the application's own domain. So `ctx.redirect()` sends a path, a query or a fragment, and nothing else unless the target's origin is listed. §19.2's rule, applied: the application that redirects to an identity provider adds one line a reviewer can see; the application that did not know it had a `?next=` parameter is no longer an open redirect.
+
+"This origin" is decided without trusting anything the client wrote. A relative reference cannot leave it; an absolute URL to the application's own host is treated as external, because the only thing that could vouch for the host is the `Host` header. `//host`, `/\host`, `\\host`, a tab between two slashes, a leading space and `https:host` are each a spelling that has bypassed a check written as a regular expression somewhere, and each is refused, because the reference is read the way the browser's parser reads the `Location` header — in two characters for a path, with no `URL` object. A protocol-relative target takes the page's scheme, so both of its possible origins must be listed.
+
+A refusal is `ZEN_REDIRECT_EXTERNAL`: a 500, never exposed, and no `Location` sent. A 500 because the application tried — Rails and ASP.NET make the same call — and because the fix is the application's: validate a target that came from the request and fall back, `ctx.redirect(isLocalUrl(next) ? next : '/')`, which is the framework's own check, exported. `{ allowExternal: true }` on one call is the escape for a target the application built entirely itself; the CR/LF check still applies to it. A malformed allowlist entry — a trailing slash, an uppercase host, a default port — is a boot error with the spelling that would have matched, for §32.4's reason: an entry that can never match looks configured.
+
+The policy is data on the shared `ContextEnv`, beside `config`, so configuring it changes no generated byte — gated, like §16.3's.
+
+#### 19.5.3 Measured
+
+`node benchmarks/injection/run.ts` — three gates, then the costs.
+
+| | |
+| --- | --- |
+| a hostile value in any of seven positions | **never escapes its hole** — 12 payloads × 7, judged by the WHATWG URL parser and an escaped-text grammar (gate) |
+| a hostile redirect, under three policies | **never reaches** an origin its policy does not name, on an http page or an https one (gate) |
+| configuring a redirect policy | **byte-identical** pipeline and context class (gate) |
+| `escapeHtml`, clean text / text to escape | 1.5–2.7× faster than the regex `replace` it replaced |
+| `` html`…` `` with six holes and an `href` | 1.6× the same card built by hand with `escapeHtml` — and the hand-built one writes `javascript:` into the `href` |
+| a template's first render | ~2 µs, once per call site |
+| `ctx.redirect('/path')` | +16 ns |
+| `ctx.redirect()` to an allowlisted origin | +0.4 µs — the one case that parses |
+| what a JSON handler pays for `` () => html`…` `` | **inside noise** |
+
+Two of those rows came out of the benchmark rather than into it. `escapeHtml` was first a hand-written scan alone, and it lost the clean-text rows by thirty times — a `charCodeAt` loop over a clean kilobyte is ~2 µs, and the regex engine finds "no markup" in ~70 ns — so it now searches first and scans from there. And the first design checked every object a handler returned for `SafeHtml`, which measured **+13.5% of `finalize` for every JSON response in every application**; making a fragment async-iterable is what moved the check off that path. The measurement that caught it had itself been wrong first — its "before" arm was a local copy of `finalize` compared against the real one, which reported +23 ns that was mostly the difference between the arms.
 
 ### 19.6 Authentication and authorization
 
@@ -3366,6 +3428,8 @@ Negotiation is the interesting one to have declined, because it is the first sub
 
 What replaces it for configuration is a **property** suite over random layer stacks, which is the same instrument aimed at a different question: the fold is total, deterministic, invents no path, freezes to the leaves, and never lets a secret reach a projection. It earned its place immediately — it caught a scalar-versus-branch collision that the hand-written test for that exact rule passed against, because the resolved *object* was correct and only the snapshot listed a path pair no object can have.
 
+The injection defences (§19.5) are a fourth, and they have something better than a twin: an **oracle** that shares no code with them. The `html` tag analyses a template into a cached plan rather than generated source, so there is nothing for an interpreted twin to execute; what a browser will make of the output, though, is exactly what the WHATWG URL parser says. So the property suite renders hostile values into every position and judges the output with that parser and with a grammar for escaped text — and the reference scanner both defences share (`primitives/url-reference.ts`) is fuzzed as a real differential against the parser, 2,000 random targets, on whether each one stays on the origin. The scanner exists because the parser allocates and the scanner decides a path in two characters; the parser exists to be right. The suite's coverage assertion earned its keep on the first run: the generator had produced a target with a scheme 24 times in 2,000, which is a branch tested by accident.
+
 One discipline the hook fuzzer needed and the others should adopt: it asserts its own **coverage**. Every phase must appear in the observed call order at least once across the corpus, and the total number of hook invocations must exceed a floor. A differential fuzzer where both implementations agree because neither ran anything reports a pass and proves nothing, and that failure mode is invisible — the test is green either way. The deadline fuzzer inherited it: it requires both that the deadline fired on a substantial fraction of seeds and that a substantial fraction finished normally, because a corpus that only ever takes one branch tests one branch. So did the coercion fuzzer, which counts the plans it produced, the runs that actually changed a value, and every op kind separately — a generator that drifts into emitting only string schemas would otherwise pass forever while testing nothing. So does the rate limiter's, whose whole subject is a window boundary: a stream that never crossed one would compare two implementations on the only path that cannot be wrong.
 
 Negotiation's property suite made the point sharply enough to be worth recording, because the mechanism that caught it was not a test. It has a branch for an `Accept` header with nothing parseable in it — answered with the server preference rather than a 406 — and an assertion on that branch. The **negative-control script** (`scripts/negative-controls.ts`, and see §20.7) patched that behaviour to return a 406 instead, ran the suite, and the suite *passed*: the generator had never produced an unparseable header, so the branch had executed zero times across 2,000 seeds. The assertion was written, correct, and dead. Coverage assertions are not a nicety on top of a fuzzer; they are the only thing standing between a fuzzer and a green light for code it never ran.
@@ -3393,7 +3457,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 
    Shutdown ordering belongs in this list too, and it lives in `scripts/smoke.ts` rather than here, because "readiness went red before the socket stopped accepting" needs a real socket to be open while the process is shutting down. It was unfalsifiable before §31.4 existed, and it was wrong for exactly that long.
 
-6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Forty-four controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
+6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Fifty-seven controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
 
    This is a different property from every other entry in this list, and it is the one nothing else in the repo checks. Correctness tests answer "is the code right"; this answers "would we find out if it stopped being right", and the two come apart constantly and invisibly. Every pass of this codebase had run some version of it by hand and written down that it was worth automating; §13.4 was the pass that did.
 
@@ -4370,6 +4434,10 @@ Security audit (external, funded) · fuzzing at scale · `express-compat` + migr
 
 **Exit:** external audit findings resolved; zero known API changes pending.
 
+> **§19.5's two injection defences were pulled forward** into `0.1.0-alpha.2`: the `html` tag with `SafeHtml`, and redirects that stay on the origin. They were the one place the security model described a design as though it were built, which the pre-release audit found and recorded rather than hid, and they were the cheapest item on the ranked list that was about safety rather than completeness — both small, and both the kind of default §19.2 says must be secure. The default that "wanted a decision before code" had one already: §19.5 wrote `allowExternal: false` in the RFC's first draft.
+>
+> The finding worth keeping is about the benchmark, which changed the implementation twice before any number was published: `escapeHtml` lost the clean-text case by 30× until it let the regex engine find the first markup character, and checking every returned object for `SafeHtml` cost 13.5% of `finalize` until the check moved into the branch that already handles streams (§19.5.3). Neither was visible to a test, and both would have shipped on the strength of "it is one comparison".
+
 ### M8 — `1.0` (4 weeks)
 
 API freeze · semver commitment · LTS policy (18 months per major, security backports for 24) · governance (§25.2) · migration guides from Express/Fastify/Koa/Hono/Nest · compatibility matrix · launch.
@@ -4447,6 +4515,8 @@ Legend: ●●● first-class · ●●○ good, with caveats · ●○○ possi
 | **Schema-validated environment** | ○○○ | ○○○ | ○○○ | ○○○ | ●●○ (`ConfigModule`) | ○○○ | ○○○ | **●●●** (before any plugin's setup) |
 | **Config provenance ("which layer won?")** | ○○○ | ○○○ | ○○○ | ○○○ | ○○○ | ○○○ | ○○○ | **●●●** (per value, on the AppGraph) |
 | **Secrets redacted by the config object itself** | ○○○ | ○○○ | ○○○ | ○○○ | ●○○ | ○○○ | ○○○ | **●●●** (`toJSON` + inspect, every level) |
+| **HTML escaped by construction** | ○○○ | ○○○ | ●●○ (`html` helper, JSX) | ○○○ | ○○○ | ●○○ (plugin) | ○○○ | **●●●** (by position; refuses what escaping cannot fix) |
+| **Open redirects refused by default** | ○○○ | ○○○ | ○○○ | ○○○ | ○○○ | ○○○ | ○○○ | **●●●** (same-origin unless an origin is listed) |
 | **Secure defaults** | ○○○ | ●●○ | ●●○ | ○○○ | ●●○ | ●●○ | ●●○ | **●●●** |
 | **Core runtime dependencies** | ~30 | ~15 | **0** | ~25 | many | few | many | **0** |
 | **Ecosystem size (today)** | ●●● | ●●○ | ●●○ | ●●○ | ●●● | ●○○ | ●●○ | **○○○** |
@@ -4688,7 +4758,14 @@ The strongest architecture loses to the framework people already know. Nothing i
 | Config resolution is quadratic in leaves, at boot | §16.1 — each new leaf scans the existing set to evict a shadowed subtree. At realistic sizes it is linear in practice (128 leaves × 2 layers is ~250 µs, once) and the constant is dominated by the fold itself; it would matter at thousands of leaves, which no configuration has |
 | A plugin's config namespace is merged at runtime but not accumulated at the type level | §16.3 — `config.mailer.from` resolves and is typed `unknown` unless the application declares the namespace itself. Type-level accumulation through `.use()` is exactly the mapped-type growth §10.4 warns about, and the M2 gate is the reason it was not attempted |
 | Two parameter types' overlap is established from witnesses, not decided | §5.5 — whether two predicates share a value is undecidable in general. The builtins carry witness values chosen to expose every overlap among them; an application type contributes `jsonSchema.examples`. Two application types with no examples cannot be checked, and are reported as `ZEN_ROUTE_TYPES_UNDECIDED` and tried in type-name order rather than guessed at |
-| `ctx.html()` takes any string, and redirect targets are not allowlisted | §19.5 specifies a `SafeHtml` brand with an escaping `html` template helper, and a redirect allowlist; neither is built. A CR or LF in a redirect target or any header is refused (§13.6). Until then, escaping interpolated request data in HTML, and validating where a redirect goes, is the application's |
+| ~~`ctx.html()` takes any string, and redirect targets are not allowlisted~~ | **Built in `0.1.0-alpha.2`** (§19.5.1, §19.5.2). `ctx.html()` takes `SafeHtml` only; the `html` tag escapes each hole for its position and refuses the positions escaping cannot fix; a redirect stays on the origin unless `redirect.allowExternal` names the target's. Gated in `benchmarks/injection` |
+| `html` does not decide which http(s) resource a URL points at | §19.5.1 — a link, an image, a frame or a stylesheet may be given any http(s) URL, as it may in any HTML; only the six attributes that load code or receive a form (`<script src>`, `<base href>`, `<form action>`, `formaction`, `<object data>`, `<embed src>`) are held to the origin. A hostile `<link rel="stylesheet" href>` can still restyle a page, and an `<img src>` can still be a tracking pixel |
+| Only http, https, mailto and tel survive in a URL attribute | §19.5.1 — an allowlist of schemes, not a denylist of dangerous ones, so a `data:` image or an app's custom scheme is neutralised too. The whole element can be marked with `unsafeHtml()` where that is meant |
+| CSS in a `style` attribute is escaped, not parsed | §19.5.1 — a value there cannot leave the attribute or run script in any current browser, but it can add CSS properties. `<style>` itself is refused |
+| An `html` template is checked when it first renders, not at boot | §19.5.1 — a template is called, not registered, so there is no earlier moment. The check is structural — any values, first call — so the first test that renders it finds a refused position |
+| A refused redirect is a 500 that keeps its stack | §19.5.2 — ~15 µs and an `error` log line per attempt, because it points at the handler that needs `isLocalUrl` before its `ctx.redirect()`. An application that validates its `?next=` never produces one; the ones it does produce are the log lines worth reading |
+| A protocol-relative redirect needs both schemes listed | §19.5.2 — `//accounts.example/x` is `http://` on an http page and `https://` on an https one, and the check does not trust the request's scheme. Write the scheme |
+| An absolute redirect to the application's own host is external | §19.5.2 — by design: only the `Host` header could say it is the same host, and the client writes that header. Redirect within the application with a path |
 | The serializer does not escape `<`, `>`, `&` or U+2028/2029 | §19.5, corrected — decided against, not deferred. Its output is byte-identical to `JSON.stringify` for the fields it emits, which is what the differential suite asserts; the control for JSON is `Content-Type` plus `nosniff` (`securityHeaders()`), and JSON embedded in an HTML `<script>` is the embedding template's to escape |
 
 ---
@@ -5199,6 +5276,8 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_SLOT_EMPTY` | 500 | A slot was read before being written |
 | `ZEN_SERIALIZATION` | 500 | Response did not satisfy its schema (strict mode) |
 | `ZEN_HEADER_INVALID` | 500 | Attempted to set a header containing CR/LF |
+| `ZEN_HTML_UNSAFE` | 500 | `ctx.html()` was given something other than `SafeHtml`, or an `html` template put a hole where escaping cannot make it safe — inside `<script>`, in an `onclick`, in an unquoted attribute (§19.5.1). Refused on the template's first render, whatever the values |
+| `ZEN_REDIRECT_EXTERNAL` | 500 | `ctx.redirect()` would have left the origin for one `redirect.allowExternal` does not name — the open redirect, refused, with no `Location` sent (§19.5.2) |
 | `ZEN_REPLY_SENT` | 500 | Attempted to modify a Reply after egress |
 | `ZEN_CONTEXT_ESCAPED` | 500 | A pooled context was used after release (dev only) |
 | `ZEN_BODY_INVALID` | 400 | The body did not parse as its content type, or nests past the depth limit (§19.3) |
