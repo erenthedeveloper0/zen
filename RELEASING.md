@@ -49,8 +49,9 @@ browser or as a code from an authenticator app. Run the loop in an interactive
 terminal for that reason.
 
 A local publish has no **provenance** — only a CI run can attest to where a
-tarball was built — so the first version carries none. Every later release goes
-through the workflow below and does.
+tarball was built — so the first version carries none, and neither does a later
+one published this way because trusted publishing was not yet configured
+(below). A release the workflow publishes does.
 
 ## One-time setup, before `0.1.0-alpha.2`
 
