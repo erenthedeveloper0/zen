@@ -105,7 +105,7 @@ carries no provenance.
 ```bash
 npm view @erenthedeveloper0/zen dist-tags   # alpha → the new version
 npm install @erenthedeveloper0/zen@alpha    # what a user types
-npm audit signatures                        # provenance verifies (from 0.1.0-alpha.2 on)
+npm audit signatures                        # provenance verifies, if the workflow published it
 ```
 
 **`latest` follows the first publish, then stays put.** npm points `latest` at a
