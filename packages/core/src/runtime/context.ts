@@ -14,7 +14,8 @@ import type { Representation } from '../contracts/negotiation.ts'
 import { pathnameOf } from '../primitives/path.ts'
 import { trackDisposal, type Disposal } from '../primitives/disposal.ts'
 import { parseQuery, type QueryRecord } from './query.ts'
-import { parseCookies, type CookieRecord } from './cookies.ts'
+import { assertCookie, parseCookies, type CookieRecord } from './cookies.ts'
+import { assertHeader } from './headers.ts'
 import {
   jsonReply, textReply, htmlReply, bytesReply, emptyReply, redirectReply, fileReply, streamReply,
 } from './reply.ts'
@@ -355,7 +356,15 @@ export interface StageTarget {
   $resCookies: SetCookie[] | null
 }
 
-/** Staged response metadata, applied at egress (§13.6). */
+/**
+ * Staged response metadata, applied at egress (§13.6).
+ *
+ * Checked here, when it is staged, rather than when egress applies it: a
+ * header or cookie that cannot be written then fails in the handler that
+ * staged it, as an ordinary error. Checked only at egress, the error reply
+ * inherited the same staged header and failed again, and the request ended
+ * outside the error path altogether (`assertHeader`).
+ */
 export class ReplyStage implements ReplyBuilder {
   #ctx: StageTarget
 
@@ -369,16 +378,19 @@ export class ReplyStage implements ReplyBuilder {
   }
 
   header(name: string, value: HeaderValue): this {
+    assertHeader(name, value)
     ;(this.#ctx.$resHeaders ??= []).push([name, value, false])
     return this
   }
 
   appendHeader(name: string, value: string): this {
+    assertHeader(name, value)
     ;(this.#ctx.$resHeaders ??= []).push([name, value, true])
     return this
   }
 
   removeHeader(name: string): this {
+    assertHeader(name, '')
     ;(this.#ctx.$resHeaders ??= []).push([name, '', false])
     return this
   }
@@ -388,12 +400,16 @@ export class ReplyStage implements ReplyBuilder {
   }
 
   cookie(name: string, value: string, opts: Omit<SetCookie, 'name' | 'value'> = {}): this {
-    ;(this.#ctx.$resCookies ??= []).push({ name, value, ...opts })
+    const cookie = { name, value, ...opts }
+    assertCookie(cookie)
+    ;(this.#ctx.$resCookies ??= []).push(cookie)
     return this
   }
 
   clearCookie(name: string, opts: Omit<SetCookie, 'name' | 'value'> = {}): this {
-    ;(this.#ctx.$resCookies ??= []).push({ name, value: '', ...opts, maxAge: 0 })
+    const cookie = { name, value: '', ...opts, maxAge: 0 }
+    assertCookie(cookie)
+    ;(this.#ctx.$resCookies ??= []).push(cookie)
     return this
   }
 }

@@ -459,6 +459,39 @@ describe('repeated headers (§13.6)', () => {
   })
 })
 
+describe('staged headers are checked when they are staged (§13.6, §19.5)', () => {
+  /**
+   * `ctx.res` stages metadata that egress applies after the handler. Checked
+   * only at egress, a bad header failed after the handler had returned — and
+   * the error reply carried the same staged header, failed the same way, and
+   * the exchange ended outside the error path: `inject()` threw, and over a
+   * socket the adapter's last resort answered with no problem document and no
+   * `onResponse`. Every case here did that.
+   */
+  const cases: Array<[string, (ctx: { res: { header(n: string, v: string): unknown; cookie(n: string, v: string, o?: object): unknown } }) => void]> = [
+    ['a line break', (ctx) => ctx.res.header('x-test', 'a\r\nInjected: 1')],
+    ['a non-ASCII value — a download name, say', (ctx) => ctx.res.header('content-disposition', 'attachment; filename="日本.pdf"')],
+    ['a name that is not a token', (ctx) => ctx.res.header('x test', 'v')],
+    ['a cookie name that is not a token', (ctx) => ctx.res.cookie('a b', 'v')],
+    ['a cookie path that would add an attribute', (ctx) => ctx.res.cookie('a', 'v', { path: '/; Domain=evil.example' })],
+  ]
+  for (const [label, stage] of cases) {
+    test(`${label} is an ordinary ZEN_HEADER_INVALID 500, and onResponse still sees it`, async () => {
+      const app = makeApp()
+      const seen: number[] = []
+      app.hook('onResponse', (_ctx, reply) => { seen.push(reply.status) })
+      app.get('/x', (ctx) => {
+        stage(ctx as never)
+        return 'unreachable'
+      })
+      const res = await app.inject('GET', '/x')
+      assert.equal(res.status, 500)
+      assert.equal(res.json<{ code: string }>().code, 'ZEN_HEADER_INVALID')
+      assert.deepEqual(seen, [500])
+    })
+  }
+})
+
 describe('body handling', () => {
   test('a route without a body schema never parses one', async () => {
     const app = makeApp()

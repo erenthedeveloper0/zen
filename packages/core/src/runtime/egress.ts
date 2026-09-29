@@ -1,8 +1,9 @@
-import type { Reply } from '../contracts/reply.ts'
+import type { HeaderBag, Reply } from '../contracts/reply.ts'
 import type { PlainContext } from './context.ts'
 import { MutableReply } from './reply.ts'
 import { effectiveStatus, encodeBody } from './response-engine.ts'
 import { serializeCookie } from './cookies.ts'
+import { SmallHeaderBag } from './headers.ts'
 
 /**
  * Egress — rfcs/0001 §4.2 stage 9, §13.6.
@@ -25,13 +26,18 @@ export function prepareForWire(ctx: PlainContext, reply: Reply): Reply {
 
   const staged = ctx.$resHeaders
   if (staged !== null) {
+    // Checked when `ctx.res` staged them (`ReplyStage`), so not again here —
+    // unless the reply brought its own bag: `isReply` is structural, so a
+    // handler may return any object shaped like one.
+    const bag: HeaderBag = mutable.headers
+    const checked = bag instanceof SmallHeaderBag
     for (let i = 0; i < staged.length; i++) {
       const entry = staged[i]
       if (entry === undefined) continue
       const [name, value, append] = entry
-      if (value === '' && !append) mutable.headers.delete(name.toLowerCase())
-      else if (append) mutable.headers.append(name, value as string)
-      else mutable.headers.set(name, value)
+      if (value === '' && !append) bag.delete(name.toLowerCase())
+      else if (append) checked ? bag.appendChecked(name, value as string) : bag.append(name, value as string)
+      else checked ? bag.setChecked(name, value) : bag.set(name, value)
     }
   }
 

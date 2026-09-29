@@ -591,6 +591,56 @@ const CONTROLS: readonly Control[] = [
     caughtBy: '"a handler may return html`` — a page, as a returned string is text"',
   },
 
+  // ── §19.5, §13.6: headers checked where they are set ────────────────────
+  {
+    name: 'check a short header value for CR, LF and NUL only, and let the adapter find the rest',
+    file: `${CORE}/runtime/headers.ts`,
+    find: '    if ((c < 0x20 && c !== 0x09) || c === 0x7f || c > 0xff) return i',
+    replace: '    if (c === 0x0d || c === 0x0a || c === 0x00) return i',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"refuses every character a header cannot carry, and a name that is not a token"',
+  },
+  {
+    name: 'check a long header value for CR, LF and NUL only',
+    file: `${CORE}/runtime/headers.ts`,
+    find: 'const NOT_FIELD_VALUE = /[^\\t\\x20-\\x7e\\x80-\\xff]/',
+    replace: 'const NOT_FIELD_VALUE = /[\\r\\n\\0]/',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"refuses every character a header cannot carry…" (the 60-character values)',
+  },
+  {
+    name: 'trust any header name, which Node then refuses outside the error path',
+    file: `${CORE}/runtime/headers.ts`,
+    find: "    if (typeof name !== 'string' || !TOKEN.test(name)) {",
+    replace: "    if (typeof name !== 'string') {",
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"refuses every character a header cannot carry, and a name that is not a token"',
+  },
+  {
+    name: 'check a staged header only at egress, where its failure escapes the error path',
+    file: `${CORE}/runtime/context.ts`,
+    find: '    assertHeader(name, value)\n    ;(this.#ctx.$resHeaders ??= []).push([name, value, false])',
+    replace: '    ;(this.#ctx.$resHeaders ??= []).push([name, value, false])',
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"… is an ordinary ZEN_HEADER_INVALID 500, and onResponse still sees it"',
+  },
+  {
+    name: 'check a staged cookie only at egress',
+    file: `${CORE}/runtime/context.ts`,
+    find: '    const cookie = { name, value, ...opts }\n    assertCookie(cookie)\n',
+    replace: '    const cookie = { name, value, ...opts }\n',
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"a cookie name that is not a token is an ordinary ZEN_HEADER_INVALID 500…"',
+  },
+  {
+    name: 'write a redirect target past ASCII raw, which no header can carry',
+    file: `${CORE}/runtime/reply.ts`,
+    find: "  reply.headers.set('location', NON_ASCII.test(to) ? percentEncodeNonAscii(to) : to)",
+    replace: "  reply.headers.set('location', to)",
+    suite: 'packages/core/test/redirect.test.ts',
+    caughtBy: '"encodes each code point as UTF-8, which is what a browser makes of it anyway"',
+  },
+
   // ── §19.5: redirects that stay home ──────────────────────────────────────
   {
     name: 'read a backslash as a path character, so /\\evil.example stays "local"',

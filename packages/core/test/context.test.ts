@@ -207,8 +207,27 @@ describe('header bag', () => {
   test('rejects CR/LF/NUL in values rather than stripping them', () => {
     const bag = new SmallHeaderBag()
     for (const bad of ['a\r\nX-Evil: 1', 'a\nb', 'a\0b']) {
-      assert.throws(() => bag.set('x-test', bad), /illegal character/)
+      assert.throws(() => bag.set('x-test', bad), { code: 'ZEN_HEADER_INVALID' })
+      assert.throws(() => bag.append('x-test', bad), { code: 'ZEN_HEADER_INVALID' })
     }
+  })
+
+  /** RFC 9110 §5.5 — and exactly what Node refuses when the adapter writes it,
+   *  so nothing the bag accepts can fail later, outside the error path. */
+  test('refuses every character a header cannot carry, and a name that is not a token', () => {
+    const bag = new SmallHeaderBag()
+    // Short values and long ones take different paths through the check; both must refuse.
+    const long = 'x'.repeat(60)
+    for (const bad of ['a\x01b', 'a\x1fb', 'a\x7fb', '日本', 'a b', `${long}\x01`, `${long}日本`]) {
+      assert.throws(() => bag.set('x-test', bad), /a character a header cannot carry/, JSON.stringify(bad))
+    }
+    bag.set('x-long', `${long} é\t`)
+    for (const name of ['x test', 'x:test', '', 'x\ntest', 'café']) {
+      assert.throws(() => bag.set(name, 'v'), /is not a token/, JSON.stringify(name))
+    }
+    // A tab, a space, visible ASCII and obs-text are all a value may hold.
+    bag.set('x-ok', 'a\tb c~é')
+    assert.equal(bag.get('x-ok'), 'a\tb c~é')
   })
 
   test('delete removes the header', () => {

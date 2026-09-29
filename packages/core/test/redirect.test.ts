@@ -160,6 +160,29 @@ describe('allowExternal on one call (§19.5)', () => {
   })
 })
 
+describe('a target past ASCII is sent percent-encoded (§19.5)', () => {
+  it('encodes each code point as UTF-8, which is what a browser makes of it anyway', () => {
+    assert.equal(redirectReply('/café?q=日本#ü').headers.get('location'), '/caf%C3%A9?q=%E6%97%A5%E6%9C%AC#%C3%BC')
+    assert.equal(redirectReply('/plain?a=1').headers.get('location'), '/plain?a=1')
+    // The same path and the same host, by the WHATWG parser's own account.
+    const base = 'https://app.test/'
+    assert.equal(new URL('/caf%C3%A9', base).href, new URL('/café', base).href)
+    const external = redirectReply('https://日本.example/ü', { allowExternal: true }).headers.get('location') as string
+    assert.equal(new URL(external).href, new URL('https://日本.example/ü').href)
+  })
+
+  it('decides the policy on the target as written', () => {
+    refused(() => redirectReply('//évil.example/'))
+    assert.equal(redirectReply('/évil//x').headers.get('location'), '/%C3%A9vil//x')
+  })
+
+  it('still refuses a control character, which no encoding makes a header', () => {
+    for (const target of ['/a\x01b', '/a\x7fb']) {
+      assert.throws(() => redirectReply(target), (error: unknown) => (error as { code?: string }).code === 'ZEN_HEADER_INVALID')
+    }
+  })
+})
+
 describe('isLocalUrl — the check to make on a ?next= before redirecting to it', () => {
   it('is true for a path, a query or a fragment, and false for anything with a scheme or authority', () => {
     for (const target of SAME_ORIGIN) assert.equal(isLocalUrl(target), true, JSON.stringify(target))

@@ -56,9 +56,7 @@ export function serializeCookie(cookie: SetCookie, secureRequest = false): strin
   // starts a new attribute: `path: '/; Domain=evil.example'` sets a Domain the
   // application never chose. The header bag rejects CR and LF; `;` and the
   // other separators are legal in a header, so they are refused here (§19.5).
-  if (!COOKIE_NAME.test(cookie.name)) throw invalidCookie('name', cookie.name)
-  if (cookie.domain !== undefined && !COOKIE_ATTRIBUTE.test(cookie.domain)) throw invalidCookie('domain', cookie.domain)
-  if (cookie.path !== undefined && !COOKIE_ATTRIBUTE.test(cookie.path)) throw invalidCookie('path', cookie.path)
+  assertCookie(cookie)
 
   let out = `${cookie.name}=${encodeURIComponent(cookie.value)}`
   if (cookie.maxAge !== undefined && Number.isFinite(cookie.maxAge)) out += `; Max-Age=${Math.floor(cookie.maxAge)}`
@@ -78,6 +76,17 @@ export function serializeCookie(cookie: SetCookie, secureRequest = false): strin
   if (cookie.partitioned) out += '; Partitioned'
   out += `; SameSite=${capitalise(sameSite)}`
   return out
+}
+
+/**
+ * Refuse a cookie whose name, `Domain` or `Path` would break the header — the
+ * check `serializeCookie` makes, exported so `ctx.res.cookie()` can make it when
+ * the cookie is staged rather than at egress (see `ReplyStage`).
+ */
+export function assertCookie(cookie: Pick<SetCookie, 'name' | 'domain' | 'path'>): void {
+  if (typeof cookie.name !== 'string' || !COOKIE_NAME.test(cookie.name)) throw invalidCookie('name', String(cookie.name))
+  if (cookie.domain !== undefined && !COOKIE_ATTRIBUTE.test(cookie.domain)) throw invalidCookie('domain', cookie.domain)
+  if (cookie.path !== undefined && !COOKIE_ATTRIBUTE.test(cookie.path)) throw invalidCookie('path', cookie.path)
 }
 
 /** RFC 6265 §4.1.1 `token`: no controls, whitespace or separators. */

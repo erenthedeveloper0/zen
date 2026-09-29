@@ -57,8 +57,16 @@ export function emptyReply(status: 204 | 205 | 304 = 204): Reply<null> {
  *
  * `policy` defaults to the strictest one, so a caller that builds replies
  * without a context gets a redirect that cannot leave the origin rather than
- * one that can. `init.allowExternal` skips the check for one reply; the CR/LF
- * check on the header (§19.5, `ZEN_HEADER_INVALID`) applies either way.
+ * one that can. `init.allowExternal` skips the check for one reply; the check
+ * on the header itself (§19.5, `ZEN_HEADER_INVALID` — a line break, a control
+ * character) applies either way.
+ *
+ * A target with characters past ASCII — `/café`, `/日本` — is sent the way a
+ * browser would have made of it anyway, each one percent-encoded as UTF-8: a
+ * header cannot carry them raw, and the URL parser percent-encodes them in
+ * every part of a URL (and percent-decodes a host before turning it into
+ * punycode), so the encoded target names the same resource. The policy is
+ * decided on the target as written, before encoding.
  */
 export function redirectReply(
   to: string,
@@ -82,9 +90,27 @@ export function redirectReply(
     if (refusal !== null) throw redirectRefused(refusal)
   }
   const reply = new MutableReply<null>(status, EMPTY_BODY)
-  reply.headers.set('location', to)
+  reply.headers.set('location', NON_ASCII.test(to) ? percentEncodeNonAscii(to) : to)
   return reply
 }
+
+const NON_ASCII = /[^\x00-\x7f]/
+
+/** Every code point past ASCII as its UTF-8 bytes, percent-encoded; ASCII untouched. */
+function percentEncodeNonAscii(target: string): string {
+  let out = ''
+  for (const character of target) {
+    if (character.charCodeAt(0) < 0x80) {
+      out += character
+      continue
+    }
+    // `TextEncoder` writes a lone surrogate as U+FFFD, where `encodeURIComponent` throws.
+    for (const byte of UTF8.encode(character)) out += `%${byte.toString(16).toUpperCase().padStart(2, '0')}`
+  }
+  return out
+}
+
+const UTF8 = new TextEncoder()
 
 const EMPTY_BODY: BodyPayload = Object.freeze({ kind: 'empty' as const })
 
