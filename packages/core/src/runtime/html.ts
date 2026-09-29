@@ -22,6 +22,9 @@ import { Codes } from '../errors/codes.ts'
  *   - **Element content** — `<title>` and `<textarea>` included — escaped
  *     (`& < > " '`), unless the value is itself `SafeHtml`, which is how
  *     templates nest: `html`<ul>${rows.map((r) => html`<li>${r.name}</li>`)}</ul>``.
+ *     Inside `<title>`, `<textarea>`, `<noscript>` and HTML's other text
+ *     elements, a fragment is refused if it could end the element; inside
+ *     `<svg>` or `<math>`, if it holds a script only HTML can read.
  *   - **A quoted attribute value** — escaped, always, `SafeHtml` included.
  *     Markup means nothing there, and a nested fragment's own quote would
  *     otherwise end the attribute early.
@@ -41,18 +44,22 @@ import { Codes } from '../errors/codes.ts'
  * `<meta http-equiv="refresh">`. Each is a place where escaped text is still
  * live code — `onclick="go('${x}')"` is entity-decoded *before* the script
  * runs. A template that ends inside a tag, a comment or a `<script>` is refused
- * too: a fragment is inserted where markup goes, so it has to leave the
- * tokenizer in the state it found it, or the template it is nested in would be
- * classified against a state that is not the real one.
+ * too — and one that leaves a text element or an `<svg>` open: a fragment is
+ * inserted where markup goes, so it has to leave the tokenizer in the state it
+ * found it, or the template it is nested in would be classified against a
+ * state that is not the real one. And because HTML and SVG read some elements
+ * differently, a template on which the two readings disagree about where an
+ * element ends is refused as well — see the analysis below.
  *
  * Refusals happen at render because a template has no earlier moment — it is
  * called, not registered — but they are structural: the first call in a test,
  * with any values at all, is refused, which is where they belong.
  *
  * Nothing here generates code, so there is no interpreted twin (§20.5). What
- * stands in for one is an oracle: the property suite renders hostile values
- * into every kind of position and checks the output with the WHATWG URL parser
- * and a grammar for escaped text, neither of which shares a line with this file.
+ * stands in for one is an oracle: the property suites render hostile values
+ * into every kind of position and judge the output with the WHATWG URL parser,
+ * a grammar for escaped text, and a spec-conformant HTML parser — none of which
+ * shares a line with this file.
  */
 
 // ── the value ───────────────────────────────────────────────────────────────
@@ -65,9 +72,18 @@ import { Codes } from '../errors/codes.ts'
  */
 class Markup {
   readonly #markup: string
+  /**
+   * False when the markup holds a `<script>` whose code only HTML reads as
+   * code — `if (a<b)` — which inside an `<svg>` or `<math>` is read as a tag.
+   * Such a fragment is refused where it would land inside one (see the
+   * analysis below). `unsafeHtml` always sets it: the application vouched for
+   * the markup, wherever it puts it.
+   */
+  readonly #foreignSafe: boolean
 
-  constructor(markup: string) {
+  constructor(markup: string, foreignSafe: boolean) {
     this.#markup = markup
+    this.#foreignSafe = foreignSafe
   }
 
   toString(): string {
@@ -104,6 +120,10 @@ class Markup {
   static read(value: Markup): string {
     return value.#markup
   }
+
+  static foreignSafe(value: Markup): boolean {
+    return value.#foreignSafe
+  }
 }
 
 /** True for a value `html` or `unsafeHtml` produced, and for nothing else. */
@@ -129,7 +149,7 @@ export function unsafeHtml(markup: string): SafeHtml {
       { status: 500, expose: false },
     )
   }
-  return new Markup(markup) as unknown as SafeHtml
+  return new Markup(markup, true) as unknown as SafeHtml
 }
 
 /**
@@ -201,6 +221,14 @@ const K_TEXT = 1
 const K_URL = 2
 /** A later hole of that same attribute value — written unless the value was neutralised. */
 const K_URL_REST = 3
+/**
+ * Element content where one of the two readings below disagrees with the
+ * other about what markup does: inside HTML's text elements (`<title>`,
+ * `<textarea>`, `<noscript>`…) or inside `<svg>`/`<math>`. Escaped as
+ * content, and `SafeHtml` is written only if it cannot end the text element
+ * or smuggle an HTML-only `<script>` into SVG.
+ */
+const K_GUARDED = 4
 
 /** What a URL attribute that could run script, or load from elsewhere, becomes instead. */
 export const NEUTRAL_URL = 'about:invalid#zen-unsafe-url'
@@ -220,6 +248,12 @@ interface Plan {
   readonly strings: readonly string[]
   readonly kinds: Uint8Array
   readonly checks: ReadonlyArray<UrlCheck | undefined>
+  /** For a `K_GUARDED` hole: the HTML text elements it sits in, if any — `['title']`, `['noscript']`. */
+  readonly textElements: ReadonlyArray<readonly string[] | undefined>
+  /** For a `K_GUARDED` hole: 1 when it may sit inside `<svg>` or `<math>`. */
+  readonly foreign: Uint8Array
+  /** False when one of the template's own `<script>`s is only code to HTML — see `Markup`. */
+  readonly foreignSafe: boolean
 }
 
 interface Refusal {
@@ -259,11 +293,18 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): SafeH
   let out = written[0] as string
   // The last hole of a URL value that was replaced — its later holes write nothing.
   let silenced = -1
+  // A fragment nested in element content carries what it holds with it.
+  let foreignSafe = plan.foreignSafe
   for (let i = 0; i < kinds.length; i++) {
     const value = values[i]
     switch (kinds[i]) {
       case K_MARKUP:
         out += asMarkup(value)
+        if (foreignSafe && typeof value === 'object' && value !== null) foreignSafe = isForeignSafe(value)
+        break
+      case K_GUARDED:
+        out += guardedMarkup(value, plan.textElements[i], plan.foreign[i] === 1)
+        if (foreignSafe && typeof value === 'object' && value !== null) foreignSafe = isForeignSafe(value)
         break
       case K_TEXT:
         out += escapeHtml(asText(value))
@@ -283,7 +324,7 @@ export function html(strings: TemplateStringsArray, ...values: unknown[]): SafeH
     }
     out += written[i + 1] as string
   }
-  return new Markup(out) as unknown as SafeHtml
+  return new Markup(out, foreignSafe) as unknown as SafeHtml
 }
 
 /** A value written as element content. */
@@ -301,6 +342,74 @@ function asMarkup(value: unknown): string {
   }
   if (value === undefined || typeof value === 'boolean') return ''
   return escapeHtml(String(value))
+}
+
+/**
+ * Element content that one reading of the page treats as text and the other as
+ * markup (`K_GUARDED`). A string is escaped, which is safe in both. A fragment
+ * is written as markup only if it keeps the two readings together:
+ *
+ *   - inside `<textarea>`, `<title>`, `<noscript>`…, it must not contain the
+ *     element's end tag, or end part-way into one. HTML would end the element
+ *     there and read the rest of the fragment as markup that the fragment's own
+ *     analysis never saw from that position — the middle of an attribute value,
+ *     say. A string cannot do this: its `<` is escaped.
+ *   - inside `<svg>` or `<math>`, it must not hold a `<script>` whose code only
+ *     HTML reads as code (`Markup`'s `foreignSafe`).
+ */
+function guardedMarkup(value: unknown, textElements: readonly string[] | undefined, foreign: boolean): string {
+  if (typeof value === 'string') return escapeHtml(value)
+  if (typeof value === 'object' && value !== null) {
+    if (Markup.is(value)) {
+      const markup = Markup.read(value)
+      if (textElements !== undefined) {
+        for (const element of textElements) {
+          if (couldEndElement(markup, element)) throw fragmentEndsElement(element)
+        }
+      }
+      if (foreign && !Markup.foreignSafe(value)) throw fragmentScriptInForeign()
+      return markup
+    }
+    if (Array.isArray(value)) {
+      let out = ''
+      for (let i = 0; i < value.length; i++) out += guardedMarkup(value[i], textElements, foreign)
+      return out
+    }
+  }
+  return asMarkup(value)
+}
+
+/** Whether `value`, written as element content, could put an HTML-only script inside SVG. */
+function isForeignSafe(value: object): boolean {
+  if (Markup.is(value)) return Markup.foreignSafe(value)
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const item: unknown = value[i]
+      if (typeof item === 'object' && item !== null && !isForeignSafe(item)) return false
+    }
+  }
+  return true
+}
+
+/**
+ * True when `markup` contains `</name` in any case, or ends with the start of
+ * it — `<`, `</`, `</tex` — which the template's next written text could finish.
+ * HTML ends a text element at exactly that sequence (WHATWG §13.2.5), whatever
+ * surrounds it; "could" is enough, because refusing is what happens next.
+ */
+function couldEndElement(markup: string, name: string): boolean {
+  const end = `</${name}`
+  const lower = asciiLowercase(markup)
+  if (lower.includes(end)) return true
+  for (let length = Math.min(end.length, lower.length); length > 0; length--) {
+    if (lower.endsWith(end.slice(0, length))) return true
+  }
+  return false
+}
+
+/** ASCII only, as HTML compares tag names — `toLowerCase` would also fold the Kelvin sign, U+212A, to `k`. */
+function asciiLowercase(text: string): string {
+  return text.replace(/[A-Z]+/g, (run) => run.toLowerCase())
 }
 
 /** The characters a value stands for, before escaping — `SafeHtml` as its text. */
@@ -388,15 +497,35 @@ const AUTHORITY_CLOSED = /^(?:[a-z][a-z0-9+.-]*:)?[\\/]{2}[^\\/?#]+[\\/?#]/i
 // Tokenizer states — the part of the WHATWG HTML tokenizer (§13.2.5) that
 // decides what a hole can become.
 //
-// One simplification, and it is the load-bearing one. HTML reads the content
-// of `<title>`, `<textarea>`, `<noscript>`, `<iframe>` and a few others as text
-// — but *not* inside `<svg>` or `<math>`, where the same names are ordinary
-// elements whose content is tags. A reader that followed the HTML rule would,
-// inside an `<svg>`, take a `<script>` for text and let a hole into it. So only
-// `<script>` and `<style>` are read as the raw text they are (and refused):
-// everything else is read as markup. Where a browser actually uses raw text,
-// that can only mean escaping a string that was safe anyway; the other
-// direction — believing "text" where the browser sees tags — cannot happen.
+// Two readings, and a template has to mean one thing under both. HTML reads the
+// content of `<script>` as script and of `<style>`, `<title>`, `<textarea>`,
+// `<noscript>`, `<iframe>`, `<xmp>`, `<noembed>` and `<noframes>` as text, each
+// ended by the first `</name` in it wherever that falls. SVG and MathML read the
+// same names as ordinary elements whose content is markup — tags, comments,
+// CDATA sections — ended by a real end tag. Which reading a browser applies
+// depends on where the markup lands: inside an `<svg>` or not, in this template
+// or in the one a fragment is nested into, and not every placement is visible
+// from here. So neither reading may be assumed:
+//
+//   - Content is read as markup, as SVG does, which is what keeps a `<script>`
+//     inside an SVG `<title>` from being taken for text (and a hole let into it).
+//   - The HTML reading is kept alongside: a text element's end tag written
+//     where the markup reading would not end the element — inside an attribute
+//     value, a comment, a tag — is refused, because everything after it would
+//     mean one thing to HTML and another to SVG. That is how
+//     `<noscript><p title="</noscript><img onerror=${x}>">` put a value in an
+//     event handler while the reader believed it was in a title.
+//   - `<script>` and `<style>` are read as HTML reads them, holes refused, and
+//     their text must not contain what SVG would read as markup — so both
+//     readings end them at the same place. A `<script>` whose code merely looks
+//     like markup (`if (a<b)`) is fine in HTML and is refused only where it could
+//     reach an SVG: inside one here, or as a fragment nested into one.
+//   - A CDATA section ends at the first `>` for HTML and at `]]>` inside SVG, so
+//     one whose text holds a `>` is refused.
+//
+// Where a browser uses the text reading and the markup reading here says "tag",
+// the difference is a string escaped that was safe anyway. What is refused is
+// every template on which the two readings disagree about where an element ends.
 const DATA = 0
 const TAG_OPEN = 1
 const END_TAG_OPEN = 2
@@ -415,6 +544,15 @@ const COMMENT = 14
 const BOGUS_COMMENT = 15
 const SCRIPT = 16
 const PLAINTEXT = 17
+const CDATA = 18
+
+/**
+ * Elements whose content HTML reads as text, ended by the first `</name` —
+ * RCDATA (`title`, `textarea`) and raw text (the rest; `noscript` while
+ * scripting is on, which is when it matters). `script`, `style` and `plaintext`
+ * have states of their own.
+ */
+const TEXT_ELEMENTS: ReadonlySet<string> = new Set(['title', 'textarea', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript'])
 
 const TAB = 0x09
 const LF = 0x0a
@@ -430,13 +568,14 @@ const LESS_THAN = 0x3c
 const EQUALS = 0x3d
 const GREATER_THAN = 0x3e
 const QUESTION = 0x3f
+const CLOSE_BRACKET = 0x5d
 
 /** Read a template's written text once, and decide what each hole may become. */
 function analyse(template: TemplateStringsArray): Plan | Refusal {
   const strings: string[] = []
   for (let i = 0; i < template.length; i++) strings.push(template[i] ?? (template.raw[i] as string))
 
-  const reader = new TemplateReader()
+  const reader = new TemplateReader(strings.length - 1)
   const kinds = new Uint8Array(strings.length - 1)
   for (let i = 0; i < strings.length; i++) {
     reader.feed(strings[i] as string)
@@ -447,16 +586,28 @@ function analyse(template: TemplateStringsArray): Plan | Refusal {
   }
   const unfinished = reader.finish()
   if (unfinished !== null) return unfinished
-  return { strings, kinds, checks: reader.checks }
+  return {
+    strings,
+    kinds,
+    checks: reader.checks,
+    textElements: reader.textElements,
+    foreign: reader.foreign,
+    foreignSafe: reader.foreignSafe,
+  }
 }
 
 class TemplateReader {
   state = DATA
   refusal: Refusal | null = null
   readonly checks: Array<UrlCheck | undefined> = []
+  /** Per `K_GUARDED` hole — see `Plan`. */
+  readonly textElements: Array<readonly string[] | undefined> = []
+  readonly foreign: Uint8Array
+  foreignSafe = true
 
   #tag = ''
   #closing = false
+  #selfClosing = false
   #attribute = ''
   #quote = 0
   /** Written text of the current attribute value since it opened, or since its last hole. */
@@ -468,10 +619,38 @@ class TemplateReader {
   #metaContentHole = false
   /** `script` or `style` — the element whose end tag leaves SCRIPT. */
   #rawEnd = ''
+  /** The text of that element so far, which the markup reading is checked against at its end. */
+  #rawText = ''
+  /**
+   * Text elements open, outermost first (see `TEXT_ELEMENTS`). Usually none or
+   * one. More than one when a text element sits inside another that the markup
+   * reading treats as an element — an SVG `<title>`, which lets HTML back in,
+   * holding an HTML `<textarea>` — and then every one of their end tags counts.
+   */
+  readonly #textElements: string[] = []
+  /** `svg` and `math` elements this template opened and has not closed, outermost first. */
+  readonly #foreignOpen: string[] = []
+  /** Where the current CDATA section's text began, in the text being fed. */
+  #cdataFrom = 0
+
+  constructor(holes: number) {
+    this.foreign = new Uint8Array(holes)
+  }
 
   feed(text: string): void {
     for (let i = 0; i < text.length && this.refusal === null; i++) {
       const c = text.charCodeAt(i)
+      // HTML ends a text element at its end tag wherever that falls. When the
+      // markup reading is anywhere but element content at that point, the two
+      // readings of everything after it differ — refused. (A `<` in TAG_OPEN is
+      // re-read as content, so that state agrees.)
+      if (c === LESS_THAN && this.#textElements.length > 0 && this.state !== DATA && this.state !== TAG_OPEN) {
+        const element = this.#textElements.find((name) => isEndTagAt(text, i, name))
+        if (element !== undefined) {
+          this.#readTwoWays(element, this.#where())
+          return
+        }
+      }
       switch (this.state) {
         case DATA:
           if (c === LESS_THAN) this.state = TAG_OPEN
@@ -536,15 +715,34 @@ class TemplateReader {
           break
         case SELF_CLOSING:
           // `<script/>` still opens a script: HTML ignores the slash on an
-          // element that is not void, so the flag decides nothing here.
-          if (c === GREATER_THAN) { this.#endTag(); break }
+          // element that is not void. `<svg/>` is the case it decides — an
+          // SVG closed on the spot, which opens nothing.
+          if (c === GREATER_THAN) { this.#selfClosing = true; this.#endTag(); break }
           this.state = BEFORE_ATTRIBUTE_NAME
           i--
           break
         case MARKUP_DECLARATION:
           if (c === HYPHEN && text.charCodeAt(i + 1) === HYPHEN) { this.state = COMMENT_START; i++; break }
-          this.state = BOGUS_COMMENT // `<!DOCTYPE …>`, `<![CDATA[…`: until the next `>`
+          if (text.startsWith('[CDATA[', i)) { this.state = CDATA; i += 6; this.#cdataFrom = i + 1; break }
+          this.state = BOGUS_COMMENT // `<!DOCTYPE …>`: until the next `>`
           i--
+          break
+        case CDATA:
+          // HTML reads `<![CDATA[` as a bogus comment, ended by the next `>`;
+          // inside SVG or MathML it is a CDATA section, ended by `]]>`. Only a
+          // section whose first `>` is its `]]>` ends in the same place for both.
+          if (c === GREATER_THAN) {
+            if (i - 2 >= this.#cdataFrom && text.charCodeAt(i - 1) === CLOSE_BRACKET && text.charCodeAt(i - 2) === CLOSE_BRACKET) {
+              this.state = DATA
+            } else {
+              this.refusal = {
+                message:
+                  'Refused an html`…` template: a CDATA section holds a ">" before its "]]>". HTML ends the section at ' +
+                  'that ">" and SVG at "]]>", so what lies between would be markup to one and text to the other.',
+                hint: 'Take the ">" out of the CDATA section — write it as &gt; — or use a comment.',
+              }
+            }
+          }
           break
         case COMMENT_START:
           // `<!-->` and `<!--->` are whole comments.
@@ -573,11 +771,44 @@ class TemplateReader {
     }
   }
 
+  /** Refuse the template: HTML and the markup reading disagree about where a text element ends. */
+  #readTwoWays(element: string, where: string): void {
+    this.refusal = {
+      message:
+        `Refused an html\`…\` template: HTML reads the content of <${element}> as text and ends it at the first ` +
+        `"</${element}", but here that sits ${where}, where SVG and MathML — which read the content as markup — do ` +
+        'not end it. Everything after it would mean one thing to HTML and another to SVG.',
+      hint: `Write "</${element}" only as the element's own end tag — not in an attribute value, a tag, a comment or a script.`,
+    }
+  }
+
+  /** Where the reader is, for a refusal that has to say. */
+  #where(): string {
+    switch (this.state) {
+      case ATTRIBUTE_VALUE:
+      case UNQUOTED_VALUE:
+        return `inside the ${this.#attribute} attribute of <${this.#tag}>`
+      case SCRIPT:
+        return `inside a <${this.#rawEnd}>`
+      case COMMENT_START:
+      case COMMENT:
+      case BOGUS_COMMENT:
+      case MARKUP_DECLARATION:
+      case CDATA:
+        return 'inside a comment or declaration'
+      default:
+        return `inside the <${this.#closing ? '/' : ''}${this.#tag}> tag`
+    }
+  }
+
   /** Classify the hole that follows the text just fed. */
   hole(index: number, before: string): number {
     switch (this.state) {
       case DATA:
-        return K_MARKUP
+        if (this.#textElements.length === 0 && this.#foreignOpen.length === 0) return K_MARKUP
+        if (this.#textElements.length > 0) this.textElements[index] = [...this.#textElements]
+        if (this.#foreignOpen.length > 0) this.foreign[index] = 1
+        return K_GUARDED
       case ATTRIBUTE_VALUE:
         return this.#attributeHole(index, before)
       case SCRIPT:
@@ -595,6 +826,7 @@ class TemplateReader {
       case COMMENT_START:
       case BOGUS_COMMENT:
       case MARKUP_DECLARATION:
+      case CDATA:
         return this.#refuse(
           index, before,
           'sits inside an HTML comment or declaration, where a value can end it early and turn what follows into markup',
@@ -627,13 +859,18 @@ class TemplateReader {
 
   /** The template ended: it must leave the tokenizer where it found it. */
   finish(): Refusal | null {
-    if (this.state === DATA) return null
+    if (this.state === DATA && this.#textElements.length === 0 && this.#foreignOpen.length === 0) return null
+    // An open text element leaves HTML reading what follows the fragment as
+    // text, an open <svg> leaves the browser reading it as SVG — either way the
+    // template it is nested in would be read against a state it never saw.
     const where =
       this.state === SCRIPT ? `inside <${this.#rawEnd}>, which it never closes`
       : this.state === PLAINTEXT ? 'inside <plaintext>, which nothing can close'
-      : this.state >= MARKUP_DECLARATION ? 'inside an unclosed comment or declaration'
+      : this.state >= MARKUP_DECLARATION ? 'inside an unclosed comment, declaration or CDATA section'
       : this.state === ATTRIBUTE_VALUE ? `inside the ${this.#attribute} attribute of <${this.#tag}>`
-      : `inside the <${this.#closing ? '/' : ''}${this.#tag}> tag`
+      : this.state !== DATA ? `inside the <${this.#closing ? '/' : ''}${this.#tag}> tag`
+      : this.#textElements.length > 0 ? `inside <${this.#textElements[0] as string}>, which it never closes`
+      : `inside <${this.#foreignOpen[0] as string}>, which it never closes`
     return {
       message:
         `Refused an html\`…\` template: it ends ${where}. A fragment is inserted where markup goes, so the markup ` +
@@ -643,6 +880,17 @@ class TemplateReader {
   }
 
   #attributeHole(index: number, before: string): number {
+    // Inside a text element, HTML is reading this attribute as text: a value
+    // cannot supply a `<` (it is escaped), but it can finish an end tag the
+    // written text began — `</noscript` then a hole holding " x".
+    const finishes = this.#textElements.find((name) => endsPartWayInto(before, `</${name}`))
+    if (finishes !== undefined) {
+      return this.#refuse(
+        index, before,
+        `could finish "</${finishes}", which HTML would read as the end of the <${finishes}> this attribute sits in`,
+        `Do not write "</${finishes}", or any start of it, inside an attribute value.`,
+      )
+    }
     const first = this.#valueHoles === 0
     const written = this.#value
     this.#valueHoles++
@@ -719,13 +967,13 @@ class TemplateReader {
 
   /** Inside `<script>` or `<style>`: only `</script` or `</style` (then whitespace, `/` or `>`) ends it. */
   #scriptText(text: string, i: number): number {
-    if (text.charCodeAt(i) !== LESS_THAN) return i
     const end = this.#rawEnd
-    if (
-      text.charCodeAt(i + 1) === SOLIDUS &&
-      text.slice(i + 2, i + 2 + end.length).toLowerCase() === end &&
-      endsName(text.charCodeAt(i + 2 + end.length))
-    ) {
+    if (text.charCodeAt(i) !== LESS_THAN) {
+      this.#rawText += text[i]
+      return i
+    }
+    if (isEndTagAt(text, i, end)) {
+      this.#rawEnds()
       this.#tag = end
       this.#closing = true
       this.state = TAG_NAME
@@ -739,13 +987,50 @@ class TemplateReader {
         hint: 'Remove the HTML comment from the script.',
       }
     }
+    this.#rawText += '<'
     return i
+  }
+
+  /**
+   * HTML has just ended a `<script>` or `<style>` at its first `</script`. Inside
+   * SVG or MathML the same text is markup, so the element ends there too only if
+   * nothing in it is: no tag, no comment, no CDATA section left open.
+   *
+   * A `<style>` that fails is refused wherever it is — CSS has no use for a `<`
+   * before a letter, and an HTML `<select>` has at times ignored a `<style>` and
+   * parsed its content as markup too. A `<script>` is refused inside an `<svg>`
+   * or `<math>` of this template; elsewhere `if (a<b)` is ordinary code, so the
+   * fragment is only marked, and refused where it would be nested into SVG.
+   */
+  #rawEnds(): void {
+    const text = this.#rawText
+    this.#rawText = ''
+    if (!holdsMarkup(text)) return
+    if (this.#rawEnd === 'script' && this.#foreignOpen.length === 0) {
+      this.foreignSafe = false
+      return
+    }
+    this.refusal = this.#rawEnd === 'style'
+      ? {
+        message:
+          'Refused an html`…` template: its <style> holds a "<" that begins a tag, comment or CDATA section. HTML ends ' +
+          'the style at the first "</style" regardless; SVG and MathML read that "<" as markup and end it somewhere else.',
+        hint: 'Write "<" in CSS as \\3c, or move the rules to a stylesheet.',
+      }
+      : {
+        message:
+          `Refused an html\`…\` template: its <script> inside <${this.#foreignOpen[0] as string}> holds a "<" that begins a ` +
+          'tag, comment or CDATA section. SVG and MathML read a script\'s content as markup, so it would not end where ' +
+          'HTML ends it — and it would not run as the code it looks like either.',
+        hint: 'Inside SVG, wrap the code in <![CDATA[ … ]]> or write "<" as &lt;.',
+      }
   }
 
   #startTag(c: number, closing: boolean): void {
     this.state = TAG_NAME
     this.#tag = lower(c)
     this.#closing = closing
+    this.#selfClosing = false
     this.#attribute = ''
     this.#attributes = new Map()
     this.#metaContentHole = false
@@ -775,6 +1060,11 @@ class TemplateReader {
   #endTag(): void {
     const tag = this.#tag
     if (this.#closing) {
+      const text = this.#textElements.lastIndexOf(tag)
+      if (text !== -1) this.#textElements.length = text
+      // `</svg>` closes the innermost open `svg`, and anything opened inside it.
+      const open = this.#foreignOpen.lastIndexOf(tag)
+      if (open !== -1) this.#foreignOpen.length = open
       this.state = DATA
       return
     }
@@ -790,8 +1080,16 @@ class TemplateReader {
     if (tag === 'script' || tag === 'style') {
       this.state = SCRIPT
       this.#rawEnd = tag
+      this.#rawText = ''
+    } else if (tag === 'plaintext') {
+      this.state = PLAINTEXT
     } else {
-      this.state = tag === 'plaintext' ? PLAINTEXT : DATA
+      this.state = DATA
+      // Counted even where HTML would read the tag as text — inside another text
+      // element — or break back out of SVG: an element believed to be open only
+      // makes the checks stricter.
+      if (TEXT_ELEMENTS.has(tag)) this.#textElements.push(tag)
+      else if ((tag === 'svg' || tag === 'math') && !this.#selfClosing) this.#foreignOpen.push(tag)
     }
   }
 
@@ -808,6 +1106,33 @@ class TemplateReader {
 
 function refused(refusal: Refusal): ZenError {
   return new ZenError(Codes.HTML_UNSAFE, refusal.message, { status: 500, expose: false, hint: refusal.hint })
+}
+
+function fragmentEndsElement(element: string): ZenError {
+  return new ZenError(
+    Codes.HTML_UNSAFE,
+    `Refused an html\`…\` fragment inside <${element}>: it holds "</${element}", or the start of it, which HTML reads as ` +
+      'the end of the element — so the rest of the fragment would be read as markup from a position its own ' +
+      'analysis never saw.',
+    {
+      status: 500,
+      expose: false,
+      hint: `Pass that value as a string, which is escaped, or close the <${element}> in the template before it.`,
+    },
+  )
+}
+
+function fragmentScriptInForeign(): ZenError {
+  return new ZenError(
+    Codes.HTML_UNSAFE,
+    'Refused an html`…` fragment inside <svg> or <math>: it holds a <script> whose code contains a "<" that SVG and ' +
+      'MathML read as a tag, so there the script would neither end nor run as written.',
+    {
+      status: 500,
+      expose: false,
+      hint: 'Keep that fragment out of the SVG, or write the script\'s "<" as &lt; or inside <![CDATA[ … ]]>.',
+    },
+  )
 }
 
 function calledAsFunction(): ZenError {
@@ -836,6 +1161,45 @@ function isSpace(c: number): boolean {
 
 function endsName(c: number): boolean {
   return isSpace(c) || c === SOLIDUS || c === GREATER_THAN
+}
+
+/** `</name` at `i`, in any ASCII case, then what ends a tag name — HTML's test for the end of a text element. */
+function isEndTagAt(text: string, i: number, name: string): boolean {
+  if (text.charCodeAt(i) !== LESS_THAN || text.charCodeAt(i + 1) !== SOLIDUS) return false
+  for (let j = 0; j < name.length; j++) {
+    const c = text.charCodeAt(i + 2 + j)
+    if ((c >= 0x41 && c <= 0x5a ? c + 0x20 : c) !== name.charCodeAt(j)) return false
+  }
+  return endsName(text.charCodeAt(i + 2 + name.length))
+}
+
+/** Whether `text` ends with all of `sequence`, or with a start of it — in any ASCII case. */
+function endsPartWayInto(text: string, sequence: string): boolean {
+  const tail = asciiLowercase(text.slice(-sequence.length))
+  for (let length = tail.length; length > 0; length--) {
+    if (tail.endsWith(sequence.slice(0, length))) return true
+  }
+  return false
+}
+
+/**
+ * Whether SVG or MathML would find markup in the text of a `<script>` or
+ * `<style>`: a `<` that begins a tag, an end tag, a comment, a declaration or a
+ * processing instruction. A CDATA section is text to them and is skipped — that
+ * is how an SVG script legitimately holds `a<b` — provided it closes.
+ */
+function holdsMarkup(text: string): boolean {
+  for (let i = text.indexOf('<'); i !== -1; i = text.indexOf('<', i + 1)) {
+    const next = text.charCodeAt(i + 1)
+    if (next === BANG && text.startsWith('[CDATA[', i + 2)) {
+      const close = text.indexOf(']]>', i + 9)
+      if (close === -1) return true
+      i = close + 2
+      continue
+    }
+    if (isAlpha(next) || next === SOLIDUS || next === BANG || next === QUESTION) return true
+  }
+  return false
 }
 
 /** ASCII-lowercase one character, the way tag and attribute names are compared. */

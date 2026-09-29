@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { parse } from 'parse5'
 import {
   html, unsafeHtml, escapeHtml, isSafeHtml, NEUTRAL_URL, DEFAULT_CAPABILITIES, type SafeHtml,
 } from '@erenthedeveloper0/zen-core'
@@ -10,11 +11,12 @@ import { makeApp } from './helpers.ts'
  *
  * Hand-written cases first, one per position a hole can take, because each is
  * a sentence the RFC now says and a sentence is a test somebody has not
- * written yet. Then the property suite, whose oracle is the WHATWG URL parser
- * and a grammar for escaped text — neither shares a line with `runtime/html.ts`,
- * which is what makes the suite evidence rather than a restatement. `html`
- * generates no code, so there is no interpreted twin to fuzz against (§20.5);
- * an independent oracle is what stands in for one.
+ * written yet. Then the property suites, whose oracles are the WHATWG URL
+ * parser, a grammar for escaped text, and parse5 — a spec-conformant HTML
+ * parser — judging whole pages built from random templates. None shares a line
+ * with `runtime/html.ts`, which is what makes the suites evidence rather than a
+ * restatement. `html` generates no code, so there is no interpreted twin to
+ * fuzz against (§20.5); independent oracles are what stand in for one.
  */
 
 const EVIL = '<script>alert(1)</script>'
@@ -119,6 +121,93 @@ describe('text elements (§19.5)', () => {
 
   it('reads past an end tag, whatever its case', () => {
     assert.equal(String(html`<TITLE>t</Title ><p>${'<'}</p>`), '<TITLE>t</Title ><p>&lt;</p>')
+  })
+})
+
+describe('two readings of one page — HTML and SVG (§19.5)', () => {
+  // HTML reads <title>, <textarea>, <noscript>… as text ended by the first
+  // "</name", and <script>/<style> as script and raw text; SVG and MathML read
+  // all of them as markup. Every template in the first three tests was accepted
+  // by the first version of the tag, and a spec-conformant parser put its value
+  // in an event handler, a <script> or a <style>.
+
+  it("refuses a text element's end tag where the markup reading would not end the element", () => {
+    const cases: Array<[() => unknown, string]> = [
+      [() => html`<noscript><p title="</noscript><img src=x onerror=${'go()'}>"></p></noscript>`, 'noscript'],
+      [() => html`<title><a title="</title><script>${'go()'}</script>">`, 'title'],
+      [() => html`<textarea><!-- </textarea><p>${'x'} --></textarea>`, 'textarea'],
+      [() => html`<xmp><b data-x="</xmp>">${'x'}</b></xmp>`, 'xmp'],
+      // An SVG <title> lets HTML back in, so this <textarea> is HTML's: its end tag counts too.
+      [() => html`<svg><title><textarea><a title="</textarea><b>${'x'}</b>"></textarea></title></svg>`, 'textarea'],
+    ]
+    for (const [render, element] of cases) {
+      assert.match(refusal(render), new RegExp(`content of <${element}> as text`), element)
+    }
+  })
+
+  it('refuses a hole that could finish such an end tag', () => {
+    assert.match(refusal(() => html`<textarea><a title="</text${'area x'}"></a></textarea>`), /could finish "<\/textarea"/)
+    assert.match(refusal(() => html`<title><b title="<${'/title '}">t</b></title>`), /could finish "<\/title"/)
+  })
+
+  it('refuses what SVG would read as markup inside a <style>, or inside a <script> in an <svg>', () => {
+    assert.match(refusal(() => html`<svg><style><!--</style>-->${'x'}</style></svg>`), /<style> holds a "<"/)
+    assert.match(refusal(() => html`<math><style><img src=x onerror="1</style>${'x'}"></math>`), /<style> holds a "<"/)
+    assert.match(refusal(() => html`<svg><script><![CDATA[ var s = "</script>"; ]]>${'x'}</script></svg>`), /<script> inside <svg> holds a "<"/)
+    assert.match(refusal(() => html`<style>/* <b> */</style>`), /<style> holds a "<"/)
+    assert.match(refusal(() => html`<svg><script>if (a<b) go()</script></svg>`), /<script> inside <svg>/)
+  })
+
+  it('refuses a CDATA section that HTML and SVG would end in different places', () => {
+    assert.match(refusal(() => html`<![CDATA[ a>b ]]><p>${1}</p>`), /CDATA section holds a ">"/)
+    assert.equal(String(html`<svg><![CDATA[ a<b ]]><text>${'t'}</text></svg>`), '<svg><![CDATA[ a<b ]]><text>t</text></svg>')
+  })
+
+  it('refuses a template that leaves a text element, an <svg> or a <math> open', () => {
+    assert.match(refusal(() => html`<textarea>${'x'}`), /inside <textarea>, which it never closes/)
+    assert.match(refusal(() => html`<svg><circle r="1"/>`), /inside <svg>, which it never closes/)
+    assert.match(refusal(() => html`<math><mi>x</mi>`), /inside <math>, which it never closes/)
+  })
+
+  it('leaves the ordinary patterns alone', () => {
+    const cases: Array<[() => unknown, string]> = [
+      [() => html`<noscript>${html`<img src="/pixel?id=${7}">`}</noscript>`, '<noscript><img src="/pixel?id=7"></noscript>'],
+      [() => html`<noscript>${html`<p>Turn on JavaScript</p>`}</noscript>`, '<noscript><p>Turn on JavaScript</p></noscript>'],
+      [() => html`<title>${'Tom & </title> Jerry'}</title>`, '<title>Tom &amp; &lt;/title&gt; Jerry</title>'],
+      [() => html`<script>for (let i=0;i<n;i++) go(i)</script><p>${'x'}</p>`, '<script>for (let i=0;i<n;i++) go(i)</script><p>x</p>'],
+      [() => html`<script>//<![CDATA[
+if (a<b) go()
+//]]></script>`, '<script>//<![CDATA[\nif (a<b) go()\n//]]></script>'],
+      [
+        () => html`<svg viewBox="0 0 8 8"><style>.a{fill:red}</style><path class="a" d="${'M0 0h8v8H0z'}"/></svg>`,
+        '<svg viewBox="0 0 8 8"><style>.a{fill:red}</style><path class="a" d="M0 0h8v8H0z"/></svg>',
+      ],
+      [
+        () => html`<svg><script><![CDATA[ if (a<b) go() ]]></script><text>${'hi'}</text></svg>`,
+        '<svg><script><![CDATA[ if (a<b) go() ]]></script><text>hi</text></svg>',
+      ],
+      [() => html`<svg>${html`<circle r="${4}"/>`}</svg>`, '<svg><circle r="4"/></svg>'],
+      [() => html`<svg/><p>${'x'}</p>`, '<svg/><p>x</p>'],
+    ]
+    for (const [render, expected] of cases) assert.equal(String(render()), expected)
+  })
+
+  it('a fragment inside a text element may not end it — a string cannot, because it is escaped', () => {
+    assert.equal(String(html`<textarea>${'</textarea><b>'}</textarea>`), '<textarea>&lt;/textarea&gt;&lt;b&gt;</textarea>')
+    assert.match(refusal(() => html`<textarea>${unsafeHtml('</TEXTAREA><b>')}</textarea>`), /fragment inside <textarea>/)
+    // Ending part-way into the end tag is as good as holding it: the next value can finish it.
+    assert.match(refusal(() => html`<title>${unsafeHtml('a<')}${'/title>'}</title>`), /fragment inside <title>/)
+    assert.match(refusal(() => html`<noscript>${[html`<b>ok</b>`, unsafeHtml('</noscript>')]}</noscript>`), /fragment inside <noscript>/)
+  })
+
+  it('a fragment whose script only HTML can read is refused inside SVG, however deep, and fine outside it', () => {
+    const script = html`<script>if (a<b) go()</script>`
+    assert.equal(String(html`<div>${script}</div>`), '<div><script>if (a<b) go()</script></div>')
+    assert.match(refusal(() => html`<svg>${script}</svg>`), /fragment inside <svg> or <math>/)
+    const wrapped = html`<section>${[html`<p>x</p>`, script]}</section>`
+    assert.match(refusal(() => html`<math><mi>${wrapped}</mi></math>`), /fragment inside <svg> or <math>/)
+    // Markup the application vouched for is taken at its word, here as everywhere.
+    assert.equal(String(html`<svg>${unsafeHtml('<script>if (a<b) go()</script>')}</svg>`), '<svg><script>if (a<b) go()</script></svg>')
   })
 })
 
@@ -454,5 +543,214 @@ describe('properties, against independent oracles (§20.5)', () => {
       assert.equal(runsScript(value), false, `seed ${seed}: ${JSON.stringify(url)} kept a script scheme`)
     }
     assert.ok(neutralised > SEEDS / 10 && kept > SEEDS / 20, `neutralised ${neutralised}, kept ${kept}`)
+  })
+})
+
+// ── whole pages, judged by an HTML parser ───────────────────────────────────
+//
+// The suites above judge one position at a time. This one builds pages: random
+// templates of nested elements — HTML's text elements, <script> and <style>,
+// SVG and MathML and the elements that lead back out of them, attribute values
+// holding end tags — with hostile values in their holes and random fragments
+// nested in each other. parse5, which implements the WHATWG tree builder, parses
+// every page the tag accepted, with scripting on and off, and reports where each
+// value landed. A value may end up as text, or in an attribute that cannot run
+// it. Anywhere else — in a script or style, an event handler, a tag or
+// attribute name, a comment, a URL that runs script — is the failure a
+// position-by-position check misses: the tag and a browser disagreeing about
+// where an element ends.
+
+/** The parts of a parse5 node the judge reads. */
+interface ParsedNode {
+  readonly nodeName: string
+  readonly tagName?: string
+  readonly attrs?: ReadonlyArray<{ readonly name: string; readonly value: string }>
+  readonly childNodes?: readonly ParsedNode[]
+  readonly content?: ParsedNode
+  readonly value?: string
+  readonly data?: string
+}
+
+/** Every value carries a marker, so wherever the parser put it, it can be found. */
+const MARKER = /zq\d+x/
+
+/** [tag, attributes] — `§` is a hole. */
+const ELEMENTS: ReadonlyArray<readonly [string, string]> = [
+  ['p', ''], ['div', ' class="§"'], ['b', ''], ['a', ' href="§"'], ['a', ' href="/u/§" title="§"'], ['span', " title='§'"],
+  ['p', ' title="</title>"'], ['i', ' title="</textarea>"'], ['u', ' title="</noscript>"'], ['em', ' data-x="</xmp "'],
+  // An attribute that ends the text element around it, for HTML, and then
+  // opens a place where a value is code — the shape that got past the first version.
+  ['p', ' title="</noscript><img src=x onerror=§>"'], ['a', ' title="</title><script>§</script>"'],
+  ['b', " title='</textarea><b onclick=§>'"], ['i', ' data-x="</xmp><iframe srcdoc=§>"'],
+  ['u', ' title="</iframe><svg onload=§>"'], ['s', ' title="</noembed><img src=x onerror=§>"'],
+  ['q', ' title="</noframes><script>§</script>"'],
+  ['title', ''], ['textarea', ' name="§"'], ['noscript', ''], ['iframe', ' src="§"'], ['xmp', ''], ['noembed', ''], ['noframes', ''],
+  ['script', ''], ['style', ''],
+  ['svg', ''], ['math', ''], ['foreignObject', ''], ['desc', ''], ['mi', ''], ['mtext', ''], ['g', ' fill="§"'],
+  ['select', ''], ['table', ''], ['template', ''], ['form', ' action="/f/§"'], ['button', ' formaction="§"'],
+  ['b', ' onclick="§"'],
+]
+const TEXT = ['§', '§', '§', 'text ', 'a<b ', 'x > y ', ' ', '<br>', '<!-- note -->', '<img src="§">', '<circle r="§"/>']
+const CODE = [
+  'if (a<b) go() ', 'p { color: red } ', '/* <b> */ ', 'x = "</b>" ', '<![CDATA[ a<b ]]> ', '§', '',
+  // Text that ends the element for HTML but not for SVG, then a hole: inside an
+  // SVG script or style, or a MathML one, the hole is still code.
+  '<![CDATA[ "</script>" ]]>§', '<!--</style>-->§', '<img src=x onerror="1</style>§">',
+]
+const STRAY = ['"', "'", '<', '>', '</', '=', '<!--', '-->', '<![CDATA[', ']]>', '<![CDATA[ x ]]>', '<![CDATA[ a>b ]]>', '</p>']
+const BREAKOUT = [
+  '"', "'", '<', '>', '/', ' ', '=', '&', '/title>', '/noscript ', '/textarea>', '/script>', '/xmp ', '/iframe>',
+  ' onclick=go()', 'javascript:', ']]>', '-->', '<!--', '<script>', '\t', '\n', ':',
+]
+
+function content(random: () => number, depth: number): string {
+  let out = ''
+  const items = 1 + Math.floor(random() * 3)
+  for (let i = 0; i < items; i++) {
+    const r = random()
+    if (depth < 3 && r < 0.5) {
+      const [name, attributes] = pick(random, ELEMENTS)
+      const inside = name === 'script' || name === 'style' ? pick(random, CODE) : content(random, depth + 1)
+      out += `<${name}${attributes}>${inside}</${name}>`
+    } else if (r < 0.93) {
+      out += pick(random, TEXT)
+    } else {
+      out += pick(random, STRAY)
+    }
+  }
+  return out
+}
+
+/** A real template object: frozen, with `raw`, so the tag analyses it like a literal. */
+function templateOf(text: string): TemplateStringsArray {
+  const parts = text.split('§')
+  return Object.freeze(Object.assign(parts.slice(), { raw: Object.freeze(parts.slice()) })) as unknown as TemplateStringsArray
+}
+
+interface Tally {
+  markers: number
+  accepted: number
+  refusals: Map<string, number>
+}
+
+function hostile(random: () => number, tally: Tally): string {
+  const mark = `zq${++tally.markers}x`
+  let out = ''
+  const pieces = 1 + Math.floor(random() * 4)
+  for (let i = 0; i < pieces; i++) out += random() < 0.6 ? pick(random, BREAKOUT) : mark
+  return out.includes(mark) ? out : out + mark
+}
+
+/** Render a random template — refused or accepted — with random values, some of them nested fragments. */
+function page(random: () => number, depth: number, tally: Tally): SafeHtml | null {
+  const strings = templateOf(content(random, 0))
+  const values: unknown[] = []
+  for (let i = 0; i < strings.length - 1; i++) {
+    const nested = depth < 2 && random() < 0.3 ? page(random, depth + 1, tally) : null
+    values.push(nested === null ? hostile(random, tally) : random() < 0.5 ? nested : [hostile(random, tally), nested])
+  }
+  try {
+    const rendered = html(strings, ...values)
+    tally.accepted++
+    return rendered
+  } catch (error) {
+    assert.equal((error as { code?: string }).code, 'ZEN_HTML_UNSAFE', String(error))
+    const message = (error as Error).message
+    const reason =
+      /content of <\w+> as text|could finish "<\//.test(message) ? 'an end tag the two readings place differently'
+      : /holds a "<"/.test(message) ? 'markup SVG would read in a script or style'
+      : /CDATA section holds/.test(message) ? 'a CDATA section with a ">" in it'
+      : /fragment inside/.test(message) ? 'a fragment refused where it was nested'
+      : /never closes/.test(message) ? 'an element left open'
+      : 'another refused position'
+    tally.refusals.set(reason, (tally.refusals.get(reason) ?? 0) + 1)
+    return null
+  }
+}
+
+const ANIMATION = new Set(['set', 'animate', 'animatemotion', 'animatetransform'])
+const URL_ATTRIBUTES = new Set([
+  'href', 'src', 'action', 'formaction', 'cite', 'poster', 'background', 'data', 'codebase', 'longdesc', 'usemap',
+  'manifest', 'icon', 'lowsrc', 'dynsrc', 'archive', 'classid', 'profile',
+])
+const ORIGIN_BOUND: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['script', new Set(['src', 'href'])], ['base', new Set(['href'])], ['form', new Set(['action'])],
+  ['button', new Set(['formaction'])], ['input', new Set(['formaction'])], ['object', new Set(['data', 'codebase'])],
+  ['embed', new Set(['src'])],
+])
+
+/**
+ * Where a marker must never be, in the tree a browser builds: `null`, or what
+ * went wrong. `code` is true under a <script> or <style> of either namespace.
+ */
+function misplaced(node: ParsedNode, code: boolean, where: { text: string[] }): string | null {
+  for (const child of node.childNodes ?? []) {
+    if (child.nodeName === '#text') {
+      const text = child.value ?? ''
+      if (!MARKER.test(text)) continue
+      if (code) return `a value is the text of a script or style: ${JSON.stringify(text)}`
+      where.text.push(node.nodeName)
+      continue
+    }
+    if (child.nodeName === '#comment') {
+      if (MARKER.test(child.data ?? '')) return `a value is inside a comment: ${JSON.stringify(child.data)}`
+      continue
+    }
+    if (child.nodeName === '#documentType') continue
+    const tag = (child.tagName ?? child.nodeName).toLowerCase()
+    if (MARKER.test(tag)) return `a value became a tag name: <${tag}>`
+    const attributes = child.attrs ?? []
+    for (const { name, value } of attributes) {
+      const attribute = name.toLowerCase()
+      if (MARKER.test(attribute)) return `a value became an attribute name: ${attribute} on <${tag}>`
+      if (!MARKER.test(value)) continue
+      const said = `${attribute}=${JSON.stringify(value)} on <${tag}>`
+      if (attribute.startsWith('on') || attribute === 'srcdoc') return `a value is in ${said}`
+      if (ANIMATION.has(tag) && ['to', 'from', 'by', 'values', 'attributename'].includes(attribute)) return `a value animates ${said}`
+      if (tag === 'meta') return `a value is in ${said}`
+      if (URL_ATTRIBUTES.has(attribute) && runsScript(value)) return `a value runs script from ${said}`
+      if (ORIGIN_BOUND.get(tag)?.has(attribute) === true && leavesOrigin(value)) return `a value chose the origin of ${said}`
+    }
+    const inner = code || tag === 'script' || tag === 'style'
+    const found = misplaced(child, inner, where) ?? (child.content === undefined ? null : misplaced(child.content, inner, where))
+    if (found !== null) return found
+  }
+  return null
+}
+
+describe('whole pages, against a spec-conformant HTML parser (§19.5, §20.5)', () => {
+  it('a value lands only where it is text, whatever the page around it', () => {
+    const tally: Tally = { markers: 0, accepted: 0, refusals: new Map() }
+    const landed = new Map<string, number>()
+    let judged = 0
+    for (let seed = 1; seed <= SEEDS; seed++) {
+      const random = rng(seed)
+      const rendered = page(random, 0, tally)
+      if (rendered === null) continue
+      const markup = String(rendered)
+      if (!MARKER.test(markup)) continue
+      judged++
+      for (const scriptingEnabled of [true, false]) {
+        const where = { text: [] as string[] }
+        const problem = misplaced(parse(markup, { scriptingEnabled }) as unknown as ParsedNode, false, where)
+        assert.equal(problem, null, `seed ${seed}, scripting ${scriptingEnabled ? 'on' : 'off'}: ${problem}\n${markup}`)
+        for (const parent of where.text) landed.set(parent, (landed.get(parent) ?? 0) + 1)
+      }
+    }
+
+    // Coverage. A generator that stopped producing the hard cases would pass forever.
+    assert.ok(judged > SEEDS / 5, `only ${judged} pages with a value in them were judged`)
+    for (const element of ['title', 'textarea', 'noscript', 'xmp', 'iframe']) {
+      assert.ok((landed.get(element) ?? 0) > 10, `values reached <${element}> text only ${landed.get(element) ?? 0} times`)
+    }
+    for (const element of ['svg', 'math', 'mi']) {
+      assert.ok((landed.get(element) ?? 0) > 10, `values reached <${element}> content only ${landed.get(element) ?? 0} times`)
+    }
+    for (const reason of [
+      'an end tag the two readings place differently', 'markup SVG would read in a script or style',
+      'a CDATA section with a ">" in it', 'a fragment refused where it was nested', 'an element left open',
+    ]) {
+      assert.ok((tally.refusals.get(reason) ?? 0) > 5, `refused for ${reason} only ${tally.refusals.get(reason) ?? 0} times`)
+    }
   })
 })
