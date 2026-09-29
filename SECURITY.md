@@ -31,7 +31,7 @@ and you are credited unless you ask not to be.
 
 ## Supported versions
 
-Zen is **pre-alpha**. Until `1.0`, only the most recent published prerelease
+Zen is an **alpha**. Until `1.0`, only the most recent published prerelease
 receives security fixes; upgrade to it before reporting if you can.
 
 | Version | Supported |

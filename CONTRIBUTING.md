@@ -18,7 +18,7 @@ git clone https://github.com/erenthedeveloper0/zen.git
 cd zen
 npm ci
 npm run typecheck      # builds all six packages, then type-checks the ten examples
-npm test               # ~1,060 tests: unit, integration, differential and property suites
+npm test               # ~1,080 tests: unit, integration, differential and property suites
 ```
 
 **Tests import each package's built `dist/`, not its source.** After editing

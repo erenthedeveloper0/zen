@@ -794,12 +794,22 @@ hole is escaped for where it sits:
 | `href`, `src`, `action`, … | escaped, and replaced with `about:invalid#zen-unsafe-url` if its scheme could run script — `javascript:`, `JaVa\tScRiPt:`, `data:` |
 | `<script src>`, `<form action>`, `<base href>`, … | the same, and the value may not choose the origin: a link elsewhere is normal, a script from elsewhere is the attack |
 | `<script>`, `onclick="…"`, an unquoted value, a tag or attribute name | **refused** — `ZEN_HTML_UNSAFE` on the first render, because no escaping function makes a value safe there |
+| `<title>`, `<textarea>`, `<noscript>`, `<svg>`, … | escaped; a nested fragment is refused if it could end the text element, or carry a script only HTML can read into SVG |
 
-That last row is the one a helper that only escapes cannot have.
+The refused row is the one a helper that only escapes cannot have.
 `onclick="go('${x}')"` is entity-decoded *before* the script runs, so an escaped
 quote is a quote again by the time it matters; `<div ${attrs}>` needs no special
 character at all to become `onmouseover=alert(1)`. Those templates are bugs in
 the template, so they fail in the first test that renders them.
+
+The last row is there because HTML and SVG read some elements differently:
+HTML ends a `<noscript>` at the first `</noscript` in it — even one inside what
+looks like an attribute value — and inside an `<svg>` a `<style>` or `<script>`
+holds markup rather than text. A fragment can be nested anywhere, so the tag
+keeps both readings and refuses any template, or nested fragment, on which they
+disagree about where an element ends. The test suite has a spec-conformant HTML
+parser judge random pages built that way; against the tag's first version it
+finds a value in an attribute name within two hundred pages.
 
 `ctx.html()` takes the `SafeHtml` that `html` returns and nothing else — a plain
 string is a compile error, and a `ZEN_HTML_UNSAFE` for a caller without types.
@@ -829,7 +839,7 @@ Measured (`node benchmarks/injection/run.ts`, paired arms, one machine):
 | a hostile redirect under 3 policies | **never reaches an origin it was not allowed** (gate) |
 | `escapeHtml` against a regex `replace` | 1.5–2.7× faster |
 | `` html`…` `` with six holes and an `href` | 1.6× the same card built by hand — which writes `javascript:` into the `href` |
-| `ctx.redirect('/path')` | +16 ns |
+| `ctx.redirect('/path')` | +34 ns |
 | a JSON handler, for `` () => html`…` `` | **inside noise** |
 
 Two of those rows came out of the benchmark rather than into it. The first
@@ -848,12 +858,12 @@ the branch `finalize` already takes for streams.
 ## Try it
 
 ```bash
-git clone https://github.com/erenthedeveloper0/zen.git && cd Zen.js
+git clone https://github.com/erenthedeveloper0/zen.git && cd zen
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 1,060 tests
+npm test                           # 1,078 tests
 node scripts/smoke.ts              # 77 checks over a real socket
-node scripts/negative-controls.ts  # break 57 things on purpose; every suite must notice
+node scripts/negative-controls.ts  # break 71 things on purpose; every suite must notice
 node scripts/check-pack.ts         # what each npm tarball contains — installed and run outside the repo
 node benchmarks/typecheck/run.ts   # the M2 gate
 node benchmarks/serializer/run.ts  # serializer throughput
@@ -922,9 +932,9 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `lifecycle.test.ts` (meta-package) | A real child process: `SIGTERM` drains and exits 0, an uncaught exception or unhandled rejection drains and exits 1, and nothing is installed on the process until `listen()` |
 | `error-docs.test.ts` | Every error code any package can produce has its entry in [docs/errors.md](./docs/errors.md) — the page every problem document links to |
 | `logger.test.ts` | The default logger never throws — a cycle or a `bigint` in an error's metadata still produces the log line *and* the error response — and metadata cannot overwrite a line's `code` or `status` |
-| `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge. Then a property suite whose judge is the WHATWG URL parser and a grammar for escaped text, neither of which shares code with the tag |
+| `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge, and the templates HTML and SVG would read differently refused. Then property suites judged by the WHATWG URL parser, a grammar for escaped text, and **parse5** — a spec-conformant HTML parser that parses 2,000 random pages, fragments nested in fragments, and reports where every value landed. None shares code with the tag |
 | `redirect.test.ts` | Paths, queries and fragments sent; every spelling that has slipped past a regex refused (`//`, `/\`, a tab, a leading space, `https:host`, userinfo); the allowlist's look-alikes refused; a malformed allowlist entry a boot error with the spelling that would match — and a real differential: the reference scanner against the WHATWG URL parser over 2,000 random targets, with its coverage asserted |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. Fifty-seven known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. Seventy-one known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">

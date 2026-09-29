@@ -291,9 +291,16 @@ client sees a generic 500, and the path is in the logs and, in development, in
 
 ## ZEN_HEADER_INVALID
 
-**500.** A response header, a cookie attribute, or an SSE `event`/`id` contained
-a character that would end it early — CR, LF, NUL, or `;` in a cookie attribute.
-Refused rather than silently stripped (§19.5).
+**500.** A header could not be written: its name is not a token, or its value
+holds a character no header can carry — a line break, another control character,
+anything past U+00FF — or a cookie's name, `Domain` or `Path` holds a `;`, or an
+SSE `event`/`id` a line break. Refused rather than silently stripped (§19.5), and
+refused where it was set: `ctx.res.header()` and `ctx.res.cookie()` throw, so the
+failure is an ordinary error in the handler that staged it.
+
+Encode a value for the header it goes in — a URL with `encodeURI()`, a download
+name as `filename*=UTF-8''${encodeURIComponent(name)}`. A redirect target past
+ASCII is percent-encoded for you.
 
 ## ZEN_HTML_UNSAFE
 
@@ -301,7 +308,7 @@ Refused rather than silently stripped (§19.5).
 
 - `ctx.html()` was given something other than `SafeHtml` — a string, say.
   Build the page with the `html` template tag, which escapes what it
-  interpolates — `ctx.html(html`<p>${text}</p>`)` — or mark markup that is
+  interpolates — ``ctx.html(html`<p>${text}</p>`)`` — or mark markup that is
   already safe, such as a template engine's output, with `unsafeHtml(markup)`.
 - An `html` template put a hole where no escaping makes a value safe: inside
   `<script>` or `<style>`, in an `on*` event handler, in `srcdoc`, in a tag or
@@ -311,7 +318,17 @@ Refused rather than silently stripped (§19.5).
   loads from or posts to. The message names the hole and the text before it.
   The template is refused on its first render, whatever the values.
 - `html` was called as a function rather than as a tagged template, or an
-  `html` template ends inside a tag, a comment or a `<script>`.
+  `html` template ends inside a tag, a comment or a `<script>`, or leaves a
+  `<textarea>`, a `<title>`, a `<noscript>`, an `<svg>` or a `<math>` open.
+- The template means one thing to HTML and another to SVG (§19.5.1): a text
+  element's end tag — `</noscript`, `</title`, `</textarea`… — inside an
+  attribute value, a comment or a tag, where HTML still ends the element; a
+  `<style>`, or a `<script>` inside `<svg>` or `<math>`, whose text holds a `<`
+  that SVG reads as markup; a CDATA section holding a `>` before its `]]>`.
+- A fragment was refused where it was nested: inside a text element, one that
+  holds the element's end tag or ends part-way into it; inside `<svg>` or
+  `<math>`, one holding a `<script>` whose code only HTML reads as code. Pass the
+  value as a string, which is escaped, or keep that script out of the SVG.
 
 Never exposed: the client sees a generic 500, and the message is in the logs.
 

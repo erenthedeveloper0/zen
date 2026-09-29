@@ -9,7 +9,7 @@ npm run explain:deadlines      # every route's budget, and where it came from
 node --test examples/deadlines/test/deadlines.test.ts
 ```
 
-This is [RFC 0001 §4.4](../../ARCHITECTURE.md) built: request deadlines, real
+This is [RFC 0001 §4.4](../../ARCHITECTURE.md#44-deadlines-cancellation-backpressure) built: request deadlines, real
 cancellation, and budget propagation.
 
 ---

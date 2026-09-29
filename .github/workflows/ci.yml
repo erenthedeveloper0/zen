@@ -235,7 +235,7 @@ jobs:
         run: node benchmarks/injection/run.ts
 
       # CONTRIBUTING.md convention 3 — "a test that passes against the bug is not a
-      # test". Fifty-seven known defects are patched into the source one at a
+      # test". Seventy-one known defects are patched into the source one at a
       # time; each must make its named suite fail. A control that *passes*
       # means the assertion it points at is not load-bearing, and the job fails.
       #

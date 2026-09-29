@@ -116,7 +116,7 @@ src/
 ├── main.ts                    entry: build().listen()
 ├── app.ts                     composition root — plugins, services, features
 ├── config/
-│   └── zen.config.ts          options and env (§16 will land here)
+│   └── zen.config.ts          options and env — §16's defineConfig lives here
 ├── features/
 │   ├── users/
 │   │   ├── routes.ts          the collection

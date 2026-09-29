@@ -152,8 +152,8 @@ Three ways a value becomes secret, and they are not equally good.
 | propagation by identity | automatic | `url: env => env.DATABASE_URL` inherits the marking without restating it |
 | `secrets: ['stripe.key']` | `defineConfig` | the escape hatch for a value that is a literal, so no schema exists to mark it |
 
-§16.2 writes the marker as Zod's `.brand('secret')`, and that is the one
-spelling no framework can honour: a brand is erased at runtime and leaves
+Early drafts of §16.2 wrote the marker as Zod's `.brand('secret')`, and that is
+the one spelling no framework can honour: a brand is erased at runtime and leaves
 nothing in the schema for anything to read. `format: 'password'` is an existing
 vocabulary that survives, which is the same choice §12.6 makes about RFC 9457
 and §31.4 about `application/health+json`.

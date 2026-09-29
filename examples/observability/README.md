@@ -1,7 +1,7 @@
 # `examples/observability`
 
 Metrics, structured request logs, and per-stage timing — built entirely from
-Zen's hook system (rfcs/0001 §9), with no globals patched and nothing monkeyed.
+Zen's hook system ([RFC 0001 §9](../../ARCHITECTURE.md#9-hook-system-specification)), with no globals patched and nothing monkeyed.
 
 ```bash
 npm run example:observability     # serve on :3000
