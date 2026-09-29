@@ -61,13 +61,29 @@ is why the first release is published by hand. Once all six exist:
 1. **A protected environment.** Repository → Settings → Environments → new
    environment `npm-publish`, with yourself (or the release team) as a
    required reviewer. Every publish then waits for a human.
-2. **Trusted publishing.** For each of the six packages: npmjs.com → the
-   package → Settings → Trusted Publisher → GitHub Actions, with
-   organisation or user `erenthedeveloper0`, repository `zen`, workflow
-   `release.yml`, environment `npm-publish`. Then, on the same page, set
-   publishing access to *require two-factor authentication and disallow
-   tokens*. From here on no long-lived publish credential exists anywhere, and
-   the workflow needs no `NPM_TOKEN` secret.
+2. **Trusted publishing.** For each of the six packages, one trusted
+   publisher: GitHub Actions, repository `erenthedeveloper0/zen`, workflow
+   `release.yml`, environment `npm-publish` — and **allowed to publish**. npm
+   now gives every trusted publisher explicit permissions (`npm publish`,
+   `npm stage publish`, or both), and one without *publish* cannot run this
+   workflow's `npm publish`. From a terminal, with npm ≥ 11.15 — one 2FA
+   prompt, whose "skip for five minutes" option covers the other five:
+
+   ```bash
+   for p in zen-core zen-router zen-adapter-node zen-openapi zen-middleware zen; do
+     npm trust github "@erenthedeveloper0/$p" --file release.yml \
+       --repository erenthedeveloper0/zen --environment npm-publish --allow-publish --yes
+     sleep 2
+   done
+   npm trust list @erenthedeveloper0/zen-core    # what npm holds, for any of them
+   ```
+
+   Or on npmjs.com: the package → Settings → Trusted Publisher → GitHub
+   Actions, the same four values, with *npm publish* allowed. A package holds
+   one trusted publisher; to change it, `npm trust revoke --id <id>` first.
+   Then, on the same settings page, set publishing access to *require
+   two-factor authentication and disallow tokens*. From here on no long-lived
+   publish credential exists anywhere, and the workflow reads none.
 
 ## Every release
 
@@ -94,12 +110,20 @@ already published at that version is skipped, so a run that failed half way can
 simply be re-run.
 
 **Until trusted publishing is configured** on all six packages, the workflow
-has no credential to publish with, and its publish step fails after approval.
-Publish by hand instead — the loop in [The first publish](#the-first-publish-from-the-command-line),
-from a worktree of the tag — wait until `npm view @erenthedeveloper0/zen@<version>`
+has no credential to publish with, and its publish step fails after approval —
+now with an annotation on the run that names the package and this section.
+That is what `0.1.0-alpha.2`'s first run did, on 2026-09-28: approved, then the
+first `npm publish` failed, so nothing was published; the tag was moved to the
+release commit that did go out. Configure the trusted publishers, then re-run
+the failed job. A re-run uses the workflow file of the tagged commit, not of
+`main`.
+
+If trusted publishing cannot be made to work, publish by hand instead — the
+loop in [The first publish](#the-first-publish-from-the-command-line), from a
+worktree of the tag — wait until `npm view @erenthedeveloper0/zen@<version>`
 answers, then approve the waiting run or re-run it: it finds every package
-already published, skips them, and creates the GitHub release. That version
-carries no provenance.
+already published, skips them, and creates the GitHub release (or leaves the
+one that exists). A version published that way carries no provenance.
 
 ## After a release
 
@@ -174,5 +198,16 @@ npm install --registry http://localhost:4873 @erenthedeveloper0/zen@alpha
   tarball — for `npm audit signatures` to verify. The `npm-publish` environment
   requires a reviewer: the one control that stops a compromised dependency in
   the build from shipping a release on its own.
+- **A publish job that trusts as little as it can.** The actions it runs are
+  pinned to commits, not tags, because a tag can be moved to other code; npm is
+  an exact version rather than a range, for the same reason; and it restores
+  nothing from the Actions cache, which other runs write.
+- **`npm publish`, not `npm stage publish`.** npm can also *stage* a CI
+  publish and hold each package until a maintainer approves it with 2FA on
+  npmjs.com — proof of presence per package. The `npm-publish` environment
+  already puts a person between a tag and the registry, so the trusted
+  publishers allow `npm publish`. Moving the approval to npm is
+  `--allow-stage-publish` on the trusted publishers and `npm stage publish` in
+  the workflow's loop.
 - **Nothing is unpublished.** npm allows it only within 72 hours, and only if
   nothing depends on the version. A bad version is deprecated instead (above).

@@ -30,16 +30,21 @@ jobs:
       contents: write     # the GitHub release
       id-token: write     # npm trusted publishing (OIDC) and provenance
     steps:
-      - uses: actions/checkout@v7
+      # Pinned to commits rather than tags: this job holds an identity npm
+      # accepts as the publisher, and a tag can be moved to other code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      # No `cache:` — nothing another run wrote into the Actions cache gets
+      # into the job that publishes.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
-          cache: npm
 
-      # Trusted publishing needs npm >= 11.5.1; Node 22 bundles npm 10.
-      - run: npm install -g npm@^11.5.1
+      # Trusted publishing needs npm >= 11.5.1, and Node 22 bundles npm 10. An
+      # exact version rather than a range, for the reason the actions are
+      # pinned: a range installs whatever npm was released that morning.
+      - run: npm install -g npm@11.19.1
 
       - run: npm ci
       - run: npm run typecheck
@@ -73,10 +78,12 @@ jobs:
       # can simply be re-run.
       - name: Publish, in dependency order
         env:
-          # Empty unless an NPM_TOKEN secret exists — used only to bootstrap the
-          # first publish, before trusted publishing can be configured on the
-          # packages. Delete the secret once it is.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ steps.tag.outputs.dist }}
+          # Empty on purpose. The only credential this job has is the
+          # short-lived one npm's trusted publishing exchanges for this run's
+          # OIDC identity; no long-lived token is read from anywhere. Set here
+          # so setup-node's placeholder is not sent with the `npm view` calls.
+          NODE_AUTH_TOKEN: ''
         run: |
           for dir in core router adapter-node openapi middleware zen; do
             name=$(node -p "require('./packages/$dir/package.json').name")
@@ -85,10 +92,14 @@ jobs:
               echo "── $name@$version already published, skipping"
               continue
             fi
-            echo "── publishing $name@$version (tag ${{ steps.tag.outputs.dist }})"
-            npm publish --workspace "packages/$dir" \
-              --tag "${{ steps.tag.outputs.dist }}" \
-              --provenance --access public
+            echo "── publishing $name@$version (tag $DIST_TAG)"
+            if ! npm publish --workspace "packages/$dir" --tag "$DIST_TAG" --provenance --access public; then
+              # What 0.1.0-alpha.2's first run did, with nothing on the page to
+              # say why: without a trusted publisher npm has no credential,
+              # and the error above is ENEEDAUTH, E401 or E404.
+              echo "::error title=npm refused $name@$version::Check that $name has a trusted publisher for this repository, workflow release.yml and environment npm-publish, allowed to publish (npm trust list $name) — RELEASING.md, One-time setup. Packages before it in the order are published; re-run this job once it is fixed and they are skipped."
+              exit 1
+            fi
             # The registry's read replicas lag a few seconds behind a publish;
             # the next package depends on this one.
             for i in $(seq 1 30); do
@@ -118,5 +129,10 @@ jobs:
           } > "$RUNNER_TEMP/notes.md"
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
-            --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          # A re-run after the release was created would otherwise fail here.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "── the release for $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/notes.md" $prerelease
+          fi
