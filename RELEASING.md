@@ -75,12 +75,17 @@ is why the first release is published by hand. Once all six exist:
        --repository erenthedeveloper0/zen --environment npm-publish --allow-publish --yes
      sleep 2
    done
-   npm trust list @erenthedeveloper0/zen-core    # what npm holds, for any of them
+   npm trust list @erenthedeveloper0/zen-core    # permissions: publish, not only stage publish
    ```
 
    Or on npmjs.com: the package → Settings → Trusted Publisher → GitHub
-   Actions, the same four values, with *npm publish* allowed. A package holds
-   one trusted publisher; to change it, `npm trust revoke --id <id>` first.
+   Actions, the same four values, with *npm publish* allowed. npm refuses a
+   second trusted publisher that the same run would match (`E409 Conflict`),
+   so to change one, remove it first —
+   `npm trust revoke @erenthedeveloper0/<package> --id=<id>`, with the id
+   `npm trust list` printed — and create it again. Name the package: without
+   one, `npm trust` acts on the `package.json` in the current directory, which
+   at the root is the private monorepo.
    Then, on the same settings page, set publishing access to *require
    two-factor authentication and disallow tokens*. From here on no long-lived
    publish credential exists anywhere, and the workflow reads none.
@@ -109,14 +114,18 @@ whose notes are that CHANGELOG entry, under the install line. A package
 already published at that version is skipped, so a run that failed half way can
 simply be re-run.
 
-**Until trusted publishing is configured** on all six packages, the workflow
-has no credential to publish with, and its publish step fails after approval —
-now with an annotation on the run that names the package and this section.
-That is what `0.1.0-alpha.2`'s first run did, on 2026-09-28: approved, then the
-first `npm publish` failed, so nothing was published; the tag was moved to the
-release commit that did go out. Configure the trusted publishers, then re-run
-the failed job. A re-run uses the workflow file of the tagged commit, not of
-`main`.
+**Until trusted publishing is configured** on all six packages — allowed to
+publish, not only to stage — the workflow has no credential to publish with,
+and its publish step fails after approval, now with an annotation on the run
+that names the package and points to the one-time setup above. That is what
+`0.1.0-alpha.2`'s first run did, on 2026-09-28: approved, then the first
+`npm publish` failed, so nothing was published. Its packages did have trusted
+publishers, but `npm trust list` showed `permissions: stage publish` on all
+six, and a publisher that may only stage cannot `npm publish` — so read
+`permissions:` first. Once they were allowed to publish, the tag — moved to
+the release commit — went out with provenance on 2026-09-29. Fix the
+trusted publishers, then re-run the failed job; a re-run uses the workflow
+file of the tagged commit, not of `main`.
 
 If trusted publishing cannot be made to work, publish by hand instead — the
 loop in [The first publish](#the-first-publish-from-the-command-line), from a
