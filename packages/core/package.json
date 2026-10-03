@@ -1,6 +1,6 @@
 {
   "name": "@erenthedeveloper0/zen-core",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "Zen core: registries, compilers, runtime, context, errors and the response engine. Zero runtime dependencies.",
   "keywords": [
     "web",

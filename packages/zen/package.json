@@ -1,6 +1,6 @@
 {
   "name": "@erenthedeveloper0/zen",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "Zen: a compiler-first web framework for Node.js. Routing, validation, serialization and the request context are compiled at boot.",
   "keywords": [
     "web",
@@ -57,10 +57,10 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@erenthedeveloper0/zen-adapter-node": "0.1.0-alpha.2",
-    "@erenthedeveloper0/zen-core": "0.1.0-alpha.2",
-    "@erenthedeveloper0/zen-middleware": "0.1.0-alpha.2",
-    "@erenthedeveloper0/zen-router": "0.1.0-alpha.2"
+    "@erenthedeveloper0/zen-adapter-node": "0.1.0-alpha.3",
+    "@erenthedeveloper0/zen-core": "0.1.0-alpha.3",
+    "@erenthedeveloper0/zen-middleware": "0.1.0-alpha.3",
+    "@erenthedeveloper0/zen-router": "0.1.0-alpha.3"
   },
   "peerDependencies": {
     "typescript": ">=5.0"

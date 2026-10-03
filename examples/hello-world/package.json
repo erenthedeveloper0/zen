@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@erenthedeveloper0/zen": "0.1.0-alpha.2"
+    "@erenthedeveloper0/zen": "0.1.0-alpha.3"
   },
   "scripts": {
     "start": "node src/main.ts"

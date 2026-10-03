@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@erenthedeveloper0/zen": "0.1.0-alpha.2",
-    "@erenthedeveloper0/zen-middleware": "0.1.0-alpha.2",
+    "@erenthedeveloper0/zen": "0.1.0-alpha.3",
+    "@erenthedeveloper0/zen-middleware": "0.1.0-alpha.3",
     "zod": "^4.6.5"
   },
   "scripts": {

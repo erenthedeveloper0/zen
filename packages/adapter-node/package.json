@@ -1,6 +1,6 @@
 {
   "name": "@erenthedeveloper0/zen-adapter-node",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "Zen adapter for Node's http server: the optimised path, file responses, server-sent events and graceful shutdown.",
   "keywords": [
     "node",
@@ -51,10 +51,10 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@erenthedeveloper0/zen-core": "0.1.0-alpha.2"
+    "@erenthedeveloper0/zen-core": "0.1.0-alpha.3"
   },
   "devDependencies": {
-    "@erenthedeveloper0/zen-router": "0.1.0-alpha.2"
+    "@erenthedeveloper0/zen-router": "0.1.0-alpha.3"
   },
   "peerDependencies": {
     "typescript": ">=5.0"
