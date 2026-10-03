@@ -64,13 +64,14 @@
     "bench:refusals": "node benchmarks/refusals/run.ts",
     "bench:request-path": "node benchmarks/request-path/run.ts",
     "bench:injection": "node benchmarks/injection/run.ts",
+    "bench:url": "node benchmarks/url/run.ts",
     "check:pack": "node scripts/check-pack.ts --typescript 5.0",
     "check:release": "node scripts/check-release.ts",
     "release:version": "node scripts/version.ts",
     "verify": "npm run typecheck && npm test && node scripts/smoke.ts && npm run openapi:check"
   },
   "devDependencies": {
-    "@types/node": "^22.15.0",
+    "@types/node": "^22.20.4",
     "parse5": "^8.0.1",
     "typescript": "^5.9.2"
   }

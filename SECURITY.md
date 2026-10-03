@@ -49,8 +49,9 @@ short, in scope: malformed or malicious HTTP input, resource exhaustion through
 request shape, response injection, over-serialization (a field reaching the
 wire that its schema does not declare), a value reaching an `html` template's
 output as markup or as a script-capable URL, a `ctx.redirect()` that leaves the
-origin its policy allows, path traversal in file responses, and insecure
-defaults. Out of scope: the correctness of an application's own authorization
+origin its policy allows, a link `app.url()` returns that reaches a route other
+than the one it names or leaves the origin, path traversal in file responses,
+and insecure defaults. Out of scope: the correctness of an application's own authorization
 logic, SQL injection in an application's queries, markup an application marks
 with `unsafeHtml()`, and TLS termination.
 

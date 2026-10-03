@@ -41,12 +41,20 @@ export function noteRoutes(notes: Collection, service: NoteService): void {
     return note
   })
 
+  /**
+   * A `201` says where the thing it made now lives — RFC 9110 §15.3.2's
+   * `Location` — and the path is asked of the route that serves it rather than
+   * written out a second time (§5.7). Move `notes.get` to another prefix and
+   * this follows; give `url()` a value its `:id<int>` would not match and it
+   * throws here, not in the client that followed the header.
+   */
   notes.post('/', {
     name: 'notes.create',
     body: NewNote,
     response: { 201: Note },
   }, function createNote(ctx) {
-    return ctx.json(service.create(ctx.body), { status: 201 })
+    const note = service.create(ctx.body)
+    return ctx.json(note, { status: 201, headers: { location: notes.url('notes.get', { id: note.id }) } })
   })
 
   /**

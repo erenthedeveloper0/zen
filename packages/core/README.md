@@ -33,6 +33,9 @@ npm install @erenthedeveloper0/zen-core@alpha
   `<script>`, in an `onclick` — and `ctx.html()` takes only the `SafeHtml` it
   builds. `ctx.redirect()` stays on the origin unless `redirect.allowExternal`
   names another.
+- **URL generation.** `app.url('notes.show', { id: 7 })` is `/notes/7` — each
+  value encoded as one segment, tested by its parameter's type, and checked
+  against the router, so a link reaches the route it names or is refused.
 - **Configuration.** Layered resolution with per-value provenance, a
   schema-validated environment checked before any plugin runs, and secrets that
   redact themselves when serialised.

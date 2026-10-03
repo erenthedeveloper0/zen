@@ -39,7 +39,9 @@ rather than a handler receiving garbage. `int` also refuses values past 2⁵³ t
 would silently round to a different id.
 
 Register your own with `app.paramType()` — one declaration serves the matcher,
-the parsed value and the OpenAPI document:
+the parsed value and the OpenAPI document, and it tests every value
+`app.url()` writes into a link, so a link the matcher would refuse is never
+built:
 
 ```ts
 app.paramType('objectId', {

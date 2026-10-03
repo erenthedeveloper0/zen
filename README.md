@@ -137,6 +137,7 @@ emitted at all — not skipped by a runtime `if`, *absent from the source*.
 | `Accept: text/csv;q=0` served as CSV anyway | The **most specific** matching range decides, per RFC 9110 §12.5.1 — so `q=0` under a permissive wildcard means "anything except this". Scoring by the highest `q` is the obvious implementation and it serves the one format the client refused. CI gate, not a test |
 | `res.send('<p>' + req.query.name + '</p>')` | **HTML escaped by construction.** `ctx.html()` takes `SafeHtml`, which the `html` tag builds by escaping every hole *for where it sits*: a `javascript:` URL in an `href` is replaced rather than escaped, and a template that puts a value inside `<script>` or an `onclick` — where no escaping helps — is refused on its first render |
 | `res.redirect(req.query.next)` | **Redirects stay on the origin** unless one line lists where else they may go. `//evil.example`, `/\evil.example` and the other spellings that slip past a regular expression are read the way the browser reads the `Location` header, and refused |
+| `` `/files/${name}` `` in a link | **Links are asked of the route.** `app.url('files.show', { name })` encodes each value as one segment, tests it with the parameter's own type, and asks the router whether the path reaches that route — so a value cannot become a different path, and `/users/:id` given `me` beside a `GET /users/me` is refused rather than linked |
 
 Full reasoning, including the arguments that lost, is in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -185,6 +186,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 - **Content negotiation**: one route, several representations, chosen from `Accept` before the handler runs — versioned JSON for free through the same compiled serializer, an encoder seam for everything else, `Vary: Accept` on every response including the 406, and *no emitted code at all* on a route that declares one representation
 - **Compiled response serializers**: undeclared fields cannot be emitted, because the generated function has no key enumeration to emit them *through*
 - **Injection defences**: an `html` template tag that escapes each interpolation for the position it sits in and refuses the positions where no escaping helps, a `ctx.html()` that takes only its `SafeHtml`, and a `ctx.redirect()` that will not leave the origin unless `redirect.allowExternal` says where
+- **URL generation**: `app.url(name, params, query)` returns a path its route answers, with the values given — encoded, typed and checked against the router — or refuses; reachable from a collection and from a plugin, and always on the application's origin
 - **OpenAPI 3.1**: `AppGraph → document` as a pure function, `$ref` deduplication, a dependency-free reference viewer, and breaking-change detection
 - Body intake emitted **only** when a route declares a body; prototype-pollution stripping
 - Node adapter with lazy `RawRequest` (no WHATWG `Request` construction), client disconnects wired to `ctx.signal`, and shutdown that drains and then closes keep-alive connections rather than waiting on them
@@ -196,7 +198,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 
 ### Designed, not yet built
 
-CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · `app.url()` · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
+CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
 
 ## In depth
 
@@ -850,6 +852,60 @@ cost 13.5% of `finalize` on every JSON response in every application — so a
 fragment is now an async iterable of its own markup, and the check moved into
 the branch `finalize` already takes for streams.
 
+### Links that cannot route elsewhere
+
+```ts
+app.get('/notes/:id<int>', { name: 'notes.show' }, showNote)
+
+app.url('notes.show', { id: 7 })                     // '/notes/7'
+app.url('notes.show', { id: 7 }, { from: 'feed' })   // '/notes/7?from=feed'
+
+notes.post('/', { body: NewNote }, (ctx) => {
+  const note = service.create(ctx.body)
+  return ctx.json(note, { status: 201, headers: { location: notes.url('notes.show', { id: note.id }) } })
+})
+```
+
+A route's name and segments are already on the frozen graph, so reverse routing
+is a read of it ([§5.7](./ARCHITECTURE.md#57-url-generation)). What `url()`
+adds over a template literal is a guarantee: **the URL it returns is one the
+named route answers, with the values it was given — or it throws.**
+
+| written by hand | what `url()` does |
+| --- | --- |
+| `/files/${name}` with `a/b?c#d` is another path, a query and a fragment | each value is percent-encoded as exactly one segment |
+| `/files/${'..'}` is a link to `/` — a browser resolves it, `%2E%2E` too | `.`, `..` and `''` are refused: no URL can carry them to the route |
+| `/notes/${'7a'}` is a 404 for whoever clicks it | the parameter's own type tests the value, in the handler that built the link |
+| `/users/${'me'}` is answered by `GET /users/me` | the compiled router is asked, and the refusal names the route that would have won |
+| `?tags=${tags}` | the query is written the way the route parses it — repeated, comma-joined or bracketed, from its coercion plan |
+
+The result is always a path on this origin, so `ctx.redirect()` sends it
+without consulting `redirect.allowExternal`. A feature module links through the
+collection it is handed (`notes.url(…)`), a plugin through its registrar.
+
+It is checked when it is called rather than by `tsc`. The design typed it by
+route name, and a collection's callback cannot pass a type back out — so a name
+nothing registered (`ZEN_ROUTE_UNKNOWN`, with the one you probably meant) or a
+value that cannot build the link (`ZEN_PARAM_MISMATCH`) fails the first test
+that renders it.
+
+Measured (`node benchmarks/url/run.ts`, paired arms, one machine):
+
+| | |
+| --- | --- |
+| hostile values over a table of shadowing traps | **every link reaches its route with its values**; the rest are refused (gate) |
+| naming and linking routes | **byte-identical** generated code (gate) |
+| a static route | ~60 ns |
+| one `<int>` parameter | ~0.5 µs — about half of it the router `match` that is the guarantee |
+| the table at boot, 500 named routes | 0.13 ms, once |
+
+Building it read route names as keys for the first time, and the reader found
+two things the RFC described that did not exist: a collection's `name` was
+supposed to prefix its routes' names, and a `params` schema was supposed to be
+checked against its path at boot. Neither was built; the first is now decided
+against — every application already namespaces by hand — and the second is
+recorded as a gap rather than as a feature.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-06.png">
   <img alt="" src="./.github/images/image-05.png" width="100%" height="4">
@@ -861,9 +917,9 @@ the branch `finalize` already takes for streams.
 git clone https://github.com/erenthedeveloper0/zen.git && cd zen
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 1,078 tests
-node scripts/smoke.ts              # 77 checks over a real socket
-node scripts/negative-controls.ts  # break 71 things on purpose; every suite must notice
+npm test                           # 1,115 tests
+node scripts/smoke.ts              # 80 checks over a real socket
+node scripts/negative-controls.ts  # break 89 things on purpose; every suite must notice
 node scripts/check-pack.ts         # what each npm tarball contains — installed and run outside the repo
 node benchmarks/typecheck/run.ts   # the M2 gate
 node benchmarks/serializer/run.ts  # serializer throughput
@@ -878,6 +934,7 @@ node benchmarks/negotiation/run.ts # what Accept costs, and the never-serve-a-re
 node benchmarks/refusals/run.ts    # what a 404/405/406 costs, and the no-stack gate
 node benchmarks/request-path/run.ts # what the audit's fixes cost, and where their code is not emitted
 node benchmarks/injection/run.ts   # what escaping and redirect checks cost, and the never-escape gates
+node benchmarks/url/run.ts         # what a link costs, and the never-reach-another-route gate
 node scripts/show-generated.ts     # read what the pipeline compiler emitted
 node scripts/show-serializer.ts    # read what the serializer compiler emitted
 npm run explain                    # print the resolved chain for every route
@@ -910,7 +967,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `context.test.ts` | Compiled context ≡ `PlainContext`; **monomorphism** (`%HaveSameMap`); headers, query, cookies, egress |
 | `router.test.ts` | Path syntax, param types, conflict classes — every overlapping pair of builtin param types refused and every disjoint pair left alone — typed params tried in the same order whatever the registration order, compiled ≡ interpreted router |
 | `types.test.ts` | Type-level inference incl. negative `@ts-expect-error` cases; the M2 budget |
-| `openapi.test.ts` | Path/param/schema mapping, `$ref` dedup, the diff classifier, and **documented fields ≡ fields the compiled serializer emits** |
+| `openapi.test.ts` | Path/param/schema mapping, `$ref` dedup, **documented fields ≡ fields the compiled serializer emits**, and the diff classifier — which compares what a schema says rather than how its converter spelled it: zod 4.4's `anyOf` and 4.6's type list are one schema, a field removed inside a nullable union is breaking, and a recursive component is compared to where it repeats instead of overflowing the stack |
 | `examples/openapi` | The same drift check over real requests, plus the API compatibility gate |
 | `examples/observability` | Bounded metric cardinality, per-stage attribution, that `onResponse` measures more than `onSend` can, and that a transform hook cannot smuggle a field past the response contract |
 | `examples/deadlines` | That a sliced budget drops a slow provider instead of the request, that the provider was **cancelled** rather than merely stopped waiting for, that `onTimeout` can serve a partial 200, and that an inbound header shortens the budget but never lengthens it |
@@ -934,7 +991,8 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `logger.test.ts` | The default logger never throws — a cycle or a `bigint` in an error's metadata still produces the log line *and* the error response — and metadata cannot overwrite a line's `code` or `status` |
 | `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge, and the templates HTML and SVG would read differently refused. Then property suites judged by the WHATWG URL parser, a grammar for escaped text, and **parse5** — a spec-conformant HTML parser that parses 2,000 random pages, fragments nested in fragments, and reports where every value landed. None shares code with the tag |
 | `redirect.test.ts` | Paths, queries and fragments sent; every spelling that has slipped past a regex refused (`//`, `/\`, a tab, a leading space, `https:host`, userinfo); the allowlist's look-alikes refused; a malformed allowlist entry a boot error with the spelling that would match — and a real differential: the reference scanner against the WHATWG URL parser over 2,000 random targets, with its coverage asserted |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. Seventy-one known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `url.test.ts` | A value encoded as one segment whatever it holds; a number, a bigint and a `Date` written the way their routes read them back; `.`, `..`, empty values, objects and lone surrogates refused; each way one route outranks another — a static segment, a typed parameter, anything over a wildcard — refused with the winner named; the query written in the route's own list style; reachable from a collection and a plugin. Then a property suite: 2,000 links from hostile values over a table of shadowing traps, put through the WHATWG URL parser the way a browser treats an `href` and sent to the app, which must answer on the named route with the values given — coverage asserted per kind of refusal |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. Eighty-nine known defects patched in one at a time; each must make its named suite **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">
@@ -960,10 +1018,10 @@ examples/
   health/          liveness vs readiness, per-probe budgets, a watchable drain
   coercion/        ?page=2 is a number, ?sku=00713 is not — and the same app both ways
   config/          layered config, env validation, provenance, redaction
-  middleware/      a browser-facing API: preflights, 429s browsers can read, pages that escape
+  middleware/      a browser-facing API: preflights, 429s browsers can read, pages that escape and link
   negotiation/     one resource in three representations, and the encoder seam
 benchmarks/        serializer, OpenAPI, hook, deadline, health, coercion, config,
-                   middleware, negotiation, refusal, request-path and injection cost; the M2 gate
+                   middleware, negotiation, refusal, request-path, injection and URL cost; the M2 gate
 scripts/           smoke test, negative controls, codegen inspectors, and release
                    tooling: version.ts, check-release.ts, check-pack.ts
 docs/errors.md     every error code — where each problem document's `type` points

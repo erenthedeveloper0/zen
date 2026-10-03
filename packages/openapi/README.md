@@ -61,6 +61,12 @@ narrowing a request type or renaming an `operationId` is breaking; adding an
 optional response field is not. Run it in CI against a committed baseline and an
 API change is reviewed as an API change.
 
+What is compared is what a schema says, not how a converter spelled it: zod
+4.4's `anyOf: [{ type: 'string' }, { type: 'null' }]` and 4.6's
+`type: ['string', 'null']` are one schema, a field removed from inside a
+nullable object is breaking, and a recursive component is compared down to
+where it repeats.
+
 ## Options
 
 `title` and `version` are required. Also: `servers`, `tags`, `security`,

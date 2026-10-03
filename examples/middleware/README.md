@@ -34,7 +34,7 @@ is that seam, and it is three lines in `packages/core/src/api/zen.ts`.
 
 ---
 
-## Five things worth running
+## Six things worth running
 
 ### 1. The preflight, including the one to a path that does not exist
 
@@ -133,6 +133,23 @@ the file a reviewer reads.
 The page also carries `nosniff` and the rest of `securityHeaders()`: the pack
 stages its headers on every response, and a page is one more response.
 
+### 6. Links the application makes itself
+
+```bash
+curl -si -X POST localhost:3000/api/notes -H 'content-type: application/json' \
+     -d '{"title":"linked","body":"here"}' | grep -i location   # /api/notes/5
+curl -s localhost:3000/notes/1 | grep 'As JSON'                     # href="/api/notes/1"
+```
+
+The `201` says where the note now lives, and the page links to its JSON — and
+neither path is written out: both are `notes.url('notes.get', { id })`, asked
+of the route that serves it ([§5.7](../../ARCHITECTURE.md#57-url-generation)).
+The value is encoded as one segment, checked by `:id<int>`, and matched by the
+router before it is returned, so a link that would 404 or reach another route
+fails here, in the handler. It is a path on this origin by construction, which
+is also why it is the `/login` fallback: `ctx.redirect()` sends it without
+consulting the allowlist.
+
 ---
 
 ## What the example does not do, and why
@@ -168,8 +185,8 @@ src/
     zen.config.ts         CORS_ORIGINS → config.cors.origin, with a schema
     sources.ts            the fifteen host lines that read .env files (§3.2)
     types.ts              AppConfig, derived from the definition
-  features/notes/         routes, schemas, service — none of which mention CORS
-  features/pages/         the same notes as HTML, with html`…`; the ?next= redirect
+  features/notes/         routes, schemas, service — none of which mention CORS; a 201 with its Location
+  features/pages/         the same notes as HTML, with html`…` and links from url(); the ?next= redirect
   shared/zod.ts           one schema converter, read by four subsystems
 test/
   middleware.test.ts      the composition, plus the type-level claims

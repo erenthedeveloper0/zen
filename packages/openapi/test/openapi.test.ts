@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 
 import { CodeGen, DEFAULT_CAPABILITIES, buildSerializerTable, definePlugin, type JsonSchema } from '@erenthedeveloper0/zen-core'
 import { openapiDocument, openapiPlugin, diffDocuments, renderReference } from '@erenthedeveloper0/zen-openapi'
-import type { OpenApiDocument } from '@erenthedeveloper0/zen-openapi'
+import type { OpenApiDocument, OpenApiSchema } from '@erenthedeveloper0/zen-openapi'
 
 import { collectRefs, deref, makeApp, operation, responseSchema, schema } from './helpers.ts'
 
@@ -722,6 +722,117 @@ describe('breaking-change detection (§29.5)', () => {
     const breaking = diffDocuments(before, after).breaking
     assert.equal(breaking.length, 2)
     assert.deepEqual(breaking.map((c) => c.code), ['OAS_RESPONSE_FIELD_REMOVED', 'OAS_RESPONSE_FIELD_REMOVED'])
+  })
+
+  // ── what a schema says, not how it is spelled ──────────────────────────────
+  //
+  // zod 4.6 writes `type: ['string', 'null']` where 4.4 wrote an `anyOf`, and a
+  // dependency bump that changed no byte on the wire failed the API gate with two
+  // breaking changes — while the same blindness to `anyOf` let a field vanish from
+  // a nullable object without a word.
+
+  /** One operation whose 200 is `schema`, beside `components`. */
+  const responding = (schema: OpenApiSchema, components: Record<string, OpenApiSchema> = {}): OpenApiDocument => ({
+    openapi: '3.1.0',
+    info: { title: 'x', version: '1' },
+    paths: { '/r': { get: { operationId: 'r', responses: { 200: { description: 'OK', content: { 'application/json': { schema } } } } } } },
+    components: { schemas: components },
+  })
+  const field = (schema: OpenApiSchema): OpenApiSchema =>
+    ({ type: 'object', properties: { value: schema }, required: ['value'] })
+
+  it('an equivalent spelling is not a change — the anyOf zod 4.4 wrote and the type list 4.6 writes', () => {
+    const pairs: Array<readonly [OpenApiSchema, OpenApiSchema]> = [
+      [{ anyOf: [{ type: 'string' }, { type: 'null' }] }, { type: ['string', 'null'] }],
+      [{ anyOf: [{ type: 'string' }, { type: 'number' }] }, { type: ['string', 'number'] }],
+      [{ anyOf: [{ anyOf: [{ type: 'string' }, { type: 'number' }] }, { type: 'null' }] }, { type: ['string', 'number', 'null'] }],
+      [{ oneOf: [{ type: 'integer' }, { type: 'null' }] }, { anyOf: [{ type: 'integer' }, { type: 'null' }] }],
+      [{ type: 'string', const: 'k' }, { type: 'string', enum: ['k'] }],
+      [{ anyOf: [{ type: 'string', enum: ['a', 'b'] }, { type: 'null' }] }, { type: ['string', 'null'], enum: ['a', 'b', null] }],
+      [{ anyOf: [{ type: 'string' }, { const: null }] }, { type: ['string', 'null'] }],
+    ]
+    for (const [before, after] of pairs) {
+      const label = `${JSON.stringify(before)} → ${JSON.stringify(after)}`
+      assert.deepEqual(diffDocuments(responding(field(before)), responding(field(after))).changes, [], label)
+      assert.deepEqual(diffDocuments(responding(field(after)), responding(field(before))).changes, [], label)
+    }
+  })
+
+  it('a field removed from a nullable object is breaking — inside an anyOf it used to be invisible', () => {
+    const nullable = (properties: Record<string, OpenApiSchema>): OpenApiSchema =>
+      ({ anyOf: [{ type: 'object', properties, required: Object.keys(properties) }, { type: 'null' }] })
+    const result = diffDocuments(
+      responding(field(nullable({ id: { type: 'integer' }, email: { type: 'string' } }))),
+      responding(field(nullable({ id: { type: 'integer' } }))),
+    )
+    assert.deepEqual(result.breaking.map((c) => [c.code, c.location]), [
+      ['OAS_RESPONSE_FIELD_REMOVED', 'GET /r → response 200 (application/json).value.email'],
+    ])
+  })
+
+  it('…and so is one removed from a component a nullable union points at', () => {
+    const user = (properties: Record<string, OpenApiSchema>): Record<string, OpenApiSchema> =>
+      ({ User: { type: 'object', properties, required: Object.keys(properties) } })
+    const pointer = field({ anyOf: [{ $ref: '#/components/schemas/User' }, { type: 'null' }] })
+    const result = diffDocuments(
+      responding(pointer, user({ id: { type: 'integer' }, email: { type: 'string' } })),
+      responding(pointer, user({ id: { type: 'integer' } })),
+    )
+    assert.deepEqual(result.breaking.map((c) => c.code), ['OAS_RESPONSE_FIELD_REMOVED'])
+  })
+
+  it('a type added to a union is a widened response — the union used to state no type at all', () => {
+    const before = { anyOf: [{ type: 'string' }, { type: 'number' }] } satisfies OpenApiSchema
+    const after = { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }] } satisfies OpenApiSchema
+    assert.deepEqual(
+      diffDocuments(responding(field(before)), responding(field(after))).breaking.map((c) => [c.code, c.message]),
+      [['OAS_TYPE_WIDENED', 'Response may now be "boolean".']],
+    )
+  })
+
+  it('a recursive component is compared down to where it repeats, and the diff terminates', () => {
+    // A tree, a comment thread, a category hierarchy. The guard used to key on
+    // the location, which grows by a segment per level, so this overflowed the
+    // stack and took `openapi:check` down with it.
+    const tree = (extra: Record<string, OpenApiSchema>): Record<string, OpenApiSchema> => ({
+      Node: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          ...extra,
+          children: { type: 'array', items: { $ref: '#/components/schemas/Node' } },
+          parent: { anyOf: [{ $ref: '#/components/schemas/Node' }, { type: 'null' }] },
+        },
+      },
+    })
+    const root: OpenApiSchema = { $ref: '#/components/schemas/Node' }
+    const result = diffDocuments(responding(root, tree({ legacy: { type: 'string' } })), responding(root, tree({})))
+    assert.deepEqual(result.breaking.map((c) => [c.code, c.location]), [
+      ['OAS_RESPONSE_FIELD_REMOVED', 'GET /r → response 200 (application/json).legacy'],
+    ])
+  })
+
+  it('a component used twice in one response is reported at both uses', () => {
+    // The other half of the cycle guard: it stops only where a component is
+    // already being compared *above* this point, not wherever it has been seen,
+    // so `billing` and `shipping` are still two findings (§29.7).
+    const address = (properties: Record<string, OpenApiSchema>): Record<string, OpenApiSchema> =>
+      ({ Address: { type: 'object', properties } })
+    const order: OpenApiSchema = {
+      type: 'object',
+      properties: {
+        billing: { $ref: '#/components/schemas/Address' },
+        shipping: { $ref: '#/components/schemas/Address' },
+      },
+    }
+    const result = diffDocuments(
+      responding(order, address({ street: { type: 'string' }, postcode: { type: 'string' } })),
+      responding(order, address({ street: { type: 'string' } })),
+    )
+    assert.deepEqual(result.breaking.map((c) => c.location), [
+      'GET /r → response 200 (application/json).billing.postcode',
+      'GET /r → response 200 (application/json).shipping.postcode',
+    ])
   })
 
   function deepSchema(document: Record<string, never>): Record<string, unknown> {

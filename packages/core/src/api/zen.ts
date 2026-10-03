@@ -26,6 +26,7 @@ import type {
 } from '../contracts/route.ts'
 import type { Context } from '../contracts/context.ts'
 import type { AnySchema } from '../contracts/standard-schema.ts'
+import type { UrlParams, UrlQuery } from '../contracts/url.ts'
 
 import { DEFAULT_CAPABILITIES } from '../contracts/capabilities.ts'
 import { joinPath, normalizePath, pathnameOf } from '../primitives/path.ts'
@@ -57,6 +58,7 @@ import {
 } from '../runtime/body.ts'
 import { ConsoleLogger } from '../runtime/logger.ts'
 import { compileRedirectPolicy, type RedirectOptions, type RedirectPolicy } from '../runtime/redirect.ts'
+import { UrlTable } from '../runtime/url.ts'
 import { ErrorEngine } from '../runtime/error-engine.ts'
 import { prepareForWire, stripBodyIfNeeded } from '../runtime/egress.ts'
 import { encodeBody, finalize } from '../runtime/response-engine.ts'
@@ -368,6 +370,8 @@ export class ZenApp<X = {}> {
     unmatchedTimeoutMs: number
     env: ContextEnv
     errors: ErrorEngine
+    /** §5.7 — every named route, planned for `url()`. Off the request path entirely. */
+    urls: UrlTable
   } | null = null
 
   /** Lowercased once at construction; `undefined` disables inbound propagation. */
@@ -1236,6 +1240,10 @@ export class ZenApp<X = {}> {
 
     const router = this.#opts.router.build(records, { codegen: this.#codegen, paramTypes: this.#paramTypes } as never)
 
+    // §5.7 — read from the same records and checked against this router, so a
+    // link can only be built to where this application actually routes.
+    const urls = new UrlTable(records, { router, maxQueryParams: this.#opts.maxQueryParams ?? 100 })
+
     const byId = new Map<RouteId, CompiledRoute>()
     for (const record of records) {
       byId.set(record.id, {
@@ -1314,6 +1322,7 @@ export class ZenApp<X = {}> {
         redirect: this.#redirect.policy,
       },
       errors,
+      urls,
     }
     this.#frozen = true
 
@@ -1453,6 +1462,12 @@ export class ZenApp<X = {}> {
 
       exportsOf(name) {
         return app.#pluginExports.get(name)
+      },
+
+      // §5.7 — for the plugin's handlers, at request time; during `setup` the
+      // routes are not compiled yet, and `url()` says so.
+      url(name, params, query) {
+        return app.url(name, params, query)
       },
     }
   }
@@ -2083,6 +2098,46 @@ export class ZenApp<X = {}> {
     return this.#compiled.graph
   }
 
+  /**
+   * The path of a named route, its parameters filled in — rfcs/0001 §5.7.
+   *
+   *     app.get('/notes/:id<int>', { name: 'notes.show' }, show)
+   *
+   *     app.url('notes.show', { id: 7 })                    // '/notes/7'
+   *     app.url('notes.show', { id: 7 }, { from: 'feed' })  // '/notes/7?from=feed'
+   *     ctx.redirect(app.url('notes.show', { id: note.id }), 303)
+   *
+   * A URL this returns is one the named route answers, with these parameters,
+   * or it throws — `ZEN_PARAM_MISMATCH` for a value the route would not match
+   * or another route would, `ZEN_ROUTE_UNKNOWN` for a name nothing registered.
+   * Each value is encoded as exactly one segment, so `../admin` or `a/b?c`
+   * cannot become a different path; its parameter's type has to accept it; and
+   * the compiled router is asked whether the path reaches this route, because
+   * `/users/:id` given `'me'` is answered by `GET /users/me` when that exists
+   * (§5.6). The query string is written the way the route parses it (§11.4).
+   *
+   * Always a path on this origin, so it is what `isLocalUrl` accepts and what
+   * `ctx.redirect()` sends unasked (§19.5.2). Available from `ready()` on —
+   * names and segments are compiled at boot — and from a `Collection` or a
+   * plugin's registrar, which is how a feature module reaches it.
+   *
+   * **Checked when it is called, not by `tsc`.** RFC 0001 designed this typed
+   * by route name; that needs every name accumulated into the app's type, which
+   * a collection's callback cannot pass back out and which is the mapped-type
+   * growth §10.4 warns about. So a wrong name or a missing parameter is a
+   * refusal on the first call — in the first test that renders the link.
+   */
+  url(name: string, params?: UrlParams, query?: UrlQuery): string {
+    if (this.#compiled === null) {
+      throw new ZenError(
+        Codes.APP_NOT_READY,
+        `url("${name}") requires ready(): route names and segments are compiled at boot.`,
+        { status: 500, expose: false },
+      )
+    }
+    return this.#compiled.urls.build(name, params, query)
+  }
+
   /** Generated source for `zen inspect` / `zen build`. */
   generatedSource(): readonly { name: string; source: string }[] {
     return this.#codegen.units.map((u) => ({ name: u.name, source: u.source }))
@@ -2199,6 +2254,18 @@ export class Collection<X = {}> {
   collection(prefix: string, a: unknown, b?: unknown): this {
     this.#app.nestCollection(this.#scope, prefix, a, b)
     return this
+  }
+
+  /**
+   * {@link ZenApp.url}, reachable from a feature module — §5.7.
+   *
+   * A feature registers its routes on the collection it is handed and never
+   * sees the app, so a handler inside it links through this. Route names are
+   * the application's, not the collection's: `notes.url('pages.note', …)`
+   * reaches a route registered anywhere.
+   */
+  url(name: string, params?: UrlParams, query?: UrlQuery): string {
+    return this.#app.url(name, params, query)
   }
 }
 

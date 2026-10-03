@@ -693,11 +693,13 @@ app.paramType('objectId', {
 })
 ```
 
-A param type contributes three things at once: a matcher predicate compiled into the trie (so `/users/abc` cleanly 404s rather than reaching your handler with garbage), a parse function, and a JSON Schema fragment for OpenAPI. One declaration, three consumers — I4.
+A param type contributes three things at once: a matcher predicate compiled into the trie (so `/users/abc` cleanly 404s rather than reaching your handler with garbage), a parse function, and a JSON Schema fragment for OpenAPI. One declaration, three consumers — I4. A fourth arrived with URL generation (§5.7): the same predicate tests every value `app.url` writes into a path, so a link the matcher would refuse is never built.
 
 For the third consumer to actually get it, the registry is published on the built router and carried on the frozen `AppGraph` as `graph.paramTypes`. `@erenthedeveloper0/zen-openapi` must not depend on `@erenthedeveloper0/zen-router` (§24.3), and the alternative — a second copy of the built-in table inside the OpenAPI package — is the shorter path and the one where "three consumers, one declaration" quietly becomes two declarations.
 
-Path templates are also *typed at the type level*: `ExtractParams<'/users/:id<int>/posts/:slug'>` resolves to `{ id: number; slug: string }` via template literal types, so `ctx.params` is typed **even with no schema at all**. Adding a `params` schema refines it further and is checked for compatibility with the path at compile time (declaring `params: z.object({ userId: ... })` on `/users/:id` is a boot error, `ZEN_PARAM_MISMATCH`).
+Path templates are also *typed at the type level*: `ExtractParams<'/users/:id<int>/posts/:slug'>` resolves to `{ id: number; slug: string }` via template literal types, so `ctx.params` is typed **even with no schema at all**. Adding a `params` schema refines it further, and is designed to be checked for compatibility with the path at boot: declaring `params: z.object({ userId: ... })` on `/users/:id` should be the boot error `ZEN_PARAM_MISMATCH`.
+
+> **Designed, not built** — and until `0.1.0-alpha.3` this paragraph said it was. Today such a route boots and answers every request 400, because the schema requires a key the router never supplies. The code exists and has a producer now, from the other direction: `app.url()` raises it for parameters its route's template cannot carry (§5.7). The boot-time check is §28.8's.
 
 ### 5.3 Registration surface
 
@@ -762,14 +764,36 @@ That sentence was false in one place until the pre-release audit: two typed para
 
 ### 5.7 URL generation
 
-Because names and segments are in the registry, reverse routing is free and type-safe:
+Because names and segments are in the registry, reverse routing is free:
 
 ```ts
 app.url('user.show', { id: 42 })                  // → '/users/42'
 app.url('user.show', { id: 42 }, { q: 'x' })      // → '/users/42?q=x'
 ```
 
-`app.url` is typed by route name, and the params argument's type is derived from the route's path template. Passing a missing or wrongly-typed param is a compile error. The client SDK generator (§29.4) emits the same thing for the browser.
+What makes it worth having over `` `/users/${id}` `` is a guarantee rather than a convenience: **a URL `app.url` returns is one the named route answers, with the parameters it was given — or it throws.** A template literal goes wrong in three ways, and each is closed here:
+
+- **A value escapes its segment.** `/files/${name}` with a name of `a/b`, `x?y` or `#top` is a different path, a query or a fragment. Every value is percent-encoded as exactly one segment. `.` and `..` cannot be — a browser resolves them before it sends the request, `%2E%2E` included, so `/files/..` is a link to `/` — and are refused, as is an empty value, whose path is another route's.
+- **The route would not match the value.** The parameter's own type tests it: `:id<int>` given `'7a'` is a refusal in the handler that built the link rather than a 404 for whoever clicked it. §5.2's one declaration has a fourth consumer.
+- **Another route answers it.** `/users/:id` given `me` is `/users/me`, and `GET /users/me` outranks it (§5.6). Ranking is the router's to decide, so the compiled router is asked — one `match` per call — and an answer that belongs to any other route is `ZEN_PARAM_MISMATCH`, naming the route that won.
+
+The query string is written the way the route parses it: percent-encoded rather than form-encoded, because `parseQuery` reads `+` as a space; and a list repeated, comma-joined or bracketed as the route's coercion plan says (§11.4) — the same plan the OpenAPI generator reads for `style: form, explode: false`, so the link, the document and the parser agree because there is one answer. What the parser would drop or reshape is refused rather than sent: a `__proto__` key, a nested object, a comma-list element that holds a comma, more pairs than `maxQueryParams`.
+
+The result is always a path on the application's origin. It is therefore what `isLocalUrl` accepts and what `ctx.redirect()` sends without consulting `redirect.allowExternal` (§19.5.2). An absolute URL — for an email, say — is the application's to make, from an origin it configured; the request's `Host` header is the client's.
+
+> **Built in `0.1.0-alpha.3`, with three corrections to this section's first draft.**
+>
+> **Checked when it is called, not by `tsc`.** The first draft had `app.url` typed by route name, with a missing or wrongly-typed parameter a compile error. That needs every route's name accumulated into the app's type, and a collection's callback — `app.collection('/users', users => …)` — cannot pass a type back out; accumulating names through the builder chain is also exactly the mapped-type growth §10.4 and §28.2 warn about. So a name nothing registered is `ZEN_ROUTE_UNKNOWN`, with the name that was probably meant, and a parameter that cannot build the link is `ZEN_PARAM_MISMATCH` — both at the first call, in the first test that renders the link, which is the bargain §19.5.1 makes for an `html` template. The values are typed (`UrlValue`: a string, number, bigint, boolean or `Date` — never "anything with a `toString`", because a plain object's is `[object Object]` and an untyped `:slug` would carry it); the names are not.
+>
+> **Names are written in full.** §6.2 and §6.3 had a collection's `name` dot-joined onto the names of its routes. It never was, and by the time something read names as keys every example had namespaced its routes by hand — `pages.note` inside a collection named `pages` — so composing them now would rename every one of those routes: its OpenAPI `operationId`, its metrics labels and its links. A route's name is the string it was given, and a collection's is the collection's own.
+>
+> **A refusal never quotes a value.** It names the route, the parameter, its type and the shape of what arrived — `a value of 20 characters for :token<hex>` — and, when another route outranks the link, that route rather than the path. A link is where a password-reset token or a signed id lives, and a refusal is logged; the header check reports a code point and the redirect check an origin for the same reason (§19.5).
+>
+> **Reachable from where routes are written.** A feature module is handed a `Collection` and never sees the app, so `Collection#url` is the same function, and `Registrar.url` is it for a plugin's handlers. Route names are the application's, so either reaches any route. During a plugin's `setup` it is `ZEN_APP_NOT_READY`: nothing is compiled until every plugin has run.
+>
+> Nothing here generates code, so there is no interpreted twin (§20.5); the oracles are the router and the WHATWG URL parser. `url.test.ts` builds 2,000 links from hostile values over a table of shadowing traps, sends what a browser would make of each through the application, and requires the named route to answer with the values given — or the call to have refused, with its coverage asserted per kind of refusal. `benchmarks/url` gates the same property in CI and measures the price: ~60 ns for a static route and ~0.5 µs for one `<int>` parameter, about half of which is the router's `match` — the part that is the guarantee (§28.8).
+>
+> The client SDK generator (§29.6) is designed to emit the same thing for the browser, and is not built.
 
 ### 5.8 Versioning
 
@@ -813,7 +837,7 @@ A collection is **not** a runtime object in the request path. It is a registrati
 ```ts
 interface CollectionOptions<Ctx = {}> {
   prefix?: string
-  name?: string                       // namespaces child route names: 'users.show'
+  name?: string                       // the collection's own, on the AppGraph — route names are written in full (§5.7)
 
   use?: Middleware[]                  // applied to every route within
   hooks?: Partial<PhaseHandlers>
@@ -843,7 +867,7 @@ Ambiguity in inheritance is the main way "route groups" go wrong, so each field'
 | Field | Rule | Rationale |
 | --- | --- | --- |
 | `prefix` | concatenate, normalise slashes | Only sane option |
-| `name` | dot-join | `users.posts.show` reads naturally |
+| `name` | **not inherited** — a route's name is the string it was given | This row said "dot-join", and it was never built. By the time a reader of names existed (§5.7) every application had namespaced its routes by hand, and composing them would rename each one: its `operationId`, its metrics labels and its links |
 | `use` | **outer-first append**, deduped by middleware identity + config hash | Auth before authorization before handler is the near-universal intent |
 | `hooks` | append per phase, outer-first for the pre-family, **total reversal for the post-family** | Symmetry: an onion, not a queue. An outer hook that opened a transaction must close it after the inner ones. "Total" matters: two pairs registered A then B on one scope must run A,B in and B,A out, or the onion has a seam |
 | `schema.headers/query` | **intersect** (all constraints apply) | Adding a constraint at an inner level must not weaken an outer one |
@@ -952,7 +976,7 @@ api.collection('/admin', {
 })
 ```
 
-`GET /api/v2/admin/reports/revenue` resolves at boot to: middleware `[requestId, logger, requireAuth]`; policies `[role('admin'), permission('reports.read')]` (both required); rate limit 10/min; response schemas `{200: Revenue, 401, 403, 500}`; tags `['api']`; name `api.admin.reports.revenue`. All of it flattened into one `RouteRecord`, all of it visible in `zen routes --explain api.admin.reports.revenue`.
+`GET /api/v2/admin/reports/revenue` resolves at boot to: middleware `[requestId, logger, requireAuth]`; policies `[role('admin'), permission('reports.read')]` (both required); rate limit 10/min; response schemas `{200: Revenue, 401, 403, 500}`; tags `['api']`; and a name only if the route states one, in full — `{ name: 'api.admin.reports.revenue' }` (§6.3, §5.7). All of it flattened into one `RouteRecord`, all of it visible in `zen routes --explain api.admin.reports.revenue`.
 
 ---
 # Part III — The Execution Layer
@@ -1010,7 +1034,7 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
   readonly id:        RequestId              // ULID or inherited trace id
   readonly startTime: number                 // monotonic
   readonly route:     RouteInfo | null       // id, name, path template, meta
-  readonly log:       Logger                 // pre-bound with request id + route
+  readonly log:       Logger                 // designed pre-bound with request id + route — today the app's logger (§31.1)
 
   // ── Typed mutable channel ───────────────────────────────────────────────
   get<T>(slot: Slot<T>): T                   // throws ZEN_SLOT_EMPTY if unset & no default
@@ -1658,8 +1682,9 @@ The `app` handle passed to `setup` is a **scoped registrar**, not the applicatio
 | `app.adapterHook(fn)` | Adapter-level extension | e.g. WebSocket upgrade handling |
 | `app.onBoot(fn)` | Final AppGraph inspection | Runs after all registration, before compilation |
 | `app.config` | *Reads* the resolved configuration | §16.3. Not a registration — the frozen tree, readable because §16.2 already folded it before any `setup` ran |
+| `app.url(name, params, query)` | *Builds* the path of a named route | §5.7. Not a registration either — for the plugin's handlers, at request time; from `setup` it is `ZEN_APP_NOT_READY`, because routes compile after every plugin has run |
 
-Built today: `route`, `use`/`around`/`after`, `hook` (all twelve live phases, §9), `slot`, `decorate`, `provide`, `errorMap`, `health`, `probe`, `meta`, `onBoot`, `exportsOf`, and `config`. `command` waits on §17.
+Built today: `route`, `use`/`around`/`after`, `hook` (all twelve live phases, §9), `slot`, `decorate`, `provide`, `errorMap`, `health`, `probe`, `meta`, `onBoot`, `exportsOf`, `config`, and `url`. `command` waits on §17.
 
 The last of those needs a note, because the row above it says `config` was deliberately *removed* from this table. Both are true and they are about different directions. **Declaring** a config namespace is a manifest field, for the ordering reason above: it has to be readable before any plugin runs. **Reading** the resolved tree is a registrar property, and it was missing — so a plugin could declare layer-2 defaults it had no way to read back. §32.5 is how that was noticed: an allowlist is exactly the value that belongs in configuration, so `cors()` wanted it on its first line, and the ordering it depends on had been correct since §16 landed.
 
@@ -3438,6 +3463,8 @@ The injection defences (§19.5) are a fourth, and they have something better tha
 
 A third oracle judges whole pages rather than positions, and it was added because the first two could not see what it found. Random templates — HTML's text elements, `<script>` and `<style>`, SVG and MathML and the elements that lead back out of them, attribute values holding end tags — are rendered with hostile values and random fragments nested in each other, and parse5, which implements the WHATWG tree builder, parses every page the tag accepted, with scripting on and off. A value may land in text or in an attribute that cannot run it; anywhere else is a failure. Run against the tag as `0.1.0-alpha.2` was first tagged, it found a value that became an attribute name — the two readings of §19.5.1 disagreeing about where an element ended — in a template no position-by-position check would ever have been shown.
 
+URL generation (§5.7) is the fifth, and its oracle is the application itself. `app.url` builds from a plan read at boot, not from generated source, so again there is nothing for a twin to run; what has to be true is that a browser following the link reaches the named route with the values it was built from. So the property suite builds 2,000 links from hostile values — separators, dot segments, lone surrogates, and the values that collide with a table of shadowing traps — puts each through the WHATWG parser the way a browser treats an `href`, and sends the result to the app through `inject()`: router, params builder and query parser, none of which `url()` shares. Its coverage assertion found its own generator wrong twice before it found anything else. A wildcard piece holding a `/` had come up twice in 2,000 draws; and a `__proto__` query key never had, because the generator wrote it as `out['__proto__'] = v` on a plain object, which sets the prototype instead of a key. That is §19.5's own pollution trap, and it was in the test.
+
 One discipline the hook fuzzer needed and the others should adopt: it asserts its own **coverage**. Every phase must appear in the observed call order at least once across the corpus, and the total number of hook invocations must exceed a floor. A differential fuzzer where both implementations agree because neither ran anything reports a pass and proves nothing, and that failure mode is invisible — the test is green either way. The deadline fuzzer inherited it: it requires both that the deadline fired on a substantial fraction of seeds and that a substantial fraction finished normally, because a corpus that only ever takes one branch tests one branch. So did the coercion fuzzer, which counts the plans it produced, the runs that actually changed a value, and every op kind separately — a generator that drifts into emitting only string schemas would otherwise pass forever while testing nothing. So does the rate limiter's, whose whole subject is a window boundary: a stream that never crossed one would compare two implementations on the only path that cannot be wrong.
 
 Negotiation's property suite made the point sharply enough to be worth recording, because the mechanism that caught it was not a test. It has a branch for an `Accept` header with nothing parseable in it — answered with the server preference rather than a 406 — and an assertion on that branch. The **negative-control script** (`scripts/negative-controls.ts`, and see §20.7) patched that behaviour to return a 406 instead, ran the suite, and the suite *passed*: the generator had never produced an unparseable header, so the branch had executed zero times across 2,000 seeds. The assertion was written, correct, and dead. Coverage assertions are not a nicety on top of a fuzzer; they are the only thing standing between a fuzzer and a green light for code it never ran.
@@ -3465,7 +3492,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 
    Shutdown ordering belongs in this list too, and it lives in `scripts/smoke.ts` rather than here, because "readiness went red before the socket stopped accepting" needs a real socket to be open while the process is shutting down. It was unfalsifiable before §31.4 existed, and it was wrong for exactly that long.
 
-6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Seventy-one controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
+6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Eighty-nine controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
 
    This is a different property from every other entry in this list, and it is the one nothing else in the repo checks. Correctness tests answer "is the code right"; this answers "would we find out if it stopped being right", and the two come apart constantly and invisibly. Every pass of this codebase had run some version of it by hand and written down that it was worth automating; §13.4 was the pass that did.
 
@@ -3815,6 +3842,7 @@ interface App<X extends ContextExtensions = {}> {
   seal(): App<Prettify<X>>
   ready(): Promise<FrozenApp<X>>
   graph(): AppGraph                     // available after ready()
+  url(name: string, params?: UrlParams, query?: UrlQuery): string   // §5.7, after ready(); and on Collection
   listen(port: number, host?: string): Promise<ServerHandle>   // app.listen(3000), §1.2
   listen(opts?: ListenOptions): Promise<ServerHandle>           // port, host, signal
   close(reason?: string): Promise<void>
@@ -4035,7 +4063,7 @@ interface Registrar {
   hook(phase: Phase, fn: Function, name?: string): void
   exportsOf(plugin: string): Readonly<Record<string, unknown>> | undefined
   // … route, use/around/after, slot, decorate, provide, health, probe,
-  //   errorMap, meta, onBoot — the full list is §10.2
+  //   errorMap, meta, onBoot, url — the full list is §10.2
 }
 interface PluginResult<P extends object> { provides: P; exports?: Record<string, unknown> }
 
@@ -4383,6 +4411,8 @@ Context + slots · Route Registry + collections · phase/around/after middleware
 > The finding is the shutdown sequence itself. It ran inverted: `onClose` hooks and singleton disposal *first*, then the drain delay and the socket, so the connection pools were closed during the window in which the load balancer is still routing. The default `drainDelay` of 0 kept it invisible — an empty window has nothing to fail — and it stayed wrong through writing, implementing and reviewing because **nothing could ask it a question**. Step 1 is unobservable without a readiness endpoint. This is the same class as §9.7's argument and the deadline arm's: the value of a reader is not that it documents the system, it is that it can disagree with it.
 >
 > Two smaller things. Reusing §4.4's `Deadline` to bound each probe found that its `unref` is a request-path assumption — a request always has an open socket holding the loop, a probe has only the timer, so an unref'd one lets Node exit before a wedged dependency's report is written. And the shape of the API is one decision: a check is **readiness** unless it says `kind: 'liveness'`, because the mirror-image mistake — dependencies in liveness — restarts an entire fleet during a database blip and then prevents the pools reconnecting.
+
+> **URL generation is built** (§5.7, `0.1.0-alpha.3`) — the route registry's other half, and listed nowhere on this roadmap because §5.4 treated it as a by-product of keeping `#byName`. Building it was the first time anything read route *names* as keys, and it found two places this document described a registry that did not exist: §6.3's `name` dot-join, never built and now decided against, and §5.2's boot-time `params` check, written in the present tense and still unbuilt. The guarantee is the router's — a link is checked against the matcher that will serve it — so the feature cost no new mechanism, only a reader.
 
 ### M2 — `0.2` Types & Validation (8 weeks)
 
@@ -4778,6 +4808,14 @@ The strongest architecture loses to the framework people already know. Nothing i
 | A protocol-relative redirect needs both schemes listed | §19.5.2 — `//accounts.example/x` is `http://` on an http page and `https://` on an https one, and the check does not trust the request's scheme. Write the scheme |
 | An absolute redirect to the application's own host is external | §19.5.2 — by design: only the `Host` header could say it is the same host, and the client writes that header. Redirect within the application with a path |
 | The serializer does not escape `<`, `>`, `&` or U+2028/2029 | §19.5, corrected — decided against, not deferred. Its output is byte-identical to `JSON.stringify` for the fields it emits, which is what the differential suite asserts; the control for JSON is `Content-Type` plus `nosniff` (`securityHeaders()`), and JSON embedded in an HTML `<script>` is the embedding template's to escape |
+| `app.url` is checked when it is called, not by `tsc` | §5.7, corrected — designed typed by route name, which needs every name accumulated into the app's type; a collection's callback cannot pass one back out, and accumulating them is the growth §10.4 warns about. A wrong name or a parameter that cannot build the link fails the first test that renders it. The values are typed; the names are not |
+| A link costs a router `match` | §5.7 — about half of a call with a parameter (~0.25 of ~0.5 µs for one `<int>`), published in `benchmarks/url`. It is the part that tells `/users/:id` given `me` from `GET /users/me`. A boot-time analysis could prove most routes cannot be outranked and skip it; not built, because an analysis that was wrong would be the bug `url()` exists to prevent, and a differential suite against the router would have to come with it |
+| An unnamed route cannot be linked to | §5.7 — by design. A name is a route's identity to the `operationId`, the metrics labels and now its links; linking by path would repeat the one thing a link should not have to. `ZEN_ROUTE_UNKNOWN` says to name it |
+| `url()` returns a path, never an absolute URL | §5.7 — an absolute URL needs an origin, and the only one on a request is the `Host` header the client wrote (§19.5.2). An application that needs one (an email) prefixes the origin it configured |
+| A collection's `name` does not namespace its routes' names | §6.3, corrected — the merge table said "dot-join", and it was never built; by the time names were read as keys, applications namespaced them by hand, and composing them now would rename every such route |
+| A `params` schema is not checked against its path template at boot | §5.2, corrected — the paragraph described the check as built. `ZEN_PARAM_MISMATCH` has a producer now (`url()`); the boot check that would make `params: z.object({ userId })` on `/users/:id` an error instead of a 400 on every request is not built |
+| `ctx.log` is not bound to the request | §7.2, §31.1, corrected — designed pre-bound with the request id and route, and the application's logger in fact. A lazy child, made on the first read and re-made if `ctx.id` changes (the request-id plugin adopting an inbound id), would cost nothing on a request that never logs and one allocation on one that does; not built |
+| The API diff compares the branches of a multi-branch union by type only | §29.7 — a nullable union is compared as its one non-null branch, fields and all; a union of several object shapes is compared by the types it admits, because which branch corresponds to which across two documents is not knowable in general. A field removed inside one of them is not reported |
 
 ---
 # Part IX — Extended Subsystems
@@ -4910,6 +4948,10 @@ Changes are reported once per *use*, not once per component: a field removed fro
 
 The classification is deliberately conservative — when a change could break a reasonable consumer it is reported as breaking, because a tool that under-reports is worse than no tool once it is trusted.
 
+**What is compared is what a schema says, not how its converter spelled it** — and until `0.1.0-alpha.3` it was the spelling, which failed in both directions. zod 4.6 writes a nullable string as `type: ['string', 'null']` where 4.4 wrote `anyOf: [{ type: 'string' }, { type: 'null' }]`; the type set was read off `type` alone, so a dependency update that changed no byte on the wire failed this gate with two `OAS_TYPE_WIDENED`. And because nothing looked inside an `anyOf` at all, the same blindness passed a field removed from a nullable object — `z.object({…}).nullable()`, the commonest union there is — without a word. So a union is now read before it is compared: `$ref`s followed and nested unions flattened, `null` branches set aside, a single remaining branch compared exactly as a plain schema with `null` added to its types, and several compared by the types they admit. `const: v` is `enum: [v]`. Which branch of one document corresponds to which of the other is not knowable in general, so a change *inside* one of several object branches is not seen; §28.8 records it.
+
+Recursion is bounded by the descent rather than by the location: a component is skipped only while it is already being compared further up the same path. The guard used to key on the location string, which grows by a segment at every level and so never repeats, and any recursive schema — a tree, a comment thread — overflowed the stack and took `openapi:check` with it.
+
 This is a governance feature disguised as tooling. It is how an API change stops being "a diff in a routes file" and becomes a reviewable statement about compatibility, on the pull request, before it ships.
 
 ### 29.8 Measured cost
@@ -4986,7 +5028,9 @@ Leadership election (so one replica runs a cron, not all twelve) is delegated to
 
 ### 31.1 Logging
 
-`pino`-shaped by default, behind a `Logger` interface so it can be replaced. `ctx.log` is pre-bound with request id, route name, and any fields plugins contribute. Request logging is a hook, not a middleware, so it observes real timing including serialization.
+`pino`-shaped by default, behind a `Logger` interface so it can be replaced. `ctx.log` is designed to be pre-bound with request id, route name, and any fields plugins contribute. Request logging is a hook, not a middleware, so it observes real timing including serialization.
+
+> **Not built, and this paragraph read as though it were.** `ctx.log` is the application's logger, unbound: a handler's line carries no request id unless the handler adds one (`ctx.log.child({ requestId: ctx.id })`). The framework's own error lines carry it, and so does every problem document, which is where the correlation key reaches the client. §28.8 records the gap.
 
 Redaction is configured by path (`req.headers.authorization`, `*.password`, `*.token`) and applied by the serializer, plus automatic redaction of anything branded `secret` in config (§16.2). The default request log line contains method, route *template* (never the raw URL — cardinality), status, duration, request id, and length.
 
@@ -5246,7 +5290,6 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_ROUTE_DUPLICATE` | Two routes with the same method and path, or the same `name` (a name identifies one route, §5.5) |
 | `ZEN_ROUTE_AMBIGUOUS` | Two routes match the same request with no priority rule to separate them |
 | `ZEN_ROUTE_INVALID_PATH` | Malformed path syntax |
-| `ZEN_PARAM_MISMATCH` | `params` schema keys do not match the path template |
 | `ZEN_PARAM_TYPE_UNKNOWN` | Unregistered param type in a path |
 | `ZEN_PLUGIN_MISSING` / `_VERSION` / `_CONFLICT` / `_DUPLICATE` / `_CYCLE` / `_OPTIONS` | Plugin resolution failures |
 | `ZEN_DECORATOR_CONFLICT` | Two plugins decorating the same context property |
@@ -5289,6 +5332,8 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_HEADER_INVALID` | 500 | A header name that is not a token, or a value with a character no header can carry — a line break, another control character, anything past U+00FF — refused where it was set, `ctx.res` included (§19.5) |
 | `ZEN_HTML_UNSAFE` | 500 | `ctx.html()` was given something other than `SafeHtml`, or an `html` template put a hole where escaping cannot make it safe — inside `<script>`, in an `onclick`, in an unquoted attribute — or is read differently by HTML and by SVG (§19.5.1). Refused on the template's first render, whatever the values; a fragment is refused where it is nested, if it could end the text element it lands in or carries an HTML-only script into SVG |
 | `ZEN_REDIRECT_EXTERNAL` | 500 | `ctx.redirect()` would have left the origin for one `redirect.allowExternal` does not name — the open redirect, refused, with no `Location` sent (§19.5.2) |
+| `ZEN_ROUTE_UNKNOWN` | 500 | `app.url()` named a route nothing registered under that name — with the name that was probably meant (§5.7) |
+| `ZEN_PARAM_MISMATCH` | 500 | Parameters that disagree with a route's path template. Produced by `app.url()`: a parameter missing or extra, a value its type refuses or no URL can carry (`.`, `..`, empty), or a path another route outranks, which the message names (§5.7). Reserved too for the boot-time check of a `params` schema against its template (§5.2), which is not built |
 | `ZEN_REPLY_SENT` | 500 | Attempted to modify a Reply after egress |
 | `ZEN_CONTEXT_ESCAPED` | 500 | A pooled context was used after release (dev only) |
 | `ZEN_BODY_INVALID` | 400 | The body did not parse as its content type, or nests past the depth limit (§19.3) |

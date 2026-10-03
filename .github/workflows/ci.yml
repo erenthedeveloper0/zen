@@ -40,7 +40,7 @@ jobs:
       - name: Typecheck & build
         run: npm run typecheck
 
-      # ~970 tests: unit, integration, differential (compiled ≡ interpreted —
+      # ~1,110 tests: unit, integration, differential (compiled ≡ interpreted —
       # random hook plans crossed with random middleware chains, and random
       # chains where the deadline blows at a random position, which must agree
       # on *which* boundary abandoned the request), type-level, the
@@ -234,8 +234,19 @@ jobs:
       - name: Injection defences cost
         run: node benchmarks/injection/run.ts
 
+      # §5.7 — two gates, and the first is the property URL generation exists
+      # for: every link `app.url()` returns, put through the WHATWG parser the
+      # way a browser treats an `href` and sent to the app, must reach the route
+      # it names with the values it was built from — across a table of routes
+      # that outrank one another and values chosen to break a hand-built path.
+      # The shortcut a later optimisation would take is skipping the router
+      # check, and that is the faster version, so it is gated here. The second
+      # fails if naming or linking a route changes a byte of generated code.
+      - name: URL generation cost
+        run: node benchmarks/url/run.ts
+
       # CONTRIBUTING.md convention 3 — "a test that passes against the bug is not a
-      # test". Seventy-one known defects are patched into the source one at a
+      # test". Eighty-nine known defects are patched into the source one at a
       # time; each must make its named suite fail. A control that *passes*
       # means the assertion it points at is not load-bearing, and the job fails.
       #

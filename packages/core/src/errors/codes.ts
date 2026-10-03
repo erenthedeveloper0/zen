@@ -9,6 +9,14 @@ export const Codes = {
   ROUTE_DUPLICATE: 'ZEN_ROUTE_DUPLICATE',
   ROUTE_AMBIGUOUS: 'ZEN_ROUTE_AMBIGUOUS',
   ROUTE_INVALID_PATH: 'ZEN_ROUTE_INVALID_PATH',
+  /** `app.url()` named a route nothing registered — §5.7. */
+  ROUTE_UNKNOWN: 'ZEN_ROUTE_UNKNOWN',
+  /**
+   * Parameters that disagree with a route's path template — §5.2, §5.7.
+   * Produced by `app.url()` when its parameters cannot build a URL the route
+   * answers; the boot-time check of a `params` schema against the template is
+   * reserved under the same code.
+   */
   PARAM_MISMATCH: 'ZEN_PARAM_MISMATCH',
   PARAM_TYPE_UNKNOWN: 'ZEN_PARAM_TYPE_UNKNOWN',
   PLUGIN_MISSING: 'ZEN_PLUGIN_MISSING',

@@ -51,6 +51,8 @@ interface Control {
 
 const CORE = 'packages/core/src'
 const ADAPTER = 'packages/adapter-node/src/index.ts'
+const OPENAPI_DIFF = 'packages/openapi/src/diff.ts'
+const URL_TABLE = 'packages/core/src/runtime/url.ts'
 
 const CONTROLS: readonly Control[] = [
   // ── §13.4: the match ──────────────────────────────────────────────────────
@@ -665,6 +667,154 @@ const CONTROLS: readonly Control[] = [
     replace: "    if (!policy.origins.has(origin.replace(/^http:/, 'https:'))) {",
     suite: 'packages/core/test/redirect.test.ts',
     caughtBy: '"refuses the look-alikes: a subdomain, userinfo, another scheme, another port"',
+  },
+
+  // ── §5.7: a URL url() returns reaches its route, with its values ──────────
+  {
+    name: 'write a value into its segment unencoded, so "a/b?c" becomes a path and a query',
+    file: URL_TABLE,
+    find: '    return encodeURIComponent(text)',
+    replace: '    return text',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"a parameter is one segment, whatever it holds", and the property suite\'s WHATWG and router oracles',
+  },
+  {
+    name: 'let a ".." through, which a browser resolves to a different path before sending',
+    file: URL_TABLE,
+    find: '  if (isDotSegment(text)) throw refusal(plan, dotRefusal(label, text))\n  if (part.type !== null',
+    replace: '  if (part.type !== null',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"refuses ".", ".." and "" — no encoding can carry them to the route", and the WHATWG oracle',
+  },
+  {
+    name: 'build a segment its parameter\'s type refuses, a link the router 404s',
+    file: URL_TABLE,
+    find: '  if (part.type !== null && !part.type.test(text)) {',
+    replace: '  if (part.type !== null && !part.type.test(text) && text.length < 0) {',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"a parameter\'s type tests the value, so a link the router 404s is never built"',
+  },
+  {
+    name: 'skip asking the router, so /users/:id given "me" links to GET /users/me',
+    file: URL_TABLE,
+    find: '    if (match !== null && match.route !== null && match.route.id === plan.route.id) return',
+    replace: '    if (match !== null && match.route !== null && match.route.id !== \'\') return',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"a static route outranks a parameter", and the property suite\'s route oracle',
+  },
+  {
+    name: 'accept an empty parameter, whose path is another route\'s',
+    file: URL_TABLE,
+    find: "  if (text === '') {\n    throw refusal(plan, `was given an empty ${label}, and a path",
+    replace: "  if (text === '' && text.length < 0) {\n    throw refusal(plan, `was given an empty ${label}, and a path",
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"refuses ".", ".." and """, and the property suite',
+  },
+  {
+    name: 'let a wildcard piece hold a "/", which arrives as two pieces',
+    file: URL_TABLE,
+    find: "      if (text.includes('/')) {",
+    replace: "      if (text.includes('/') && text.length < 0) {",
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"a wildcard takes the rest of the path, as a string or as its segments"',
+  },
+  {
+    name: 'give an optional parameter while the one before it was left out',
+    file: URL_TABLE,
+    find: '      if (omitted !== null) {',
+    replace: '      if (omitted !== null && omitted.length < 0) {',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"…only from the end, under a path syntax that allows several (§3.5)"',
+  },
+  {
+    name: 'write a Date the way String() does, which no <date> route matches',
+    file: URL_TABLE,
+    find: '      return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : null',
+    replace: '      return value instanceof Date && !Number.isNaN(value.getTime()) ? String(value) : null',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"a number, a bigint, a boolean and a Date are written the way their routes read them back"',
+  },
+  {
+    name: 'send a __proto__ query key, which every parser here drops on arrival',
+    file: URL_TABLE,
+    find: '      if (isForbiddenKey(key)) {',
+    replace: '      if (isForbiddenKey(key) && key.length < 0) {',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"refuses what the parser would drop or reshape", and the property suite\'s query oracle',
+  },
+  {
+    name: 'join a comma list whose element holds a comma, which arrives as two values',
+    file: URL_TABLE,
+    find: '    if (text.includes(separator)) {',
+    replace: '    if (text.includes(separator) && separator.length < 0) {',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"a list joined with commas where the route\'s profile says comma — and refused where that cannot round-trip"',
+  },
+  {
+    name: 'quote the value a parameter\'s type refused, putting a token from a link into the log',
+    file: URL_TABLE,
+    find: "  return `a value of ${text.length} character${text.length === 1 ? '' : 's'}`",
+    replace: '  return JSON.stringify(text)',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"never puts a value it was given into a refusal — a link is where tokens live"',
+  },
+  {
+    name: 'print the built path when another route outranks it, values and all',
+    file: URL_TABLE,
+    find: '      `built a path that ${winner.method} ${winner.path}',
+    replace: '      `built ${path}, which ${winner.method} ${winner.path}',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"never puts a value it was given into a refusal", the outranked case',
+  },
+  {
+    name: 'build more query pairs than maxQueryParams lets the parser read, silently losing the rest',
+    file: URL_TABLE,
+    find: '    if (pairs.length > this.#maxQueryParams) {',
+    replace: '    if (pairs.length > this.#maxQueryParams * 1000) {',
+    suite: 'packages/core/test/url.test.ts',
+    caughtBy: '"refuses what the parser would drop or reshape: __proto__, a nested object, more pairs than it reads"',
+  },
+
+  // ── §29.7: the API diff reads what a schema says, not how it is spelled ───
+  {
+    name: 'read a schema\'s types off `type` alone, so an anyOf states none',
+    file: OPENAPI_DIFF,
+    find: '  if (!Array.isArray(listed) || listed.length === 0 || depth > 8) return null',
+    replace: '  if (!Array.isArray(listed) || listed.length >= 0 || depth > 8) return null',
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: '"an equivalent spelling is not a change — the anyOf zod 4.4 wrote and the type list 4.6 writes"',
+  },
+  {
+    name: 'compare a nullable union by its types only, so a field can leave its object unseen',
+    file: OPENAPI_DIFF,
+    find: '  if (others.length === 1) {',
+    replace: '  if (others.length === 1 && others.length < 0) {',
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: '"a field removed from a nullable object is breaking — inside an anyOf it used to be invisible"',
+  },
+  {
+    name: 'leave const unread, so a const and a one-value enum diff as a change',
+    file: OPENAPI_DIFF,
+    find: '  const spelled = node.const !== undefined && node.enum === undefined ? { ...node, enum: [node.const] } : node',
+    replace: '  const spelled = node',
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: '"an equivalent spelling is not a change", the const / enum pair',
+  },
+  {
+    name: 'guard on the location as well as the component, so a recursive schema never stops',
+    file: OPENAPI_DIFF,
+    find: "  const key = before.ref === undefined && after.ref === undefined ? null : `${before.ref ?? ''}|${after.ref ?? ''}`",
+    replace: "  const key = before.ref === undefined && after.ref === undefined ? null : `${before.ref ?? ''}|${after.ref ?? ''}|${where}`",
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: '"a recursive component is compared down to where it repeats, and the diff terminates"',
+  },
+  {
+    name: 'never release a component from the guard, so its second use is skipped',
+    file: OPENAPI_DIFF,
+    find: '    if (key !== null) active.delete(key)',
+    replace: '    if (key !== null && key.length < 0) active.delete(key)',
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: '"a component used twice in one response is reported at both uses"',
   },
 ]
 

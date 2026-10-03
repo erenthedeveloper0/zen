@@ -52,11 +52,6 @@ mixed with literal text in one segment (`/v:version`), an empty or duplicate
 parameter name. Also raised for a handler that is not a function, and for a
 `paramType` name that could not appear in a path.
 
-## ZEN_PARAM_MISMATCH
-
-Reserved (§5.2): a `params` schema whose keys disagree with the path template.
-Not produced yet.
-
 ## ZEN_PARAM_TYPE_UNKNOWN
 
 A path uses a parameter type nobody registered — `/:id<objectId>`. The message
@@ -345,6 +340,48 @@ When the target came from the request, validate it and fall back:
 `ctx.redirect(isLocalUrl(next) ? next : '/')`. For a target the application
 built entirely itself, `ctx.redirect(url, { allowExternal: true })` skips the
 check for that one call. Never exposed, and no `Location` header is sent.
+
+A link to one of the application's own routes needs neither: `app.url()`
+always returns a path on this origin.
+
+## ZEN_ROUTE_UNKNOWN
+
+**500.** `app.url()` — or a collection's or a plugin's `url()` — named a route
+that nothing registered under that name (§5.7). The message suggests the name
+you probably meant. Only named routes can be linked to: give the route a name —
+`app.get('/notes/:id<int>', { name: 'notes.show' }, …)` — and pass the name, not
+the path. Never exposed.
+
+## ZEN_PARAM_MISMATCH
+
+**500.** The parameters given to `app.url()` cannot build a URL the named route
+answers (§5.7):
+
+- a parameter the path needs was not given, or one it does not have was — query
+  values go in the third argument, `url(name, params, query)`;
+- a value its parameter's type refuses (`'4.2'` for `:id<int>`), or one no URL
+  can carry: an empty value, `.` or `..` (a browser resolves those, percent-encoded
+  or not, before it sends the request), an object, `NaN`, an invalid `Date`, or a
+  string that is not well-formed Unicode;
+- a wildcard with an empty segment — a leading, trailing or doubled `/` — or a
+  piece of its list form that holds a `/`;
+- an optional parameter given while one before it was left out;
+- a path another route outranks: `/users/:id` given `me`, beside a
+  `GET /users/me` (§5.6). The message names the route that would have answered;
+- a query the parser would drop or reshape: a `__proto__`, `constructor` or
+  `prototype` key, a nested object, a comma-list element that holds a comma or
+  starts or ends with a space, or more pairs than `maxQueryParams` lets a
+  request carry.
+
+Thrown where `url()` is called, so a bad link fails in the handler that built
+it — in the first test that renders it — rather than for whoever clicks it.
+The message names the parameter, its type and the length of what it was given,
+never the value itself: a link is where a reset token or a signed id lives, and
+this message is logged. Never exposed.
+
+The same code is reserved for the boot-time check of a `params` schema against
+its path template (§5.2) — `params: z.object({ userId })` on `/users/:id` — which
+is not built yet.
 
 ## ZEN_REPLY_SENT
 

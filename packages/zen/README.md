@@ -46,6 +46,9 @@ JavaScript. Stages a route does not use are not emitted at all.
   takes the `SafeHtml` the `html` tag builds — every interpolation escaped for
   where it sits, a `javascript:` link replaced — and `ctx.redirect()` will not
   leave the origin unless you list where else it may go.
+- **Links asked of the route**: `app.url('users.show', { id })` encodes, types
+  and router-checks every value, so a link reaches the route it names — or is
+  refused before anyone clicks it.
 - **Boot-time diagnostics**, aggregated: every registration problem in one run,
   each with a fix.
 

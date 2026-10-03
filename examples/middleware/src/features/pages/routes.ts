@@ -24,6 +24,11 @@ import type { NoteService } from '../notes/service.ts'
  * `href`. A `javascript:` URL there is neutralised to
  * `about:invalid#zen-unsafe-url`, because escaping `javascript:alert(1)`
  * changes nothing about it.
+ *
+ * Every link the application makes *itself* is asked of the route it points at
+ * — `pages.url('pages.note', { id })`, §5.7 — rather than spelled out. That is
+ * a path on this origin by construction, so it is also the fallback that needs
+ * no checking: `ctx.redirect()` sends it without consulting the allowlist.
  */
 const PageQuery = z.object({ from: z.string().optional() })
 const LoginQuery = z.object({ next: z.string().optional() })
@@ -45,7 +50,8 @@ export function pageRoutes(pages: Collection, service: NoteService): void {
     <p>${note.body}</p>
     <p><small>${new Date(note.createdAt).toUTCString()}</small></p>
   </article>
-  <a href="${ctx.query.from ?? '/notes/1'}">Back</a>
+  <a href="${ctx.query.from ?? pages.url('pages.note', { id: 1 })}">Back</a>
+  <a href="${pages.url('notes.get', { id: note.id })}" type="application/json">As JSON</a>
 </body>
 </html>`
   })
@@ -56,7 +62,7 @@ export function pageRoutes(pages: Collection, service: NoteService): void {
     query: LoginQuery,
   }, function afterLogin(ctx) {
     const next = ctx.query.next
-    return ctx.redirect(next !== undefined && isLocalUrl(next) ? next : '/notes/1', 303)
+    return ctx.redirect(next !== undefined && isLocalUrl(next) ? next : pages.url('pages.note', { id: 1 }), 303)
   })
 
   /**

@@ -5,9 +5,11 @@ import type { RawReading, Staging } from './shared.ts'
  * Request id — rfcs/0001 §19.4, §31.1.
  *
  * Zen already generates one: the dispatcher assigns `ctx.id` before the first
- * hook runs, so `ctx.log` and the RFC 9457 problem document already carry a
- * correlation key with no plugin at all. This adds the two halves that need a
- * decision rather than a default.
+ * hook runs, so the RFC 9457 problem document and the framework's own error log
+ * lines already carry a correlation key with no plugin at all. (`ctx.log` does
+ * not yet: it is the application's logger, not bound to the request — §31.1,
+ * §28.8 — so a handler adds `requestId: ctx.id` itself.) This adds the two
+ * halves that need a decision rather than a default.
  *
  * ### Echoing it
  *

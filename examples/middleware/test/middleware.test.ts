@@ -274,6 +274,35 @@ describe('pages that escape what they print, and redirects that stay home (§19.
     assert.match(sso.header('location') ?? '', /^https:\/\/id\.notes\.example\/authorize\?/)
   })
 
+  test('a created note says where it lives, and that link reaches it (§5.7)', async () => {
+    const created = await app.inject('POST', '/api/notes', { body: { title: 'linked', body: 'here' } })
+    assert.equal(created.status, 201)
+    const { id } = created.json<{ id: number }>()
+    assert.equal(created.header('location'), `/api/notes/${id}`)
+
+    const followed = await app.inject('GET', created.header('location') as string, { headers: { origin: ORIGIN } })
+    assert.equal(followed.status, 200)
+    assert.equal(followed.json<{ title: string }>().title, 'linked')
+  })
+
+  test('a page links to its JSON by asking the route for the path, not by spelling it', async () => {
+    const page = await app.inject('GET', '/notes/2')
+    assert.match(page.text(), /<a href="\/api\/notes\/2" type="application\/json">As JSON<\/a>/)
+    assert.equal(app.url('notes.get', { id: 2 }), '/api/notes/2')
+    assert.equal(app.url('pages.note', { id: 2 }, { from: '/notes/1' }), '/notes/2?from=%2Fnotes%2F1')
+  })
+
+  test('url() takes only values a URL can carry — a claim the compiler makes', async () => {
+    await app.ready()
+    // `npm run typecheck` is the proof, as for ctx.html() below: an object has a
+    // `toString`, and a plain object's is `[object Object]`, which `:id` would
+    // carry into a link — so it is not a parameter value.
+    // @ts-expect-error — an object is not a URL value
+    assert.throws(() => app.url('notes.get', { id: { id: 2 } }), /ZEN_PARAM_MISMATCH|an object for :id/)
+    const path: string = app.url('notes.get', { id: 2 })
+    assert.equal(path, '/api/notes/2')
+  })
+
   test('ctx.html() takes SafeHtml, not a string — a claim the compiler makes', () => {
     // Type-checked by `npm run typecheck`, which is the whole proof: the
     // directive fails the build if a string ever becomes acceptable here.

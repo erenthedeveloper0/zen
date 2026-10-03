@@ -227,49 +227,199 @@ function diffResponses(
 
 type Direction = 'request' | 'response'
 
+/**
+ * Compare two schemas, as what they say rather than as how they are spelled.
+ *
+ * `active` holds the components being compared further up *this* descent, and
+ * nothing else. A component that contains itself — a tree, a comment thread —
+ * is compared once per path into it, and the recursion stops where it would
+ * start repeating. The guard used to be a set of `ref|ref|location` keys, and a
+ * location grows by a segment at every level, so it never repeated: any
+ * recursive schema overflowed the stack, which is how `openapi:check` died on an
+ * API whose response was a tree. Keyed on the pair alone, across the whole
+ * operation, it would also have stopped at a component's *second use*, and a
+ * change is reported once per use (§29.7) — `billing` and `shipping` are two
+ * places a client reads an `Address`.
+ */
 function diffSchema(
-  rawBefore: OpenApiSchema,
-  rawAfter: OpenApiSchema,
+  rawBefore: OpenApiSchema | undefined,
+  rawAfter: OpenApiSchema | undefined,
   direction: Direction,
   where: string,
   ctx: Context,
-  seen: Set<string>,
+  active: Set<string>,
 ): void {
-  const guard = `${rawBefore.$ref ?? ''}|${rawAfter.$ref ?? ''}|${where}`
-  if (rawBefore.$ref !== undefined || rawAfter.$ref !== undefined) {
-    if (seen.has(guard)) return
-    seen.add(guard)
+  const before = viewOf(ctx.before, rawBefore)
+  const after = viewOf(ctx.after, rawAfter)
+
+  const key = before.ref === undefined && after.ref === undefined ? null : `${before.ref ?? ''}|${after.ref ?? ''}`
+  if (key !== null) {
+    if (active.has(key)) return
+    active.add(key)
   }
 
-  const before = ctx.before.resolve(rawBefore)
-  const after = ctx.after.resolve(rawAfter)
+  try {
+    diffTypes(before.types, after.types, direction, where, ctx)
+    // Several branches left after a union is read: their types were compared
+    // above, and nothing else can be — which branch of one document is which of
+    // the other is not knowable in general (§28.8).
+    if (before.union || after.union) return
 
-  diffTypes(before, after, direction, where, ctx)
-  diffEnum(before, after, direction, where, ctx)
+    diffEnum(before.node, after.node, direction, where, ctx)
 
-  if (before.format !== after.format) {
-    ctx.changes.push(breaking(
-      'OAS_FORMAT_CHANGED',
-      `Format changed from ${before.format ?? 'none'} to ${after.format ?? 'none'}.`,
-      where,
-    ))
+    if (before.node.format !== after.node.format) {
+      ctx.changes.push(breaking(
+        'OAS_FORMAT_CHANGED',
+        `Format changed from ${before.node.format ?? 'none'} to ${after.node.format ?? 'none'}.`,
+        where,
+      ))
+    }
+
+    diffProperties(before.node, after.node, direction, where, ctx, active)
+
+    const beforeItems = typeof before.node.items === 'object' ? before.node.items : undefined
+    const afterItems = typeof after.node.items === 'object' ? after.node.items : undefined
+    if (beforeItems !== undefined && afterItems !== undefined) {
+      diffSchema(beforeItems, afterItems, direction, `${where}[]`, ctx, active)
+    }
+
+    if (
+      direction === 'request' &&
+      before.node.additionalProperties !== false &&
+      after.node.additionalProperties === false
+    ) {
+      ctx.changes.push(breaking(
+        'OAS_ADDITIONAL_PROPERTIES_CLOSED',
+        'Extra properties are no longer accepted.',
+        where,
+      ))
+    }
+  } finally {
+    if (key !== null) active.delete(key)
+  }
+}
+
+/**
+ * What a schema says — the only thing a comparison should read.
+ *
+ * A converter is free to spell one schema several ways, and two of them used
+ * to diff as a change. zod 4.4 wrote a nullable string as
+ * `anyOf: [{ type: 'string' }, { type: 'null' }]` and zod 4.6 writes
+ * `type: ['string', 'null']`; the type set was read off `type` alone, so the
+ * first looked like a schema with no type and the second like one that had
+ * gained two, and a dependency bump that changed no byte on the wire failed the
+ * gate with two breaking changes. The other half was quieter and worse: nothing
+ * looked inside `anyOf` at all, so a field removed from
+ * `z.object({…}).nullable()` — the most common union there is — passed.
+ *
+ * So a union is read before it is compared:
+ *
+ *   - `$ref`s are followed, in the schema and in each branch, and nested unions
+ *     are flattened;
+ *   - `null` branches are set aside, and if **one** branch is left, the view is
+ *     that branch, nullable — its fields, items, enum and format compared exactly
+ *     as a plain schema's are, with `null` in its type set and, if it has one, in
+ *     its enum, which is what `enum: […, null]` would have said;
+ *   - if **several** are left, the view is the union of the types they admit,
+ *     and only that is compared (`union: true`).
+ *
+ * And `const: v` is `enum: [v]`, which is what it means.
+ *
+ * A union is only read this way when it is the whole schema. `type` or
+ * `properties` beside an `anyOf` is an intersection, and reading that as a
+ * union would be a guess; it is compared as it was, keyword by keyword.
+ */
+interface SchemaView {
+  /** The schema whose keywords are compared: a branch, for a nullable union. */
+  readonly node: OpenApiSchema
+  /** The types it admits; empty when it states none. */
+  readonly types: ReadonlySet<JsonType>
+  /** Several non-null branches: their types are compared, nothing else is. */
+  readonly union: boolean
+  /** The component this view was reached through — for the cycle guard. */
+  readonly ref: string | undefined
+}
+
+function viewOf(resolver: Resolver, raw: OpenApiSchema | undefined): SchemaView {
+  if (raw === undefined) return { node: {}, types: new Set(), union: false, ref: undefined }
+  const node = resolver.resolve(raw)
+  const branches = branchesOf(resolver, node, 0)
+  if (branches === null) return plainView(node, raw.$ref)
+
+  const others = branches.filter((b) => !isNullSchema(b.node))
+  const nullable = others.length < branches.length
+
+  if (others.length === 1) {
+    const only = others[0] as Branch
+    const inner = plainView(only.node, raw.$ref ?? only.ref)
+    if (!nullable) return inner
+    const enumWithNull = inner.node.enum === undefined || inner.node.enum.includes(null)
+      ? inner.node
+      : { ...inner.node, enum: [...inner.node.enum, null] }
+    return {
+      node: enumWithNull,
+      types: inner.types.size === 0 ? inner.types : new Set([...inner.types, 'null' as const]),
+      union: false,
+      ref: inner.ref,
+    }
   }
 
-  diffProperties(before, after, direction, where, ctx, seen)
+  // Every branch has to state its types for the union of them to mean anything:
+  // one unconstrained branch admits every type, and an empty set is how "not
+  // stated" is spelled everywhere else in this file.
+  const types = new Set<JsonType>()
+  let stated = branches.length > 0
+  for (const branch of branches) {
+    const own = typeSet(branch.node)
+    if (own.size === 0) stated = false
+    for (const type of own) types.add(type)
+  }
+  return { node: {}, types: stated ? types : new Set(), union: others.length > 1, ref: raw.$ref }
+}
 
-  const beforeItems = typeof before.items === 'object' ? before.items : undefined
-  const afterItems = typeof after.items === 'object' ? after.items : undefined
-  if (beforeItems !== undefined && afterItems !== undefined) {
-    diffSchema(beforeItems, afterItems, direction, `${where}[]`, ctx, seen)
+function plainView(node: OpenApiSchema, ref: string | undefined): SchemaView {
+  const spelled = node.const !== undefined && node.enum === undefined ? { ...node, enum: [node.const] } : node
+  return { node: spelled, types: typeSet(node), union: false, ref }
+}
+
+interface Branch {
+  readonly node: OpenApiSchema
+  readonly ref: string | undefined
+}
+
+/**
+ * A union's branches, resolved and flattened — or `null` when `node` is not a
+ * union standing alone. Depth-bounded, because two components can be unions of
+ * each other, and a schema that never bottoms out is compared as written.
+ */
+function branchesOf(resolver: Resolver, node: OpenApiSchema, depth: number): Branch[] | null {
+  const listed = node.anyOf ?? node.oneOf
+  if (!Array.isArray(listed) || listed.length === 0 || depth > 8) return null
+  if (
+    node.type !== undefined || node.properties !== undefined || node.items !== undefined ||
+    node.enum !== undefined || node.const !== undefined
+  ) {
+    return null
   }
 
-  if (direction === 'request' && before.additionalProperties !== false && after.additionalProperties === false) {
-    ctx.changes.push(breaking(
-      'OAS_ADDITIONAL_PROPERTIES_CLOSED',
-      'Extra properties are no longer accepted.',
-      where,
-    ))
+  const out: Branch[] = []
+  for (const entry of listed) {
+    const schema = asSchema(entry) as OpenApiSchema
+    const resolved = resolver.resolve(schema)
+    const nested = branchesOf(resolver, resolved, depth + 1)
+    if (nested === null) out.push({ node: resolved, ref: schema.$ref })
+    else out.push(...nested)
   }
+  return out
+}
+
+/** `{ type: 'null' }`, and its other spellings — `const: null`, `enum: [null]`. */
+function isNullSchema(node: OpenApiSchema): boolean {
+  const type = node.type
+  if (type === 'null') return true
+  if (Array.isArray(type) && type.length === 1 && type[0] === 'null') return true
+  if (type === undefined && node.const === null) return true
+  return type === undefined && node.enum !== undefined && node.enum.length === 1 && node.enum[0] === null
 }
 
 function diffProperties(
@@ -278,7 +428,7 @@ function diffProperties(
   direction: Direction,
   where: string,
   ctx: Context,
-  seen: Set<string>,
+  active: Set<string>,
 ): void {
   const beforeProps = before.properties
   const afterProps = after.properties
@@ -323,19 +473,17 @@ function diffProperties(
         : compatible('OAS_REQUEST_FIELD_NOW_OPTIONAL', `Request field "${name}" became optional.`, at))
     }
 
-    diffSchema(from, to, direction, at, ctx, seen)
+    diffSchema(from, to, direction, at, ctx, active)
   }
 }
 
 function diffTypes(
-  before: OpenApiSchema,
-  after: OpenApiSchema,
+  from: ReadonlySet<JsonType>,
+  to: ReadonlySet<JsonType>,
   direction: Direction,
   where: string,
   ctx: Context,
 ): void {
-  const from = typeSet(before)
-  const to = typeSet(after)
   if (from.size === 0 && to.size === 0) return
 
   const added = [...to].filter((t) => !from.has(t))

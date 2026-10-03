@@ -4,6 +4,7 @@ import {
 } from '../contracts/hook.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
+import { closest } from '../primitives/nearest.ts'
 
 /**
  * Hook resolution — rfcs/0001 §9.3.
@@ -235,38 +236,5 @@ export function diagnoseMisplaced(records: Iterable<HookRecord>): Diagnostic[] {
 
 const KNOWN_PHASES: ReadonlySet<string> = new Set<string>([...REQUEST_PHASES, ...APP_PHASES])
 const APP_PHASE_SET: ReadonlySet<string> = new Set<string>(APP_PHASES)
-
-/** The known phase within two edits of `input`, if any. */
-function closest(input: string, candidates: readonly string[]): string | null {
-  let best: string | null = null
-  let bestDistance = 3
-  const lower = input.toLowerCase()
-  for (const candidate of candidates) {
-    const d = distance(lower, candidate.toLowerCase())
-    if (d < bestDistance) {
-      best = candidate
-      bestDistance = d
-    }
-  }
-  return best
-}
-
-function distance(a: string, b: string): number {
-  const row = Array.from({ length: b.length + 1 }, (_, i) => i)
-  for (let i = 1; i <= a.length; i++) {
-    let previous = row[0] as number
-    row[0] = i
-    for (let j = 1; j <= b.length; j++) {
-      const current = row[j] as number
-      row[j] = Math.min(
-        (row[j] as number) + 1,
-        (row[j - 1] as number) + 1,
-        previous + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1),
-      )
-      previous = current
-    }
-  }
-  return row[b.length] as number
-}
 
 export type { PipelinePhase }

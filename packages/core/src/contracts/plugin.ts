@@ -7,6 +7,7 @@ import type { Phase } from './hook.ts'
 import type { AfterMiddleware, AroundMiddleware, PhaseMiddleware } from './middleware.ts'
 import type { RouteDefinition } from './route.ts'
 import type { AnySchema } from './standard-schema.ts'
+import type { UrlParams, UrlQuery } from './url.ts'
 
 /**
  * The plugin API — rfcs/0001 §10.
@@ -136,6 +137,16 @@ export interface Registrar {
   onBoot(fn: (graph: unknown) => void | Promise<void>): void
   /** Values other plugins can consume via `dependsOn`. */
   exportsOf(pluginName: string): Readonly<Record<string, unknown>> | undefined
+  /**
+   * The path of a named route — `app.url()`, for a plugin's handlers (§5.7).
+   *
+   * Route names belong to the application, so a plugin links to its own routes
+   * by the names it gave them and to the application's by theirs. Callable once
+   * the app is ready, which every request is; from `setup` it is
+   * `ZEN_APP_NOT_READY`, because the routes are not compiled until after every
+   * plugin has run.
+   */
+  url(name: string, params?: UrlParams, query?: UrlQuery): string
 }
 
 export type OptionsOf<P> = P extends Plugin<infer O, object> ? O : never

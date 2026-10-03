@@ -163,6 +163,14 @@ app.get('/boom', () => { throw new Error('secret internals') })
 app.get('/page', (ctx) => html`<p>${ctx.query['name'] ?? ''}</p><a href="${ctx.query['back'] ?? '/'}">back</a>`)
 app.get('/go', (ctx) => ctx.redirect(String(ctx.query['to'] ?? '/')))
 
+// §5.7 — a link the app builds to itself, followed over TCP. `inject()` hands
+// the router a string; here llhttp parses the request line first, so this is
+// where an encoding Node refused, or a target it rewrote, would show — and the
+// redirect is followed by `fetch`, the way a browser follows `Location`.
+app.get('/link/:name', { name: 'smoke.link' }, (ctx) => ({ name: ctx.params.name, query: ctx.query }))
+app.get('/tree/*path', { name: 'smoke.tree' }, (ctx) => ({ path: ctx.params.path }))
+app.get('/linked', (ctx) => ctx.redirect(app.url('smoke.link', { name: 'redirected here' }, { via: 'url()' }), 303))
+
 // §13.4 — content negotiation, over a real socket.
 //
 // `inject()` covers the matching. What it cannot cover is the thing that went
@@ -381,6 +389,16 @@ await check('GET /go (// is refused)', `/go?to=${encodeURIComponent('//evil.exam
 })
 await check('GET /go (no Location leaves)', `/go?to=${encodeURIComponent('/\\evil.example')}`, {
   status: 500, header: ['location', /^$/], init: { redirect: 'manual' },
+})
+const LINK_NAME = 'a b/c?d#e%f+g&é'
+await check('GET url() (§5.7, a hostile segment)', app.url('smoke.link', { name: LINK_NAME }, { q: 'x y+z', tag: ['1', '2'] }), {
+  status: 200, body: JSON.stringify({ name: LINK_NAME, query: { q: 'x y+z', tag: ['1', '2'] } }),
+})
+await check('GET url() (§5.7, a wildcard)', app.url('smoke.tree', { path: ['docs', 'a?b c.md'] }), {
+  status: 200, body: JSON.stringify({ path: 'docs/a?b c.md' }),
+})
+await check('GET /linked (§5.7, followed)', '/linked', {
+  status: 200, body: JSON.stringify({ name: 'redirected here', query: { via: 'url()' } }),
 })
 await check('GET /nope (404)', '/nope', { status: 404 })
 await check('POST / (405 + Allow)', '/', { status: 405, init: { method: 'POST' } })

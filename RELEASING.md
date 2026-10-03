@@ -93,14 +93,14 @@ is why the first release is published by hand. Once all six exist:
 ## Every release
 
 ```bash
-node scripts/version.ts 0.1.0-alpha.2     # every package and every internal pin
+node scripts/version.ts 0.1.0-alpha.3     # every package and every internal pin
 npm install                               # refresh package-lock.json
-# write the CHANGELOG.md entry: "## [0.1.0-alpha.2] — <date>"
+# write the CHANGELOG.md entry: "## [0.1.0-alpha.3] — <date>"
 npm run verify                            # typecheck, tests, smoke, API gate (Node 22 and the latest LTS)
 npm run controls                          # are the tests load-bearing?
 npm run check:pack                        # what ships, installed and run from the tarballs
-git commit -am "release: v0.1.0-alpha.2"
-git tag -a v0.1.0-alpha.2 -m v0.1.0-alpha.2     # annotated: --follow-tags pushes no other kind
+git commit -am "Release 0.1.0-alpha.3"
+git tag -a v0.1.0-alpha.3 -m v0.1.0-alpha.3     # annotated: --follow-tags pushes no other kind
 git push --follow-tags
 ```
 

@@ -22,6 +22,7 @@ export {
 export { parseDuration, formatDuration, type Duration } from './primitives/time.ts'
 export { parseDotenv, dotenvChain, type DotenvResult, type EnvEntry } from './primitives/dotenv.ts'
 export { generateRequestId } from './primitives/id.ts'
+export { closest, editDistance } from './primitives/nearest.ts'
 export { UrlReference, classifyReference, isLocalUrl, type ReferenceKind } from './primitives/url-reference.ts'
 
 // ── errors ──────────────────────────────────────────────────────────────────
@@ -112,6 +113,9 @@ export {
   compileRedirectPolicy, redirectRefusal, SAME_ORIGIN_ONLY,
   type RedirectOptions, type RedirectPolicy,
 } from './runtime/redirect.ts'
+
+// ── URL generation (§5.7) ───────────────────────────────────────────────────
+export { UrlTable, type UrlTableOptions } from './runtime/url.ts'
 export {
   finalize, encodeBody, attachSerializer, attachNegotiated, payloadOf, replacePayload, NO_PAYLOAD,
 } from './runtime/response-engine.ts'

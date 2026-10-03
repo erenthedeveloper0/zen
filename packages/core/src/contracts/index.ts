@@ -23,6 +23,7 @@ export type * from './route.ts'
 export type * from './router.ts'
 export type * from './slot.ts'
 export type * from './standard-schema.ts'
+export type * from './url.ts'
 
 export { DEFAULT_CAPABILITIES } from './capabilities.ts'
 export type { Capabilities } from './capabilities.ts'
