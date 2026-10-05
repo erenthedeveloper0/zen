@@ -203,7 +203,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 - **Server-sent events** — `ctx.sse()`, with heartbeats, backpressure, a bound on what a slow client can hold, and a final `shutdown` event on drain <!-- claim: sse -->
 - **File responses** — `ctx.file(path, { root })` with root confinement, `ETag`/`Last-Modified`, 304 revalidation and single-range 206 <!-- claim: files -->
 - **Process lifecycle** — `SIGTERM`/`SIGINT` run the graceful shutdown; an uncaught exception is logged and shuts down with exit code 1; `listen({ signal })` aborts into the same sequence <!-- claim: process-lifecycle -->
-- `inject()` in-process testing — including the peer address a request comes from; streaming responses; graceful shutdown, which releases singletons only after the server has stopped accepting <!-- claim: inject, graceful-shutdown -->
+- `inject()` in-process testing — including the peer address a request comes from, and a deadline that answers even when nothing else keeps the process alive; streaming responses; graceful shutdown, which releases singletons only after the server has stopped accepting <!-- claim: inject, graceful-shutdown -->
 - **Interpreted twins** for the pipeline, context, router and serializer, verified by differential suites <!-- claim: twins -->
 
 Every bullet above carries an id that `scripts/claims.ts` maps to a probe against the
@@ -932,9 +932,9 @@ recorded as a gap rather than as a feature.
 git clone https://github.com/erenthedeveloper0/zen.git && cd zen
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 1,245 tests
+npm test                           # 1,248 tests
 node scripts/smoke.ts              # 80 checks over a real socket
-node scripts/negative-controls.ts  # break 125 things on purpose; every suite must notice
+node scripts/negative-controls.ts  # break 126 things on purpose; every suite must notice
 node scripts/claims.ts             # every "Working today" bullet, probed against the build
 node scripts/check-strata.ts       # no import in core points up a stratum
 node scripts/check-regex.ts        # no regex in framework source can backtrack without bound
@@ -978,7 +978,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `di.test.ts` | Lifetimes, request scoping, cycle + captive-dependency detection, disposal order — and request-scoped services released at the end of every request, the failed ones included; a service implementing `Symbol.dispose` or `Symbol.asyncDispose` released through it, and an explicit `dispose` winning |
 | `serializer.test.ts` | Field filtering, escapes, number/date policy, unions, `$ref`, strict mode, boot diagnostics |
 | `hooks.test.ts` | All nine pipeline phases in lifecycle order, three-scope resolution and the mirror, short-circuits, the error path, phase availability, and that a hookless route generates no hook code |
-| `timeouts.test.ts` | Budget resolution across the scope chain, `timeout: false`, the arm answering on time, 408-vs-504, `onTimeout` and its stage, the pipeline stopping at the boundary, one-way header propagation, and that an unbounded route generates no deadline code |
+| `timeouts.test.ts` | Budget resolution across the scope chain, `timeout: false`, the arm answering on time, 408-vs-504, `onTimeout` and its stage, the pipeline stopping at the boundary, one-way header propagation, that an unbounded route generates no deadline code — and, in a child process with nothing else alive, that an `inject()` only its deadline can answer is answered before the process exits |
 | `health.test.ts` | That liveness runs no dependency probes and readiness runs no liveness ones, the `starting → live → draining → stopped` transitions, per-check budgets and cancellation, single-flight under 200 concurrent probes, `critical: false`, withheld error text, a missing required check refused at boot, and that `close()` reports `draining` **before** the server stops accepting |
 | `differential.test.ts` | Compiled pipeline ≡ interpreted pipeline over every step pair + 300 random chains; compiled hooks ≡ the twin over 200 random hook plans; and deadlines ≡ the twin over 200 chains where the client leaves at a random position — agreeing on *which* boundary abandoned it, not just that one did. All three assert their own coverage, so an agreement that ran nothing cannot pass |
 | `serializer-differential.test.ts` | Compiled ≡ walking serializer over 2 500 generated schema/value pairs, plus "no undeclared key reached the wire" |
@@ -1014,7 +1014,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge, and the templates HTML and SVG would read differently refused. Then property suites judged by the WHATWG URL parser, a grammar for escaped text, and **parse5** — a spec-conformant HTML parser that parses 2,000 random pages, fragments nested in fragments, and reports where every value landed. None shares code with the tag |
 | `redirect.test.ts` | Paths, queries and fragments sent; every spelling that has slipped past a regex refused (`//`, `/\`, a tab, a leading space, `https:host`, userinfo); the allowlist's look-alikes refused; a malformed allowlist entry a boot error with the spelling that would match — and a real differential: the reference scanner against the WHATWG URL parser over 2,000 random targets, with its coverage asserted |
 | `url.test.ts` | A value encoded as one segment whatever it holds; a number, a bigint and a `Date` written the way their routes read them back; `.`, `..`, empty values, objects and lone surrogates refused; each way one route outranks another — a static segment, a typed parameter, anything over a wildcard — refused with the winner named; the query written in the route's own list style; reachable from a collection and a plugin. Then a property suite: 2,000 links from hostile values over a table of shadowing traps, put through the WHATWG URL parser the way a browser treats an `href` and sent to the app, which must answer on the named route with the values given — coverage asserted per kind of refusal |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. A hundred and twenty-five known defects patched in one at a time; each must make its named suite — or, for the strata, regex and claims checks, its script — **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. A hundred and twenty-six known defects patched in one at a time; each must make its named suite — or, for the strata, regex and claims checks, its script — **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">

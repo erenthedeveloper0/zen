@@ -33,6 +33,7 @@
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -592,7 +593,17 @@ const CLAIMS: Readonly<Record<string, Probe>> = {
     const reply = (await a.inject('GET', '/stream')).reply
     let streamed = ''
     for await (const chunk of reply.body.value) streamed += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk)
-    return verdict(ip === '203.0.113.9' && reply.body.kind === 'stream' && streamed === 'ab', `remote ip=${ip}, ${reply.body.kind} body=${streamed}`)
+    // A script with nothing else alive, awaiting an inject() that only its
+    // deadline can answer — the case a socket's open handle used to cover.
+    const idle = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      const { zen, NoopLogger } = await import('@erenthedeveloper0/zen')
+      const app = zen({ logger: new NoopLogger(), lifecycle: false, env: {} })
+      app.get('/slow', { timeout: '20ms' }, (ctx) => new Promise((r) => ctx.signal.addEventListener('abort', () => r('late'))))
+      console.log((await app.inject('GET', '/slow')).status)
+    `], { cwd: ROOT, encoding: 'utf8', timeout: 20_000 })
+    const answered = idle.status === 0 && idle.stdout.trim() === '504'
+    return verdict(ip === '203.0.113.9' && reply.body.kind === 'stream' && streamed === 'ab' && answered,
+      `remote ip=${ip}, ${reply.body.kind} body=${streamed}, idle script awaiting a deadline → exit ${idle.status}, printed ${JSON.stringify(idle.stdout.trim())}`)
   },
 
   'graceful-shutdown': async () => {
@@ -780,12 +791,6 @@ async function run(probe: Probe): Promise<Verdict> {
   }
 }
 
-// A request's deadline timer is unref'd on purpose — a real request has its
-// connection holding the event loop open. `inject()` has none, so a probe whose
-// request waits only on its deadline would let Node decide there is nothing
-// left to do and exit mid-run. The ledger holds the loop open itself.
-const keepAlive = setInterval(() => {}, 60_000)
-
 const only = process.argv[2]
 const selected = (table: Readonly<Record<string, Probe>>) =>
   Object.entries(table).filter(([id]) => only === undefined || id.includes(only))
@@ -805,7 +810,6 @@ for (const [id, probe] of selected(GAPS)) {
   else failures.push(`gap "${id}" (${(marked.gap.get(id) ?? []).join(', ')}) has closed: ${result.observed}\n    fix: it is built now — make it a claim, and correct the sentences that call it missing`)
 }
 
-clearInterval(keepAlive)
 console.log(`\n${held}/${selected(CLAIMS).length} claims hold; ${open}/${selected(GAPS).length} admitted gaps still open.`)
 if (failures.length > 0) {
   console.error(`\n${failures.length} problem${failures.length === 1 ? '' : 's'}:\n\n${failures.join('\n\n')}`)

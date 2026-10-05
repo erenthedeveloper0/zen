@@ -1095,6 +1095,14 @@ const CONTROLS: readonly Control[] = [
     caughtBy: '"listen, SSE, a deadline kept and one blown, a file, a health probe, close() — and nothing is left open"',
   },
   {
+    name: "arm an injected request's deadline like a socket's, so an idle script exits before it answers",
+    file: `${CORE}/api/zen.ts`,
+    find: '    return new Deadline(budget, conn.signal, conn.inProcess === true)',
+    replace: '    return new Deadline(budget, conn.signal, conn.inProcess === false)',
+    suite: 'packages/core/test/timeouts.test.ts',
+    caughtBy: `"a route's deadline answers an inject() in an otherwise idle script"`,
+  },
+  {
     name: 'regress a documented claim — the ledger, not only its unit suite, must notice',
     file: `${CORE}/errors/http-errors.ts`,
     find: "export const ServiceUnavailable = http(503, Codes.SERVICE_UNAVAILABLE, 'Service Unavailable')",

@@ -106,6 +106,10 @@ export class Deadline {
    * decides there is nothing left to do and exits, so the caller gets no report
    * and no error either. Anything awaiting the expiry rather than merely
    * racing it wants `true`.
+   *
+   * So does a request with no socket: `app.inject()` dispatches in process,
+   * and a handler waiting on `ctx.signal` leaves its deadline as the only
+   * thing that will ever answer. The dispatcher passes `conn.inProcess`.
    */
   constructor(budgetMs: number, connSignal: AbortSignal, keepAlive = false) {
     const controller = new AbortController()
@@ -160,7 +164,9 @@ export class Deadline {
 
     // A deadline must not keep a process alive on its own. If everything else
     // has finished, an in-flight request's timer is not a reason to stay up —
-    // graceful shutdown (§4.5) is, and it has its own accounting.
+    // graceful shutdown (§4.5) is, and it has its own accounting. The
+    // exceptions are the callers awaiting the expiry with nothing else alive:
+    // a health probe, and a request `inject()` dispatched in process.
     if (!keepAlive) this.#timer.unref?.()
 
     if (connSignal.aborted) this.#onConnAbort()

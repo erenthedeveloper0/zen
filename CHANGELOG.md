@@ -68,6 +68,9 @@ the build until the docs stop calling it missing.
 - `inject(method, url, { remote })` — the peer a request comes from, so
   `ctx.ip`-keyed behaviour and `trustProxy` hop counting are testable in
   process. `127.0.0.1` unless given.
+- `Connection.inProcess` — set by `inject()`, left unset by an adapter: a
+  request with no socket behind it, whose deadline must hold the event loop
+  open itself (below).
 - **`@erenthedeveloper0/zen-openapi` reads `graph.meta`**: a plugin declares
   its security schemes with `app.meta('openapi.securitySchemes', { … })` and
   they are merged into `components.securitySchemes`, the application's own
@@ -146,6 +149,14 @@ the build until the docs stop calling it missing.
 - `@erenthedeveloper0/zen-core`'s DI container imported from its own `api/`
   layer, the one upward import between strata the rule did not excuse; the slot
   table moved down to `registry/`.
+- **An `inject()` that only its deadline could answer let an idle process exit
+  before the deadline did.** A request's deadline timer is unref'd, because a
+  socket holds the event loop open for a real one; `inject()` has no socket, so
+  a script awaiting an `inject()` whose handler waited on `ctx.signal` simply
+  ended — no status, no error, exit code 13. A test runner keeps the loop alive
+  itself, which is why no suite had seen it. An in-process request's deadline
+  now holds the loop open, as a health probe's does; an adapter's requests are
+  unchanged.
 
 ### Documentation
 
@@ -188,7 +199,7 @@ the build until the docs stop calling it missing.
   `when` turned off, a route without `use` beside one with it, and the
   `writeOnly` check emitting nothing — and the costs this release put on the
   request path.
-- Thirty-six negative controls, 125 in all; one control a refactor had made
+- Thirty-seven negative controls, 126 in all; one control a refactor had made
   stale is updated, and the harness runs a script as a control's suite.
 
 ## [0.1.0-alpha.3] — 2026-10-03

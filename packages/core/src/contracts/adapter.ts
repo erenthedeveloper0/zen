@@ -36,6 +36,15 @@ export interface Connection {
   readonly signal: AbortSignal
   send(reply: Reply): Promise<void> | void
   readonly native: unknown
+  /**
+   * `true` for a request with no transport behind it — `app.inject()` — so
+   * nothing but the request itself keeps the process alive while it is in
+   * flight (§4.4). An adapter leaves it unset: its socket holds the event loop
+   * open, which is why a request's deadline timer does not. An in-process
+   * request's must, or an otherwise idle script awaiting an `inject()` whose
+   * handler waits on `ctx.signal` exits before the deadline can answer it.
+   */
+  readonly inProcess?: boolean | undefined
 }
 
 export type Dispatch = (raw: RawRequest, conn: Connection) => Promise<void> | void

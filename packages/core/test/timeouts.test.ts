@@ -5,6 +5,8 @@ import {
   type Reply, type TimeoutInfo,
 } from '@erenthedeveloper0/zen-core'
 import { makeApp, uniqueName } from './helpers.ts'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 /**
  * Request deadlines — rfcs/0001 §4.4, §9.2 phase 12, §9.7.
@@ -704,5 +706,55 @@ describe('explainRoute (§8.5)', () => {
     const record = app.graph().routes[0]
     assert.ok(record !== undefined)
     assert.ok(!steps(record).some((s) => s.kind === 'deadline'))
+  })
+})
+
+describe('an in-process request keeps an idle process alive until its deadline answers (§4.4)', () => {
+  /**
+   * The defect only exists in a process with nothing else alive — which a test
+   * runner never is, so it is reproduced in a child that does exactly what a
+   * script does: build an app, `await app.inject()` a route whose handler waits
+   * on `ctx.signal`, print the status. A request's deadline timer is unref'd,
+   * because a socket holds the loop open for a real one; `inject()` has no
+   * socket, so before the fix Node found nothing left to do and exited — no
+   * status printed, no error thrown, exit code 13 — before the deadline could
+   * answer.
+   */
+  const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
+  const run = (route: string): { status: number | null; stdout: string; stderr: string } => {
+    const script = `
+      import { createApp, NoopLogger } from '@erenthedeveloper0/zen-core'
+      import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
+      const pathParser = { parse: (p) => { const r = parsePath(p); return { path: r.path, segments: r.segments } } }
+      const app = createApp({ router: new ZenRouter(), pathParser, logger: new NoopLogger() })
+      const waitForAbort = (ctx) => new Promise((resolve) => ctx.signal.addEventListener('abort', () => resolve('late')))
+      app.get('/slow', { timeout: '30ms' }, waitForAbort)
+      app.collection('/bounded', { timeout: '30ms' }, (c) => { c.get('/', waitForAbort) })
+      const res = await app.inject('GET', ${JSON.stringify(route)})
+      console.log(res.status)
+    `
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { cwd: repoRoot, encoding: 'utf8', timeout: 20_000 })
+    return { status: child.status, stdout: child.stdout.trim(), stderr: child.stderr }
+  }
+
+  test("a route's deadline answers an inject() in an otherwise idle script", () => {
+    const result = run('/slow')
+    assert.equal(result.status, 0, `the script exited ${result.status} before the deadline answered:\n${result.stderr}`)
+    assert.equal(result.stdout, '504')
+  })
+
+  test("…and so does a deadline the route inherits from its collection", () => {
+    const result = run('/bounded')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout, '504')
+  })
+
+  test('a deadline never outlives its request: the script exits as soon as it is answered', () => {
+    const started = performance.now()
+    const result = run('/slow')
+    assert.equal(result.status, 0, result.stderr)
+    // The 30 ms budget plus process start-up — far from the seconds a timer
+    // left armed after its request would hold the process for.
+    assert.ok(performance.now() - started < 10_000)
   })
 })

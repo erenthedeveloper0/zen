@@ -1809,11 +1809,17 @@ export class ZenApp<X = {}> {
    *
    * The budget is the route's, possibly shortened by an inbound header. It can
    * only ever be shortened — see `budgetFor`.
+   *
+   * An in-process request's timer holds the event loop open; a socket's does
+   * not, because the socket already does (`Connection.inProcess`). Before
+   * `0.1.0-alpha.4` neither did, so an `inject()` whose handler waited on
+   * `ctx.signal` in an otherwise idle script let Node exit before the deadline
+   * answered — no reply, no error, and exit code 13.
    */
   #arm(routeMs: number, raw: RawRequest, conn: Connection): Deadline | null {
     if (routeMs <= 0) return null
     const budget = budgetFor(routeMs, this.#timeoutHeader, (name) => raw.header(name as never))
-    return new Deadline(budget, conn.signal)
+    return new Deadline(budget, conn.signal, conn.inProcess === true)
   }
 
   /**
@@ -2057,6 +2063,9 @@ export class ZenApp<X = {}> {
       signal: init.signal ?? new AbortController().signal,
       send: (reply) => { captured = reply },
       native: null,
+      // No socket holds the process open for this request, so its deadline
+      // has to (§4.4) — the reason a health probe's arm does too.
+      inProcess: true,
     }
 
     await this.dispatch(raw, conn)
