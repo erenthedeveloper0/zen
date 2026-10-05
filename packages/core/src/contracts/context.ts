@@ -22,7 +22,11 @@ export interface RouteInfo {
   readonly meta: ReadonlyMap<string, unknown>
 }
 
-/** Staged response metadata. Applied at egress; throws once the reply is sent. */
+/**
+ * Staged response metadata, applied at egress (§13.6). Once the reply has gone
+ * to egress every method throws `ZEN_REPLY_SENT` (§7.3): a header written after
+ * that could never reach the client.
+ */
 export interface ReplyBuilder {
   status(code: StatusCode): this
   header(name: string, value: HeaderValue): this
@@ -54,7 +58,16 @@ export interface BaseContext<S extends RouteSchema = RouteSchema, P extends stri
   readonly raw: RawRequest
 
   // ── Connection ────────────────────────────────────────────────────────────
+  /** The client's address — `X-Forwarded-For` read only as far as `trustProxy` says (§19.4). */
   readonly ip: string
+  /**
+   * The addresses the request came through, client first and this process's
+   * peer last, as far as `trustProxy` believes them. `ips[0]` is `ip`. Built on
+   * each read: keep it in a local.
+   */
+  readonly ips: readonly string[]
+  /** `'https'` or `'http'` — `secure`, as a scheme, trusting a proxy exactly as `secure` does. */
+  readonly protocol: 'http' | 'https'
   readonly secure: boolean
   readonly host: string
   /** Aborts on client disconnect *and* on the route's deadline (§4.4). */

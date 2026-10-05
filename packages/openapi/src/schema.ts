@@ -354,12 +354,26 @@ class Projector {
 
   #object(node: JsonSchema, out: Record<string, unknown>, seen: ReadonlySet<string>, depth: number): void {
     const properties = node.properties
+    // §13.3, §29.3 — a response never carries a `writeOnly` field ("may be
+    // sent, never returned"), so the response side of the document does not
+    // describe one, strict mode or not. `ready()` refuses such a response
+    // schema outright (`ZEN_RESPONSE_WRITE_ONLY`); this is the document
+    // agreeing with that rather than relying on it. Requests keep theirs: it is
+    // exactly what a request schema is for.
+    const withheld = new Set<string>()
     if (properties !== undefined) {
       const projected: Record<string, OpenApiSchema> = {}
-      for (const key of Object.keys(properties)) projected[key] = this.walk(properties[key], seen, depth + 1)
+      for (const key of Object.keys(properties)) {
+        if (this.#opts.closed && this.#writeOnly(properties[key])) {
+          withheld.add(key)
+          continue
+        }
+        projected[key] = this.walk(properties[key], seen, depth + 1)
+      }
       out['properties'] = projected
     }
-    if (node.required !== undefined && node.required.length > 0) out['required'] = [...node.required]
+    const required = (node.required ?? []).filter((key) => !withheld.has(key))
+    if (required.length > 0) out['required'] = required
 
     const additional = node.additionalProperties
     if (additional === undefined) {
@@ -372,6 +386,15 @@ class Projector {
     } else {
       out['additionalProperties'] = this.walk(additional, seen, depth + 1)
     }
+  }
+
+  /** `writeOnly: true` on the property, or on the definition it refers to. */
+  #writeOnly(node: JsonSchemaNode | undefined): boolean {
+    if (typeof node !== 'object' || node === null) return false
+    if (node['writeOnly'] === true) return true
+    if (typeof node.$ref !== 'string') return false
+    const target = resolveRef(this.#root, node.$ref)
+    return target !== null && target['writeOnly'] === true
   }
 
   #array(node: JsonSchema, out: Record<string, unknown>, seen: ReadonlySet<string>, depth: number): void {

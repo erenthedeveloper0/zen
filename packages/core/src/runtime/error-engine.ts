@@ -2,6 +2,7 @@ import type { Reply } from '../contracts/reply.ts'
 import type { Logger } from '../contracts/logger.ts'
 import { ZenError } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
+import { ServiceUnavailable } from '../errors/http-errors.ts'
 import { MutableReply } from './reply.ts'
 
 export type ErrorMapper = (error: unknown, ctx: unknown) => unknown
@@ -48,7 +49,7 @@ export class ErrorEngine {
       resolved = error
     }
 
-    const zen = classify(resolved)
+    const zen = classify(resolved, ctx.signal)
     this.#log(zen, ctx)
 
     try {
@@ -126,16 +127,24 @@ export interface ErrorContextInfo {
   readonly method: string
   readonly path: string
   readonly route: string | null
+  /**
+   * The request's own signal — `ctx.signal` — so an abort can be told apart
+   * from one the application caused (`classify`). Absent outside a request.
+   */
+  readonly signal?: AbortSignal | undefined
 }
 
-/** Unknown throwables become an internal error that never exposes its message. */
-export function classify(error: unknown): ZenError {
+/**
+ * Unknown throwables become an internal error that never exposes its message.
+ *
+ * `signal` is the request's own: an abort is only the *request's* when the
+ * error is that signal's reason (or carries it as its `cause`).
+ */
+export function classify(error: unknown, signal?: AbortSignal): ZenError {
   if (error instanceof ZenError) return error
 
   if (error instanceof Error) {
-    if (error.name === 'AbortError') {
-      return new ZenError(Codes.TIMEOUT, 'Request aborted', { status: 408, expose: true, cause: error })
-    }
+    if (error.name === 'AbortError' || error.name === 'TimeoutError') return classifyAbort(error, signal)
     return new ZenError(Codes.INTERNAL, error.message, { status: 500, expose: false, cause: error })
   }
 
@@ -144,6 +153,35 @@ export function classify(error: unknown): ZenError {
     expose: false,
     meta: { thrown: typeof error, value: safeInspect(error) },
   })
+}
+
+/**
+ * Whose abort was it — rfcs/0001 §12.4.
+ *
+ * Every `AbortError` used to become `ZEN_TIMEOUT`, a 408 that tells the client
+ * *it* was slow to send its request (RFC 9110 §15.5.9). The request's own
+ * aborts — its deadline, its client leaving — mostly never get here: the
+ * dispatcher answers a blown deadline through `EXPIRED`, and a deadline's
+ * signal aborts with a `ZEN_TIMEOUT` that is already a `ZenError`. What does
+ * get here is an abort the *application* caused, such as its own
+ * `AbortController` around an upstream call, and that was nobody's slowness
+ * but ours. So:
+ *
+ *   - the request's own signal, reached through `fetch(url, { signal:
+ *     ctx.signal })` and the like — the error *is* `ctx.signal.reason`, or
+ *     carries it as its `cause` — keeps the old mapping;
+ *   - a `TimeoutError`, `AbortSignal.timeout`'s, or an `AbortError` caused by
+ *     one, is an upstream that did not answer: `ZEN_SERVICE_UNAVAILABLE`, 503;
+ *   - any other abort is the application's, and unclassified: `ZEN_INTERNAL`.
+ */
+function classifyAbort(error: Error, signal: AbortSignal | undefined): ZenError {
+  if (signal !== undefined && signal.aborted && (error === signal.reason || error.cause === signal.reason)) {
+    return new ZenError(Codes.TIMEOUT, 'Request aborted', { status: 408, expose: true, cause: error })
+  }
+  if (error.name === 'TimeoutError' || (error.cause instanceof Error && error.cause.name === 'TimeoutError')) {
+    return new ServiceUnavailable('An upstream call did not answer in time.', { cause: error, retryable: true })
+  }
+  return new ZenError(Codes.INTERNAL, error.message, { status: 500, expose: false, cause: error })
 }
 
 function safeInspect(value: unknown): string {

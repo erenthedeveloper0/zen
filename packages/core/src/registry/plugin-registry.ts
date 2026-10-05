@@ -62,10 +62,12 @@ export function resolvePlugins(
     }
 
     // Capability requirements: fail at boot with a clear message rather than at
-    // runtime with `fs is not defined`.
+    // runtime with `fs is not defined`. `true` asks for a capability; a string
+    // asks for that exact one — `websocket: 'native'` — and used to be read by
+    // nothing, which made `requires` true for exactly half its vocabulary.
     for (const [key, required] of Object.entries(entry.plugin.requires ?? {})) {
       const actual = (caps as unknown as Record<string, unknown>)[key]
-      if (required === true && actual !== true) {
+      if ((required === true || typeof required === 'string') && actual !== required) {
         diagnostics.push({
           severity: 'error',
           code: Codes.CAPABILITY_UNAVAILABLE,

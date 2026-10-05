@@ -705,3 +705,111 @@ describe('zero cost when it is not used (§9.4)', () => {
     assert.equal(emitted.includes('attachSerializer'), false, 'one binding, not both')
   })
 })
+
+describe('a field its own schema says is never returned is never returned (§13.3, §16.2)', () => {
+  const Account = jsonSchema<{ email: string; password: string }>({
+    type: 'object',
+    properties: { email: { type: 'string' }, password: { type: 'string', writeOnly: true } },
+    required: ['email', 'password'],
+  })
+
+  async function boot(register: (app: ReturnType<typeof makeApp>) => void, logger?: Parameters<typeof makeApp>[0]['logger']) {
+    const app = makeApp(logger === undefined ? {} : { logger })
+    register(app)
+    try {
+      await app.ready()
+      return { app, diagnostics: [] as Array<{ code: string; message: string; locations?: readonly string[] }> }
+    } catch (error) {
+      return { app, diagnostics: (error as { diagnostics: Array<{ code: string; message: string; locations?: readonly string[] }> }).diagnostics }
+    }
+  }
+
+  test('writeOnly in a response schema is a boot error naming route, status, media type and path', async () => {
+    const { diagnostics } = await boot((app) => {
+      app.get('/me', { response: { 200: Account } }, () => null as never)
+    })
+    assert.deepEqual(diagnostics.map((d) => d.code), ['ZEN_RESPONSE_WRITE_ONLY'])
+    assert.deepEqual(diagnostics[0]?.locations, ['GET /me → 200 → application/json → $.password'])
+  })
+
+  test('…however deep, through arrays, records and every branch of a union', async () => {
+    const deep = jsonSchema({
+      type: 'object',
+      properties: {
+        users: { type: 'array', items: { anyOf: [{ type: 'null' }, { $ref: '#/$defs/User' }] } },
+        byId: { type: 'object', additionalProperties: { $ref: '#/$defs/User' } },
+      },
+      $defs: { User: { type: 'object', properties: { token: { type: 'string', writeOnly: true } } } },
+    })
+    const { diagnostics } = await boot((app) => {
+      app.get('/team', { response: { 200: deep } }, () => null as never)
+    })
+    assert.deepEqual(
+      diagnostics.flatMap((d) => d.locations ?? []).sort(),
+      ['GET /team → 200 → application/json → $.byId[*].token', 'GET /team → 200 → application/json → $.users[].token'],
+    )
+  })
+
+  test('a recursive schema is walked to where it repeats, and the walk ends', async () => {
+    const tree = jsonSchema({
+      $ref: '#/$defs/Node',
+      $defs: { Node: { type: 'object', properties: { children: { type: 'array', items: { $ref: '#/$defs/Node' } }, secret: { type: 'string', writeOnly: true } } } },
+    })
+    const { diagnostics } = await boot((app) => {
+      app.get('/tree', { response: { 200: tree } }, () => null as never)
+    })
+    // Once: the field is one place in the schema, however many levels of the
+    // tree repeat it, and fixing it there fixes every level.
+    assert.deepEqual(diagnostics.flatMap((d) => d.locations ?? []), ['GET /tree → 200 → application/json → $.secret'])
+  })
+
+  test('every negotiated representation is checked, and a schema handed to an encoder too (§13.4.4)', async () => {
+    const { diagnostics } = await boot((app) => {
+      const AccountRows = jsonSchema({
+        type: 'array',
+        items: { type: 'object', properties: { email: { type: 'string' }, password: { type: 'string', writeOnly: true } } },
+      })
+      app.get('/export', { response: { 200: { 'application/json': Rows, 'text/csv': AccountRows } } }, () => [] as never)
+    })
+    assert.deepEqual(diagnostics.map((d) => d.code), ['ZEN_RESPONSE_WRITE_ONLY'])
+    assert.match(diagnostics[0]?.locations?.[0] ?? '', /→ text\/csv → \$\[\]\.password$/)
+  })
+
+  test("format: 'password' is a warning, and the route still boots and negotiates", async () => {
+    const warned: string[] = []
+    const noop = () => {}
+    const logger = {
+      level: 'warn' as const,
+      child() { return logger },
+      trace: noop, debug: noop, info: noop, error: noop, fatal: noop,
+      warn: (_obj: unknown, msg?: string) => { warned.push(msg ?? '') },
+    }
+    const Hashed = jsonSchema({ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, hash: { type: 'string', format: 'password' } } } })
+    const { app, diagnostics } = await boot((a) => {
+      a.get('/hashes', { response: { 200: { 'application/json': Hashed, 'text/csv': Hashed } } }, () => [{ email: 'a@x', hash: 'h' }] as never)
+    }, logger)
+    assert.deepEqual(diagnostics, [])
+    assert.ok(warned.some((w) => /format: 'password'/.test(w)), warned.join('\n'))
+    // A warning used to drop the negotiation plan along with errors, so the
+    // route answered JSON whatever was asked. It keeps its representations.
+    const csv = await app.inject('GET', '/hashes', { headers: { accept: 'text/csv' } })
+    assert.equal(csv.status, 200)
+    assert.match(csv.header('content-type') ?? '', /^text\/csv/)
+  })
+
+  test('a request schema keeps its writeOnly field — that is what a request schema is for', async () => {
+    const Signup = shaped({
+      type: 'object',
+      properties: { email: { type: 'string' }, password: { type: 'string', writeOnly: true } },
+      required: ['email', 'password'],
+    })
+    const Public = jsonSchema<{ email: string }>({ type: 'object', properties: { email: { type: 'string' } }, required: ['email'] })
+    const { app, diagnostics } = await boot((a) => {
+      a.post('/signup', { body: Signup, response: { 201: Public } }, (ctx) => ctx.json({ email: (ctx.body as { email: string }).email }, { status: 201 }) as never)
+    })
+    assert.deepEqual(diagnostics, [])
+    const res = await app.inject('POST', '/signup', { body: { email: 'a@x', password: 'hunter2' } })
+    assert.equal(res.status, 201)
+    assert.deepEqual(res.json(), { email: 'a@x' })
+  })
+})

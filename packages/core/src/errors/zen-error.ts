@@ -184,6 +184,9 @@ export interface Diagnostic {
 }
 
 function defaultTitle(status: number): string {
+  // A 503 says "not now", and its own code says so (`ZEN_SERVICE_UNAVAILABLE`);
+  // titling it "Internal Server Error" would contradict the code beside it.
+  if (status === 503) return 'Service Unavailable'
   if (status >= 500) return 'Internal Server Error'
   if (status === 404) return 'Not Found'
   if (status === 403) return 'Forbidden'

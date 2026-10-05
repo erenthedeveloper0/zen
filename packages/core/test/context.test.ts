@@ -8,7 +8,7 @@ import {
   parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply,
   type RawRequest, type ContextEnv,
 } from '@erenthedeveloper0/zen-core'
-import { silentLogger, uniqueName } from './helpers.ts'
+import { makeApp, silentLogger, uniqueName } from './helpers.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -82,7 +82,9 @@ describe('differential: compiled context ≡ PlainContext', () => {
           cookies: { ...ctx.cookies as object },
           host: ctx.host,
           secure: ctx.secure,
+          protocol: ctx.protocol,
           ip: ctx.ip,
+          ips: ctx.ips,
           params: ctx.params,
           url: ctx.url.href,
         })
@@ -135,6 +137,8 @@ describe('differential: compiled context ≡ PlainContext', () => {
       const ctx = new Klass(rawRequest('/x', { host: 'exa mple' }), null, {}, makeEnv(), new AbortController().signal)
       assert.throws(() => ctx.url, (error: unknown) => {
         assert.equal((error as { status?: number }).status, 400)
+        // Not ZEN_BODY_INVALID: the body was never read.
+        assert.equal((error as { code?: string }).code, 'ZEN_BAD_REQUEST')
         return true
       })
     }
@@ -406,5 +410,179 @@ describe('trustProxy as a hop count (§19.4)', () => {
     assert.equal(secure(false), false)
     assert.equal(secure(1), true)
     assert.equal(secure(true), true)
+  })
+})
+
+describe('ctx.ips and ctx.protocol (§7.2, §19.4)', () => {
+  const headers = { 'x-forwarded-for': 'spoofed, 203.0.113.7', 'x-forwarded-proto': 'https' }
+  const contextWith = (trustProxy: boolean | number, h: Record<string, string> = headers) =>
+    new PlainContext(rawRequest('/', h), null, {}, makeEnv(trustProxy), 0, new AbortController().signal)
+
+  test('with no trust, nothing a client wrote is believed: the peer alone, over http', () => {
+    const ctx = contextWith(false)
+    assert.deepEqual(ctx.ips, ['10.0.0.1'])
+    assert.equal(ctx.protocol, 'http')
+  })
+
+  test('one trusted hop: the address the load balancer saw, then the balancer itself', () => {
+    assert.deepEqual(contextWith(1).ips, ['203.0.113.7', '10.0.0.1'])
+  })
+
+  test('`true` believes the whole chain, client first', () => {
+    assert.deepEqual(contextWith(true).ips, ['spoofed', '203.0.113.7', '10.0.0.1'])
+  })
+
+  test('ips[0] is ctx.ip under every trust setting', () => {
+    for (const trust of [false, 0, 1, 2, 9, true]) {
+      const ctx = contextWith(trust)
+      assert.equal(ctx.ips[0], ctx.ip, `trustProxy=${String(trust)}`)
+    }
+  })
+
+  test('protocol follows secure exactly', () => {
+    for (const trust of [false, 1, true]) {
+      const ctx = contextWith(trust)
+      assert.equal(ctx.protocol, ctx.secure ? 'https' : 'http')
+    }
+    assert.equal(contextWith(1).protocol, 'https')
+  })
+
+  test('getters only — neither twin gains a field (I2)', () => {
+    const Ctx = compileContext({ decorations: [], slotCount: SLOT_COUNT, codegen: new CodeGen({ caps: DEFAULT_CAPABILITIES }) })
+    for (const ctx of [contextWith(1), new Ctx(rawRequest('/', headers), null, {}, makeEnv(1), new AbortController().signal)]) {
+      assert.equal(Object.hasOwn(ctx, 'ips'), false)
+      assert.equal(Object.hasOwn(ctx, 'protocol'), false)
+    }
+  })
+})
+
+describe('the reply builder throws once the reply is sent (§7.3)', () => {
+  test('a ctx.res kept from the handler refuses every write after egress', async () => {
+    const app = makeApp()
+    let kept: { res: { header(n: string, v: string): unknown; status(c: number): unknown; cookie(n: string, v: string): unknown } } | null = null
+    let res: { header(n: string, v: string): unknown } | null = null
+    app.get('/', (ctx) => {
+      kept = ctx as never
+      res = ctx.res
+      ctx.res.header('x-before', '1')
+      return 'ok'
+    })
+    const reply = await app.inject('GET', '/')
+    assert.equal(reply.headers['x-before'], '1')
+
+    // Both shapes: the builder obtained before egress, and ctx.res re-read after.
+    for (const write of [
+      () => res!.header('x-late', '1'),
+      () => kept!.res.header('x-late', '1'),
+      () => kept!.res.status(500),
+      () => kept!.res.cookie('late', '1'),
+    ]) {
+      assert.throws(write, (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'ZEN_REPLY_SENT')
+        assert.match((error as Error).message, /after the reply was sent/)
+        return true
+      })
+    }
+  })
+
+  test('a handler that never touched ctx.res is sealed too', async () => {
+    const app = makeApp()
+    let kept: { res: { header(n: string, v: string): unknown } } | null = null
+    app.get('/', (ctx) => { kept = ctx as never; return 'ok' })
+    await app.inject('GET', '/')
+    assert.throws(() => kept!.res.header('x-late', '1'), { code: 'ZEN_REPLY_SENT' })
+  })
+
+  test('onSend still stages — the seal falls after the staged metadata is applied', async () => {
+    const app = makeApp()
+    app.hook('onSend', (ctx) => { ctx.res.header('x-on-send', '1') })
+    app.get('/', () => 'ok')
+    assert.equal((await app.inject('GET', '/')).headers['x-on-send'], '1')
+  })
+
+  test('an onResponse hook that writes is told so, and the response is unaffected', async () => {
+    const errors: unknown[] = []
+    const app = makeApp()
+    app.hook('onResponse', (ctx) => {
+      try { ctx.res.header('x-too-late', '1') } catch (error) { errors.push((error as { code?: string }).code) }
+    })
+    app.get('/', () => 'ok')
+    const res = await app.inject('GET', '/')
+    assert.equal(res.status, 200)
+    assert.equal(res.headers['x-too-late'], undefined)
+    assert.deepEqual(errors, ['ZEN_REPLY_SENT'])
+  })
+})
+
+describe('inject() can say where the request came from (§19.4)', () => {
+  test('127.0.0.1 unless told otherwise', async () => {
+    const app = makeApp()
+    app.get('/', (ctx) => ({ ip: ctx.ip, ips: ctx.ips }))
+    assert.deepEqual((await app.inject('GET', '/')).json(), { ip: '127.0.0.1', ips: ['127.0.0.1'] })
+  })
+
+  test('the given peer is ctx.ip, and the last hop when a proxy is trusted', async () => {
+    const direct = makeApp()
+    direct.get('/', (ctx) => ({ ip: ctx.ip }))
+    const remote = { address: '198.51.100.4', port: 5555, family: 'IPv4' } as const
+    assert.deepEqual((await direct.inject('GET', '/', { remote })).json(), { ip: '198.51.100.4' })
+
+    const proxied = makeApp({ trustProxy: 1 })
+    proxied.get('/', (ctx) => ({ ip: ctx.ip, ips: ctx.ips }))
+    const res = await proxied.inject('GET', '/', { remote, headers: { 'x-forwarded-for': '203.0.113.9' } })
+    assert.deepEqual(res.json(), { ip: '203.0.113.9', ips: ['203.0.113.9', '198.51.100.4'] })
+  })
+})
+
+describe('a slot value that releases itself is released (§15.3)', () => {
+  const asyncDispose = (Symbol as { asyncDispose?: symbol }).asyncDispose
+  const dispose = (Symbol as { dispose?: symbol }).dispose
+
+  test('Symbol.asyncDispose is preferred, as `await using` prefers it, and called once', async (t) => {
+    if (asyncDispose === undefined || dispose === undefined) return t.skip('no explicit resource management in this runtime')
+    const calls: string[] = []
+    const Conn = slot<object>(uniqueName('ctx.conn'))
+    const app = makeApp()
+    app.get('/', (ctx) => {
+      ctx.set(Conn, {
+        [asyncDispose]: async () => { calls.push('async') },
+        [dispose]: () => { calls.push('sync') },
+      })
+      return 'ok'
+    })
+    await app.inject('GET', '/')
+    assert.deepEqual(calls, ['async'])
+  })
+
+  test('Symbol.dispose alone works, and every value a slot held is released, in reverse order', async (t) => {
+    if (dispose === undefined) return t.skip('no Symbol.dispose in this runtime')
+    const calls: string[] = []
+    const Tx = slot<object>(uniqueName('ctx.tx'))
+    const app = makeApp()
+    const value = (name: string) => ({ [dispose]: () => { calls.push(name) } })
+    app.get('/', (ctx) => {
+      ctx.set(Tx, value('first'))
+      ctx.set(Tx, value('second'))
+      return 'ok'
+    })
+    await app.inject('GET', '/')
+    assert.deepEqual(calls, ['second', 'first'])
+  })
+
+  test('an explicit dispose wins, and primitives and plain objects are left alone', async (t) => {
+    if (dispose === undefined) return t.skip('no Symbol.dispose in this runtime')
+    const calls: string[] = []
+    const Explicit = slot<object>(uniqueName('ctx.explicit'), { dispose: () => { calls.push('explicit') } })
+    const Plain = slot<object>(uniqueName('ctx.plain'))
+    const Count = slot<number>(uniqueName('ctx.count'))
+    const app = makeApp()
+    app.get('/', (ctx) => {
+      ctx.set(Explicit, { [dispose]: () => { calls.push('protocol') } })
+      ctx.set(Plain, { just: 'data' })
+      ctx.set(Count, 1)
+      return 'ok'
+    })
+    await app.inject('GET', '/')
+    assert.deepEqual(calls, ['explicit'])
   })
 })

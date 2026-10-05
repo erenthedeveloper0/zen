@@ -20,14 +20,19 @@ export interface Capabilities {
   readonly cpuTimeLimited: boolean
 }
 
+/**
+ * What an app assumes with neither `caps` nor an adapter — `inject()` in a
+ * test. An adapter's own `caps` replace it (§14.1); `compression` and
+ * `websocket` are `'none'` because nothing in core implements either.
+ */
 export const DEFAULT_CAPABILITIES: Capabilities = {
   eval: true,
   webStreams: true,
   nodeStreams: true,
   fs: true,
-  compression: 'library',
+  compression: 'none',
   http2: false,
-  websocket: 'library',
+  websocket: 'none',
   timers: 'full',
   asyncLocalStorage: true,
   cpuTimeLimited: false,

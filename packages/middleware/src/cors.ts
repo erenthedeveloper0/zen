@@ -3,7 +3,10 @@ import {
   type AppGraph, type Duration, type HttpMethod, type Plugin, type Reply,
 } from '@erenthedeveloper0/zen-core'
 import { assertCorsCorpConsistent } from './consistency.ts'
-import { type CorsRequest, type Staging, headerOf, isPreflight } from './shared.ts'
+import {
+  BOOLEAN, DURATION, FUNCTION, REGEXP, STRING, STRINGS, either, headerOf, isPreflight, oneOf, optionsSchema,
+  type CorsRequest, type OptionField, type Staging,
+} from './shared.ts'
 
 /**
  * CORS — rfcs/0001 §19.2, §4.2 stage 5, §9.2.
@@ -148,10 +151,23 @@ interface Compiled {
   allowMethods: string
 }
 
+/** §10.5 step 2 — checked at boot, so `cors({ credential: true })` is refused with "did you mean "credentials"?". */
+const OPTIONS = optionsSchema('cors', {
+  origin: either(STRING, STRINGS, REGEXP, FUNCTION),
+  methods: STRINGS,
+  allowedHeaders: either(oneOf('reflect'), STRINGS),
+  exposedHeaders: STRINGS,
+  credentials: BOOLEAN,
+  maxAge: DURATION,
+  preflightStatus: oneOf(200, 204),
+} satisfies Record<keyof CorsOptions, OptionField>)
+
 export function cors(options: CorsOptions = {}): Plugin<void, {}> {
   return definePlugin<void, {}>({
     name: 'cors',
     version: '0.1.0',
+    options: OPTIONS,
+    boundOptions: options,
     // The pack orders itself (§10.5 step 4). A 429 or a 404 must carry
     // `Access-Control-Allow-Origin` or the browser reports a rate limit as a
     // CORS failure, so this hook has to be staged before the limiter can

@@ -3,8 +3,8 @@ import type {
 } from '../contracts/container.ts'
 import { ZenError } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
-import { allocateCell } from '../api/slot.ts'
-import { trackDisposal, type DisposalCarrier } from '../primitives/disposal.ts'
+import { allocateCell } from '../registry/slot-registry.ts'
+import { intrinsicDisposer, trackDisposal, type DisposalCarrier } from '../primitives/disposal.ts'
 
 /**
  * Declare a typed service identifier.
@@ -40,7 +40,8 @@ const UNRESOLVED = Symbol('zen.unresolved')
 
 export class ZenContainer implements Container {
   #entries = new Map<Token<unknown>, Entry<unknown>>()
-  #disposeOrder: Array<Entry<unknown>> = []
+  /** Singletons to release at shutdown, oldest first, each with how to release it. */
+  #disposeOrder: Array<{ readonly entry: Entry<unknown>; readonly dispose: (value: never) => void | Promise<void> }> = []
   #resolving = new Set<Token<unknown>>()
 
   provide<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T)): void {
@@ -184,10 +185,17 @@ export class ZenContainer implements Container {
   }
 
   #store(entry: Entry<unknown>, value: unknown, scope: ScopeCarrier | undefined): unknown {
+    // §15.3 — "Disposal integrates with the explicit resource management
+    // proposal where available": a value implementing `Symbol.asyncDispose` or
+    // `Symbol.dispose` is released through it when the provider declared no
+    // `dispose` of its own. An explicit `dispose` always wins.
     if (entry.lifetime === 'singleton') {
       // Queued for disposal once, on the transition to resolved — never per
       // call, or shutdown disposes one instance twice.
-      if (!entry.resolved && entry.dispose !== undefined) this.#disposeOrder.push(entry)
+      if (!entry.resolved) {
+        const dispose = entry.dispose ?? intrinsicDisposer(value)
+        if (dispose !== undefined) this.#disposeOrder.push({ entry, dispose })
+      }
       entry.instance = value
       entry.resolved = true
     } else if (entry.lifetime === 'scoped' && scope !== undefined) {
@@ -196,8 +204,9 @@ export class ZenContainer implements Container {
       // `dispose` option used to be accepted here and never called, so a
       // per-request transaction or pooled connection was simply dropped —
       // released only when the pool itself noticed, if ever.
-      if (entry.dispose !== undefined && scope.$disposers !== undefined) {
-        trackDisposal(scope as DisposalCarrier, entry.token.name, entry.dispose, value)
+      const dispose = entry.dispose ?? intrinsicDisposer(value)
+      if (dispose !== undefined && scope.$disposers !== undefined) {
+        trackDisposal(scope as DisposalCarrier, entry.token.name, dispose, value)
       }
     }
     return value
@@ -293,10 +302,11 @@ export class ZenContainer implements Container {
   async dispose(): Promise<void> {
     const failures: unknown[] = []
     for (let i = this.#disposeOrder.length - 1; i >= 0; i--) {
-      const entry = this.#disposeOrder[i]
-      if (entry?.dispose === undefined) continue
+      const queued = this.#disposeOrder[i]
+      if (queued === undefined) continue
+      const { entry, dispose } = queued
       try {
-        await entry.dispose(entry.instance)
+        await dispose(entry.instance as never)
       } catch (error) {
         failures.push(error)
       }

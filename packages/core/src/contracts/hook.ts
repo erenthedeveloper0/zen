@@ -1,7 +1,8 @@
 import type { Context } from './context.ts'
 import type { Reply } from './reply.ts'
 import type { RouteInfo } from './context.ts'
-import type { BodySource } from './adapter.ts'
+import type { BodySource, ServerHandle } from './adapter.ts'
+import type { AppGraph } from './graph.ts'
 import type { TimeoutInfo } from './deadline.ts'
 import type { MaybePromise } from './route.ts'
 
@@ -168,6 +169,15 @@ export type HookFn<P extends Phase = Phase, X = {}> =
     ? (ctx: Context<never, X>, error: unknown) => MaybePromise<void | Reply>
   : P extends 'onTimeout'
     ? (ctx: Context<never, X>, info: TimeoutInfo) => MaybePromise<void | Reply>
+  // Application phases — once per application, not per request (§9.2).
+  : P extends 'onBoot'
+    ? (graph: AppGraph) => unknown
+  : P extends 'onReady'
+    ? () => unknown
+  : P extends 'onListen'
+    ? (handle: ServerHandle) => unknown
+  : P extends 'onClose'
+    ? (reason: string) => unknown
   : (...args: never[]) => MaybePromise<unknown>
 
 /**

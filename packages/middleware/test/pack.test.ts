@@ -212,3 +212,82 @@ describe('an app that does not register the pack pays nothing (§9.4)', () => {
     assert.equal(all.filter((s) => s.kind === 'onSend' || s.kind === 'onResponse').length, 0)
   })
 })
+
+describe('options are checked at boot, before any plugin runs (§8.6, §10.5 step 2)', () => {
+  /** The refusal: the codes of the aggregated boot error (§12.7), and its rendered text. */
+  async function refusal(register: (a: ReturnType<typeof makeApp>) => void): Promise<{ codes: string[]; message: string }> {
+    const a = makeApp()
+    register(a)
+    a.get('/ok', () => ({ ok: true }))
+    try {
+      await a.ready()
+    } catch (error) {
+      const diagnostics = (error as { diagnostics?: ReadonlyArray<{ code: string }> }).diagnostics ?? []
+      return { codes: diagnostics.map((d) => d.code), message: (error as Error).message }
+    }
+    throw new Error('expected ready() to fail, and it did not')
+  }
+
+  test('rateLimit({ limt: 100 }) fails at startup with a spelling suggestion — §8.6, verbatim', async () => {
+    const failure = await refusal((a) => a.use(rateLimit({ limt: 100 } as never)))
+    assert.deepEqual(failure.codes, ['ZEN_PLUGIN_OPTIONS'])
+    assert.match(failure.message, /Plugin "rate-limit@0\.1\.0" was given options it does not accept: "limt" is not an option/)
+    assert.match(failure.message, /"limt" is not an option of rate-limit — did you mean "limit"\?/)
+  })
+
+  test('each of the four names its own misspelt key', async () => {
+    const cases: Array<[(a: ReturnType<typeof makeApp>) => void, RegExp]> = [
+      [(a) => a.use(cors({ origin: [ORIGIN], credential: true } as never)), /did you mean "credentials"\?/],
+      [(a) => a.use(securityHeaders({ frameOption: 'DENY' } as never)), /did you mean "frameOptions"\?/],
+      [(a) => a.use(requestId({ trustHeaders: true } as never)), /did you mean "trustHeader"\?/],
+      [(a) => a.use(rateLimit({ windw: '1m' } as never)), /did you mean "window"\?/],
+    ]
+    for (const [register, expected] of cases) {
+      const failure = await refusal(register)
+      assert.deepEqual(failure.codes, ['ZEN_PLUGIN_OPTIONS'])
+      assert.match(failure.message, expected)
+    }
+  })
+
+  test('a value of the wrong type is refused by option name', async () => {
+    const failure = await refusal((a) => a.use(securityHeaders({ frameOptions: 'ALLOW-FROM' } as never)))
+    assert.match(failure.message, /frameOptions: expected "DENY", "SAMEORIGIN", false/)
+    const limit = await refusal((a) => a.use(rateLimit({ limit: '100' } as never)))
+    assert.match(limit.message, /limit: expected a number/)
+  })
+
+  test('a refusal names keys, never values — options are where secrets are passed', async () => {
+    const failure = await refusal((a) => a.use(rateLimit({ mesage: 'sk_live_do_not_print' } as never)))
+    assert.match(failure.message, /"mesage" is not an option/)
+    assert.doesNotMatch(failure.message, /sk_live_do_not_print/)
+  })
+
+  test('every typo is reported once, though both core and the schema could see it', async () => {
+    const failure = await refusal((a) => a.use(rateLimit({ limt: 100 } as never)))
+    assert.equal(failure.message.match(/"limt" is not an option(?! of)/g)?.length, 1)
+  })
+
+  test('two misconfigured plugins are reported together, not one per restart', async () => {
+    const failure = await refusal((a) => {
+      a.use(rateLimit({ limt: 1 } as never))
+      a.use(cors({ origin: [ORIGIN], maxage: '1m' } as never))
+    })
+    assert.match(failure.message, /rate-limit@0\.1\.0/)
+    assert.match(failure.message, /cors@0\.1\.0/)
+  })
+
+  test('the checks a value needs beyond its type stay with the plugin, for configuration too', async () => {
+    // `limit: 0` is a number, so the schema accepts it; the plugin's own rule
+    // refuses it — the same rule `config.rateLimit.limit` has to meet.
+    const failure = await refusal((a) => a.use(rateLimit({ limit: 0 })))
+    assert.deepEqual(failure.codes, ['ZEN_CONFIG_INVALID'])
+  })
+
+  test('well-formed options boot, and the four are unchanged on the wire', async () => {
+    const a = packed()
+    await a.ready()
+    const res = await a.inject('GET', '/things', { headers: { origin: ORIGIN } })
+    assert.equal(res.status, 200)
+    assert.equal(res.headers['access-control-allow-origin'], ORIGIN)
+  })
+})

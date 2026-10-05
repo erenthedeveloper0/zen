@@ -18,7 +18,7 @@ import type { Slot, SlotOptions } from '../contracts/slot.ts'
 import type { Container, ProviderSpec, Token } from '../contracts/container.ts'
 import type { OptionsOf, Plugin, ProvidesOf, Registrar } from '../contracts/plugin.ts'
 import type { Prettify } from '../contracts/route.ts'
-import type { HttpMethod } from '../contracts/http.ts'
+import type { HttpMethod, RemoteInfo } from '../contracts/http.ts'
 import type { ParamType } from '../contracts/route.ts'
 import type {
   CollectionId, MiddlewareRef, RouteId, RouteRecord, RouteSchema, RouteSpec,
@@ -59,21 +59,24 @@ import {
 import { ConsoleLogger } from '../runtime/logger.ts'
 import { compileRedirectPolicy, type RedirectOptions, type RedirectPolicy } from '../runtime/redirect.ts'
 import { UrlTable } from '../runtime/url.ts'
-import { ErrorEngine } from '../runtime/error-engine.ts'
+import { ErrorEngine, type ErrorContextInfo } from '../runtime/error-engine.ts'
 import { prepareForWire, stripBodyIfNeeded } from '../runtime/egress.ts'
 import { encodeBody, finalize } from '../runtime/response-engine.ts'
 import { MutableReply } from '../runtime/reply.ts'
 import type { PlainContext, ContextEnv } from '../runtime/context.ts'
-import { CONTEXT_MEMBERS } from '../runtime/context.ts'
+import { CONTEXT_MEMBERS, SEALED_STAGE } from '../runtime/context.ts'
 import { ZenError, BootError, isZenError, withoutStack, type Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { NotFound, MethodNotAllowed } from '../errors/http-errors.ts'
-import { slot as declareSlot, slotCount, declaredSlots } from './slot.ts'
+import { declareSlot, slotCount, declaredSlots } from '../registry/slot-registry.ts'
 import { ZenContainer } from '../di/container.ts'
 import { resolvePlugins, type PendingPlugin } from '../registry/plugin-registry.ts'
+import { validatePluginOptions } from '../compile/plugin-options.ts'
+import { checkParamsSchema } from '../compile/params-check.ts'
 import { resolveConfig, type ResolvedConfigResult } from '../registry/config-store.ts'
 import { EMPTY_SNAPSHOT } from '../contracts/config.ts'
 import { SETTLED } from '../primitives/disposal.ts'
+import { regexHazards, regexLiterals } from '../primitives/regex-safety.ts'
 import { toJsonSchema } from '../compile/json-schema.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -244,6 +247,20 @@ export interface CollectionOptions {
   readonly coercion?: CoercionSpec | undefined
   readonly tags?: readonly string[] | undefined
   readonly meta?: Readonly<Record<string, unknown>> | undefined
+  /**
+   * Whether this subtree exists at all — §6.2. Evaluated **once, at boot**,
+   * against the validated environment (§16.2), never per request:
+   *
+   *     app.collection('/debug', { when: (env) => env['NODE_ENV'] !== 'production' }, …)
+   *
+   * A subtree for which it returns `false` is absent — not in the router, not
+   * on the graph, not in the OpenAPI document — so it costs nothing, because
+   * it is not there. It must answer with a boolean, synchronously: a promise
+   * is truthy, and an environment string `'false'` is too, so either would turn
+   * a subtree on that its author meant to turn off. Request-time conditions are
+   * middleware's (§8.7).
+   */
+  readonly when?: ((env: Readonly<Record<string, unknown>>) => boolean) | undefined
 }
 
 interface Scope {
@@ -260,6 +277,8 @@ interface Scope {
   readonly coercion: CoercionSpec | undefined
   readonly tags: string[]
   readonly meta: Map<string, unknown>
+  /** §6.2's boot-time condition; `undefined` means the subtree always exists. */
+  readonly when: ((env: Readonly<Record<string, unknown>>) => boolean) | undefined
 }
 
 interface PendingRoute {
@@ -333,7 +352,6 @@ export class ZenApp<X = {}> {
   readonly #scopes: Scope[] = []
   readonly #plugins: PendingPlugin[] = []
   readonly #pluginExports = new Map<string, Readonly<Record<string, unknown>>>()
-  readonly #onBoot: Array<(graph: unknown) => void | Promise<void>> = []
   readonly #container: ZenContainer = new ZenContainer()
   readonly #health: HealthRegistry
   /** Deferred so a bad check joins every other boot problem, not its own restart. */
@@ -397,7 +415,13 @@ export class ZenApp<X = {}> {
       )
     }
     this.#log = opts.logger ?? new ConsoleLogger(opts.dev === true ? 'debug' : 'info')
-    this.#caps = opts.caps ?? DEFAULT_CAPABILITIES
+    // §14.1 — what the runtime can do is the adapter's to say. This read
+    // `opts.caps` alone until `0.1.0-alpha.4`, so `Plugin.requires` was checked
+    // against core's defaults whatever the adapter was: a plugin requiring
+    // `{ fs: true }` would have booted on a runtime with no filesystem, which is
+    // the one thing §14.2 promises it will not. An explicit `caps` still wins,
+    // for tests.
+    this.#caps = opts.caps ?? opts.adapter?.caps ?? DEFAULT_CAPABILITIES
     this.#codegen = new CodeGen({ caps: this.#caps, readable: opts.dev === true })
     this.#bodyOptions = { ...BODY_DEFAULTS, ...opts.body }
     this.#parsers = opts.parsers ?? DEFAULT_PARSERS
@@ -418,6 +442,7 @@ export class ZenApp<X = {}> {
       coercion: opts.coercion,
       tags: [],
       meta: new Map(),
+      when: undefined,
     }
     this.#scopes.push(this.#rootScope)
   }
@@ -536,7 +561,18 @@ export class ZenApp<X = {}> {
       name: schema.name ?? undefined,
       meta: new Map(Object.entries(schema.meta ?? {})),
       scope,
-      middleware: [],
+      // §8.3's `route.use(checkOwnership)` — the innermost of the three
+      // middleware scopes, appended last by `flattenMiddleware`, so it runs
+      // after the app's and every enclosing collection's, and `explainRoute`
+      // labels it `[route]`. Always an empty list until `0.1.0-alpha.4`: the
+      // README called middleware "route-scoped" and nothing could put one there.
+      middleware: (schema.use ?? []).map((fn) => ({
+        kind: 'phase' as const,
+        name: fn.name || 'anonymous',
+        fn,
+        scope: 'route',
+        origin: undefined,
+      })),
     })
     return this
   }
@@ -766,6 +802,7 @@ export class ZenApp<X = {}> {
       coercion: opts.coercion,
       tags: [...(opts.tags ?? [])],
       meta: new Map(Object.entries(opts.meta ?? {})),
+      when: opts.when,
     }
     this.#scopes.push(scope)
     build(new Collection<X>(this, scope))
@@ -869,7 +906,9 @@ export class ZenApp<X = {}> {
    * it now exists.
    *
    * `test` runs on every request that reaches the segment, so keep it linear
-   * (§19.3): no nested quantifiers, bounded length first.
+   * (§19.3): no nested quantifiers, bounded length first. In development a
+   * regex in it that can backtrack without bound is `ZEN_REGEX_UNSAFE`, a
+   * warning — `test` is the application's code, so it is reported, not refused.
    */
   paramType<T>(name: string, type: Omit<ParamType<T>, 'name'>): this {
     this.#assertOpen()
@@ -887,8 +926,37 @@ export class ZenApp<X = {}> {
         { status: 500, expose: false },
       )
     }
+    if (this.#opts.dev === true) this.#warnUnsafeTest(name, type.test)
     this.#paramTypes.set(name, { name, test: type.test, parse: type.parse, jsonSchema: type.jsonSchema } as ParamType)
     return this
+  }
+
+  /**
+   * §19.3, for the one regex on the request path the framework did not write:
+   * the literals in a param type's `test`, read from its text and judged by
+   * the analyser CI holds the framework's own sources to. A regex the function
+   * closes over is not in its text and is not seen — the reason this is a
+   * development aid and `scripts/check-regex.ts` is the gate.
+   */
+  #warnUnsafeTest(name: string, test: Function): void {
+    for (const literal of regexLiterals(String(test))) {
+      let hazards: ReturnType<typeof regexHazards>
+      try {
+        hazards = regexHazards(literal.source, literal.flags)
+      } catch {
+        continue
+      }
+      for (const hazard of hazards) {
+        this.#log.warn(
+          { code: Codes.REGEX_UNSAFE, paramType: name },
+          `Param type "${name}" tests with /${literal.source}/${literal.flags}, which can backtrack without bound ` +
+            `at ${hazard.fragment}, so a crafted path segment makes the matcher take exponential time. ` +
+            'fix: make each repetition start or end with a character the repeated part cannot match ' +
+            '([a-z0-9]+(?:-[a-z0-9]+)*), or check the length before the regex runs. ' +
+            'also: test runs on every request that reaches the segment.',
+        )
+      }
+    }
   }
 
   onError<E>(ctor: new (...args: never[]) => E, map: (error: E, ctx: unknown) => unknown): this {
@@ -940,12 +1008,25 @@ export class ZenApp<X = {}> {
     const resolution = resolvePlugins(this.#plugins, this.#caps)
     diagnostics.push(...resolution.diagnostics)
 
+    // §10.5 step 2 — every plugin's options, against its `options` schema,
+    // before any `setup` runs, and all of them reported in one boot (§12.7). A
+    // factory plugin (`cors({ … })`) states what it was built with as
+    // `boundOptions`; an explicit `app.use(plugin, options)` wins over that.
+    // `setup` is then handed the schema's *output*, not what was written.
+    const accepted = new Map<PendingPlugin, unknown>()
+    for (const entry of this.#plugins) {
+      const given = entry.options !== undefined ? entry.options : entry.plugin.boundOptions
+      const verdict = await validatePluginOptions(entry.plugin, given)
+      if (verdict.diagnostic === null) accepted.set(entry, verdict.value)
+      else diagnostics.push(verdict.diagnostic)
+    }
+
     if (diagnostics.length === 0) {
       for (const entry of resolution.order) {
         try {
           const result = await entry.plugin.setup(
             this.#registrarFor(entry.plugin.name),
-            entry.options as never,
+            accepted.get(entry) as never,
           )
           if (result !== undefined && result !== null && result.exports !== undefined) {
             this.#pluginExports.set(entry.plugin.name, result.exports)
@@ -1010,6 +1091,18 @@ export class ZenApp<X = {}> {
     diagnostics.push(...diagnoseUnknown(this.#allHookRecords()))
     diagnostics.push(...diagnoseMisplaced(this.#scopedHookRecords()))
 
+    // §6.2 — conditional collections, decided once, against the validated
+    // environment. A subtree that is off is absent from everything below: the
+    // records, the router, the graph, and so the OpenAPI document.
+    const absent = this.#absentScopes(config, diagnostics)
+
+    /**
+     * Routes reading an `integer` from an untyped path segment — §5.2's
+     * information row, gathered and logged once rather than per route, for the
+     * reason `unreadableSchemas` below is.
+     */
+    const untypedIntegers: string[] = []
+
     const records: RouteRecord[] = []
     const seen = new Map<string, PendingRoute>()
     /** Route id → the `METHOD path` that claimed it first. */
@@ -1038,6 +1131,8 @@ export class ZenApp<X = {}> {
     const negotiationRepresentations = new Map<RouteId, ReadonlyMap<string, Representation>>()
 
     for (const pending of this.#routes) {
+      if (absent.size > 0 && inScope(pending.scope, absent)) continue
+
       let parsed
       try {
         parsed = this.#opts.pathParser.parse(pending.path)
@@ -1102,6 +1197,14 @@ export class ZenApp<X = {}> {
       const coercion = planRoute(pending.schema, resolveCoercion(coercionChain(pending)))
       for (const source of coercion.unreadable) unreadableSchemas.push(`${key} (${source})`)
 
+      // §5.2 — the `params` schema against the template it validates. A key
+      // the router never supplies is a 400 on every request, so it is refused
+      // here, with the name that was probably meant.
+      const params = checkParamsSchema(key, parsed.segments, pending.schema.params)
+      diagnostics.push(...params.errors)
+      for (const warning of params.warnings) this.#log.warn({ code: warning.code }, warning.message)
+      untypedIntegers.push(...params.untypedIntegers)
+
       // §13.4 — and the same treatment again, for the same reason. What lands
       // on the record is the *offer list in preference order*, which is what
       // `explainRoute` prints and what @erenthedeveloper0/zen-openapi turns into a `content`
@@ -1155,6 +1258,18 @@ export class ZenApp<X = {}> {
           'fix: register a converter — registerSchemaConverter("zod", (s, io) => z.toJSONSchema(s, { io })) — ' +
           'or coerce in the schema with z.coerce.number(). ' +
           'also: the same schemas are undocumented by @erenthedeveloper0/zen-openapi for the same reason.',
+      )
+    }
+
+    if (untypedIntegers.length > 0) {
+      const shown = untypedIntegers.slice(0, 5).join(', ')
+      const rest = untypedIntegers.length - 5
+      this.#log.info(
+        { code: Codes.PARAM_MISMATCH, count: untypedIntegers.length },
+        `${untypedIntegers.length} path ${untypedIntegers.length === 1 ? 'parameter is' : 'parameters are'} ` +
+          `declared integer by a params schema and untyped in the path — ${shown}${rest > 0 ? `, and ${rest} more` : ''}. ` +
+          'Coercion makes that work; a typed segment (:id<int>) would refuse a non-number at the matcher, ' +
+          'as a 404 before anything runs, rather than as a 400 after validation.',
       )
     }
 
@@ -1281,24 +1396,30 @@ export class ZenApp<X = {}> {
 
     const graph: AppGraph = Object.freeze({
       routes: records,
-      collections: this.#scopes.filter((s) => s.parent !== null).map((s) => ({
-        id: s.id, prefix: s.prefix, name: s.name,
-        parent: s.parent === null ? null : s.parent.id,
-        tags: s.tags, meta: s.meta,
-      })),
+      collections: this.#scopes
+        .filter((s) => s.parent !== null && !inScope(s, absent))
+        .map((s) => ({
+          id: s.id, prefix: s.prefix, name: s.name,
+          parent: s.parent === null ? null : s.parent.id,
+          tags: s.tags, meta: s.meta,
+        })),
       plugins: resolution.order.map((p) => ({
         name: p.plugin.name,
         version: p.plugin.version,
         dependsOn: p.plugin.dependsOn ?? {},
         scope: 'root',
       })),
-      hooks: this.#hooksByPhase(),
+      hooks: this.#hooksByPhase(absent),
       slots: declaredSlots(),
-      decorations: this.#decorations as unknown as readonly DecorationRecord[],
+      decorations: this.#decorationRecords(),
       checks: this.#health.checks,
       paramTypes: router.paramTypes,
       config: config.snapshot,
-      meta: new Map<string, unknown>(),
+      // §10.2 — what plugins wrote with `Registrar.meta`, keyed `plugin.key`.
+      // It was written into the root scope and the graph was handed a fresh
+      // empty map, so every write landed nowhere a reader could look until
+      // `0.1.0-alpha.4`. A copy, so nothing reaches it after the freeze.
+      meta: new Map(this.#rootScope.meta),
       builtAt: Date.now(),
     })
 
@@ -1328,7 +1449,16 @@ export class ZenApp<X = {}> {
 
     // Plugins get a final look at the frozen graph before it is used — this is
     // how OpenAPI generation and the route inspector work (§10.2).
-    for (const fn of this.#onBoot) await fn(graph)
+    //
+    // One table, in registration order: `app.hook('onBoot', fn)` and a plugin's
+    // `Registrar.onBoot(fn)` are the same registration. `onBoot` was in
+    // `APP_PHASES`, so `app.hook('onBoot', fn)` passed every phase diagnostic
+    // and was stored — and this loop read a second, separate list that only
+    // `Registrar.onBoot` filled, so the hook never ran (§9.7's failure exactly:
+    // accepted, stored, silent). Until `0.1.0-alpha.4`.
+    for (const hook of this.#hooks.get('onBoot') ?? []) {
+      await (hook.fn as (graph: AppGraph) => unknown)(graph)
+    }
 
     await this.#container.warm()
 
@@ -1452,12 +1582,16 @@ export class ZenApp<X = {}> {
         })
       },
 
+      // Namespaced by plugin, and carried on `graph.meta` (§10.2), where
+      // `@erenthedeveloper0/zen-openapi` reads `<plugin>.openapi.*` entries.
       meta(key, value) {
         app.#rootScope.meta.set(`${pluginName}.${key}`, value)
       },
 
+      // Sugar for `hook('onBoot', fn)`: one table, so both forms run, in the
+      // order they were registered (§9.2).
       onBoot(fn) {
-        app.#onBoot.push(fn)
+        addHook(app.#rootScope, app.#hooks, 'onBoot', fn, pluginName)
       },
 
       exportsOf(name) {
@@ -1646,6 +1780,9 @@ export class ZenApp<X = {}> {
           method: raw.method,
           path,
           route: target.route?.path ?? null,
+          // So the error engine can tell this request's own abort from one the
+          // application caused (§12.4) — see `classify`.
+          signal: target.signal,
         }
         const reply = deadline !== null && (error as unknown) === EXPIRED
           ? await this.#timeoutReply(target, deadline, hooks, info)
@@ -1712,7 +1849,7 @@ export class ZenApp<X = {}> {
     ctx: PlainContext,
     deadline: Deadline,
     hooks: GlobalHooks,
-    info: { requestId: string; method: string; path: string; route: string | null },
+    info: ErrorContextInfo,
   ): Promise<Reply> {
     ctx.timedOut = true
     const detail: TimeoutInfo = deadline.info(ctx.startTime, ctx.route?.path ?? null)
@@ -1750,7 +1887,7 @@ export class ZenApp<X = {}> {
     ctx: PlainContext,
     error: unknown,
     hooks: GlobalHooks,
-    info: { requestId: string; method: string; path: string; route: string | null },
+    info: ErrorContextInfo,
   ): Promise<Reply> {
     let reply: Reply | null = null
 
@@ -1795,6 +1932,11 @@ export class ZenApp<X = {}> {
 
   async #send(ctx: PlainContext, conn: Connection, reply: Reply, onResponse: readonly Function[]): Promise<void> {
     const wire = stripBodyIfNeeded(prepareForWire(ctx, reply))
+    // §7.3 — the staged metadata has just been applied, so from here a write to
+    // `ctx.res` would be accepted and then discarded. It throws
+    // `ZEN_REPLY_SENT` instead. One store into a field every context already
+    // has, of a shared frozen object: no field, no allocation (I2).
+    ctx.$stage = SEALED_STAGE
     await conn.send(wire)
 
     // Stage 10 — after the last byte. Never able to affect the client (§9.5).
@@ -1864,7 +2006,18 @@ export class ZenApp<X = {}> {
   async inject(
     method: string,
     url: string,
-    init: { headers?: Record<string, string>; body?: unknown; signal?: AbortSignal } = {},
+    init: {
+      headers?: Record<string, string>
+      body?: unknown
+      signal?: AbortSignal
+      /**
+       * The peer the request comes from — what `ctx.ip` reads when no proxy is
+       * trusted, and the last hop when one is (§19.4). `127.0.0.1` unless set,
+       * which is the one address a rate limiter keyed on `ctx.ip` and a test of
+       * `trustProxy` hop counting both needed to vary.
+       */
+      remote?: RemoteInfo
+    } = {},
   ): Promise<InjectedResponse> {
     await this.ready()
 
@@ -1895,7 +2048,7 @@ export class ZenApp<X = {}> {
         read: async () => bodyBytes,
         stream: async function* () { yield bodyBytes },
       },
-      remote: { address: '127.0.0.1', port: 0, family: 'IPv4' },
+      remote: init.remote ?? LOOPBACK,
       native: null,
     }
 
@@ -2055,20 +2208,95 @@ export class ZenApp<X = {}> {
     return this.#container
   }
 
-  /** Every hook registered anywhere, by phase — for tools, not for dispatch. */
-  #hooksByPhase(): ReadonlyMap<Phase, readonly HookRecord[]> {
+  /**
+   * Every hook registered anywhere, by phase — for tools, not for dispatch.
+   *
+   * `absent` leaves out the subtrees a `when` turned off (§6.2), which is what
+   * the graph is given: they do not exist. The phase diagnostics read the full
+   * set, because a misspelled phase is a mistake in the source whatever the
+   * environment says.
+   */
+  #hooksByPhase(absent: ReadonlySet<string> = NO_SCOPES): ReadonlyMap<Phase, readonly HookRecord[]> {
     const out = new Map<Phase, HookRecord[]>()
     const push = (record: HookRecord): void => {
       const list = out.get(record.phase)
       if (list === undefined) out.set(record.phase, [record])
       else list.push(record)
     }
-    for (const scope of this.#scopes) for (const record of scope.hooks) push(record)
+    for (const scope of this.#scopes) {
+      if (inScope(scope, absent)) continue
+      for (const record of scope.hooks) push(record)
+    }
     for (const list of this.#hooks.values()) for (const record of list) push(record)
     for (const pending of this.#routes) {
+      if (inScope(pending.scope, absent)) continue
       for (const record of routeHookRecords(pending.schema.hooks)) push(record)
     }
     return out
+  }
+
+  /**
+   * §6.2's `when`, evaluated once — the ids of the collections it turned off.
+   *
+   * Not evaluated while the environment itself is invalid: the boot is already
+   * refused, and a predicate reading a variable that failed validation would
+   * only add a second, misleading diagnostic to the first.
+   */
+  #absentScopes(config: ResolvedConfigResult, diagnostics: Diagnostic[]): ReadonlySet<string> {
+    if (config.diagnostics.length > 0) return NO_SCOPES
+    let absent: Set<string> | null = null
+    for (const scope of this.#scopes) {
+      if (scope.when === undefined) continue
+      let decided: unknown
+      try {
+        decided = scope.when(config.env)
+      } catch (error) {
+        diagnostics.push({
+          severity: 'error',
+          code: Codes.CONFIG_INVALID,
+          message:
+            `The \`when\` of collection ${scope.id} threw while deciding whether it exists: ` +
+            (error instanceof Error ? error.message : String(error)),
+          hint: 'A `when` is a pure function of the validated environment; read what it needs from the env schema.',
+          locations: [scope.prefix],
+        })
+        continue
+      }
+      if (typeof decided !== 'boolean') {
+        const promise = typeof decided === 'object' && decided !== null && typeof (decided as { then?: unknown }).then === 'function'
+        diagnostics.push({
+          severity: 'error',
+          code: Codes.CONFIG_INVALID,
+          message: `The \`when\` of collection ${scope.id} answered with ${promise ? 'a promise' : `a ${typeof decided}`}, not a boolean.`,
+          hint: promise
+            ? 'Decide synchronously: `when` runs once, at boot, against the validated environment, and a promise is always truthy.'
+            : "Return a boolean — `when: (env) => env['FEATURE_X'] === 'on'` — rather than a value that is merely truthy.",
+          consequence: `Read as truthy, ${scope.prefix} would exist on a deployment that meant to turn it off.`,
+          locations: [scope.prefix],
+        })
+        continue
+      }
+      if (!decided) (absent ??= new Set()).add(scope.id)
+    }
+    return absent ?? NO_SCOPES
+  }
+
+  /**
+   * `AppGraph.decorations` as its type says it is — §2.4.
+   *
+   * The compiler's `Decoration` carries a slot *index*; the graph's record a
+   * `Slot`. The two were handed over through `as unknown as`, so the first tool
+   * to read `decoration.slot` would have got `undefined` (I8: an `as` in the
+   * public surface is a bug). The index is resolved back to its slot here.
+   */
+  #decorationRecords(): readonly DecorationRecord[] {
+    const slots = declaredSlots()
+    return this.#decorations.map((d) => ({
+      name: d.name,
+      slot: d.slotIndex === null ? null : (slots.find((s) => s.index === d.slotIndex) ?? null),
+      accessor: d.accessor,
+      source: d.source,
+    }))
   }
 
   #allHookRecords(): HookRecord[] {
@@ -2337,6 +2565,20 @@ export class InjectedResponse {
 
 const EMPTY: Record<string, unknown> = Object.freeze({})
 
+const NO_SCOPES: ReadonlySet<string> = Object.freeze(new Set<string>())
+
+/** Where an `inject()`ed request comes from unless it says otherwise. */
+const LOOPBACK: RemoteInfo = Object.freeze({ address: '127.0.0.1', port: 0, family: 'IPv4' })
+
+/** Whether `scope`, or a collection it sits inside, is in `absent` (§6.2). */
+function inScope(scope: Scope, absent: ReadonlySet<string>): boolean {
+  if (absent.size === 0) return false
+  for (let s: Scope | null = scope; s !== null; s = s.parent) {
+    if (absent.has(s.id)) return true
+  }
+  return false
+}
+
 /** An identifier the generated class can use as a getter name; `$` is reserved for internals. */
 const DECORATION_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/
 
@@ -2393,8 +2635,10 @@ export function definePlugin<O = void, P extends object = {}>(plugin: Plugin<O, 
  *
  * A loop rather than generated code, because there is no route to generate for:
  * this is the one place in the request path where the work is not a function of
- * a RouteRecord. It runs on 404s and 405s only, so it is off the hot path by
- * construction.
+ * a RouteRecord. It runs on 404s and 405s — which is *not* "off the hot path"
+ * for a browser-facing service: every CORS preflight lands here until the
+ * `cors` hook answers it, and a 404 flood is the cheapest hostile traffic
+ * there is (§28.8, §32.5). Its cost is measured in `benchmarks/refusals`.
  */
 async function runUnmatched(hooks: readonly Function[], ctx: PlainContext): Promise<Reply | null> {
   for (const hook of hooks) {

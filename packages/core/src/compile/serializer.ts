@@ -4,6 +4,7 @@ import type { CodeGen } from './codegen.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { toJsonSchema } from './json-schema.ts'
+import { exposureDiagnostics } from './exposure.ts'
 import { buildProgram, type SerProgram } from './serializer-ir.ts'
 import { compileSerializer, type Serializer } from './serializer-compiler.ts'
 import { walkSerializer } from './serializer-walk.ts'
@@ -94,6 +95,7 @@ export function compileStatusSerializer(
   schema: AnySchema,
   status: number,
   options: SerializerBuildOptions,
+  media = 'application/json',
 ): StatusSerializerResult {
   const jsonSchema = toJsonSchema(schema)
   if (jsonSchema === null) {
@@ -118,6 +120,11 @@ export function compileStatusSerializer(
     }
   }
 
+  // A field the schema itself marks "never returned" — refused before a
+  // serializer that would return it exists (§13.3, `compile/exposure.ts`).
+  const exposed = exposureDiagnostics(jsonSchema, { routeId: options.routeId, status, media })
+  if (exposed.some((d) => d.severity === 'error')) return { serializer: null, diagnostics: exposed }
+
   const { program, diagnostics: irDiagnostics } = buildProgram(jsonSchema, options.strict)
   if (program === null) {
     return {
@@ -134,7 +141,7 @@ export function compileStatusSerializer(
 
   return {
     serializer: buildSerializer(program, `${options.routeId}#${status}`, options),
-    diagnostics: [],
+    diagnostics: exposed,
   }
 }
 

@@ -4,7 +4,8 @@ import {
   BootError, CONTEXT_MEMBERS, PlainContext, CodeGen, compileContext, NoopLogger, ZenContainer,
   DEFAULT_CAPABILITIES, type RawRequest, type ServerHandle, type RuntimeAdapter,
 } from '@erenthedeveloper0/zen-core'
-import { makeApp, silentLogger, uniqueName } from './helpers.ts'
+import { makeApp, shaped, silentLogger, uniqueName } from './helpers.ts'
+import { explainRoute, slot, type Logger } from '@erenthedeveloper0/zen-core'
 
 // ── §7.5: decoration names ──────────────────────────────────────────────────
 
@@ -276,5 +277,237 @@ describe('an application boots once (§2.2)', () => {
     await assert.rejects(app.ready(), /a boot check failed/, 'the second call reports the same failure')
     await assert.rejects(app.inject('GET', '/'), /a boot check failed/, 'and nothing is served')
     assert.equal(app.state, 'starting', 'readiness never turned true')
+  })
+})
+
+// ── 0.1.0-alpha.4: boot checks that used to be silent ───────────────────────
+
+/** A logger that keeps what it was told, by level. */
+function recordingLogger(): Logger & { readonly lines: Array<{ level: string; obj: unknown; msg: string }> } {
+  const lines: Array<{ level: string; obj: unknown; msg: string }> = []
+  const at = (level: string) => (obj: unknown, msg?: string) => { lines.push({ level, obj, msg: msg ?? '' }) }
+  const logger = {
+    level: 'trace' as const,
+    lines,
+    child() { return logger },
+    trace: at('trace'), debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error'), fatal: at('fatal'),
+  }
+  return logger
+}
+
+async function bootCodes(app: { ready(): Promise<unknown> }): Promise<{ codes: string[]; error: BootError }> {
+  try {
+    await app.ready()
+  } catch (error) {
+    assert.ok(error instanceof BootError, String(error))
+    return { codes: error.diagnostics.map((d) => d.code), error }
+  }
+  throw new Error('expected ready() to fail')
+}
+
+describe('a params schema is checked against its path at boot (§5.2)', () => {
+  const UserId = shaped({ type: 'object', properties: { userId: { type: 'string' } }, required: ['userId'] })
+
+  it('refuses a required key the path does not supply, and names the one it has', async () => {
+    const app = makeApp()
+    app.get('/users/:id', { params: UserId }, () => 'ok')
+    const { codes, error } = await bootCodes(app)
+    assert.deepEqual(codes, ['ZEN_PARAM_MISMATCH'])
+    const [d] = error.diagnostics
+    assert.match(d?.message ?? '', /GET \/users\/:id: the params schema requires "userId", and the path supplies "id"\./)
+    assert.match(d?.consequence ?? '', /Every request to GET \/users\/:id would be refused with a 400/)
+  })
+
+  it('suggests the rename when the names are close', async () => {
+    const app = makeApp()
+    app.get('/users/:usrId', { params: UserId }, () => 'ok')
+    const { error } = await bootCodes(app)
+    assert.equal(error.diagnostics[0]?.hint, 'Did you mean to name it "usrId"? Rename the schema key, or the path parameter.')
+  })
+
+  it('refuses a required key that only an optional segment supplies', async () => {
+    const Page = shaped({ type: 'object', properties: { page: { type: 'string' } }, required: ['page'] })
+    const app = makeApp()
+    app.get('/docs/:page?', { params: Page }, () => 'ok')
+    const { error } = await bootCodes(app)
+    assert.match(error.diagnostics[0]?.message ?? '', /supplies only when its optional segment is present/)
+  })
+
+  it('refuses a path parameter a closed schema would reject', async () => {
+    const Closed = shaped({ type: 'object', properties: {}, additionalProperties: false })
+    const app = makeApp()
+    app.get('/users/:id', { params: Closed }, () => 'ok')
+    const { error } = await bootCodes(app)
+    assert.match(error.diagnostics[0]?.message ?? '', /the path supplies "id", and the params schema refuses any key it does not declare/)
+  })
+
+  it('warns, and boots, when an open schema would drop a path parameter', async () => {
+    const log = recordingLogger()
+    const Open = shaped({ type: 'object', properties: { id: { type: 'string' } } })
+    const app = makeApp({ logger: log })
+    app.get('/orgs/:org/users/:id', { params: Open }, () => 'ok')
+    await app.ready()
+    const warning = log.lines.find((l) => l.level === 'warn' && /"org", which the params schema does not declare/.test(l.msg))
+    assert.ok(warning, JSON.stringify(log.lines.map((l) => l.msg)))
+  })
+
+  it('reports an integer schema on an untyped segment once, for every route, as information', async () => {
+    const log = recordingLogger()
+    const Int = shaped({ type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] })
+    const app = makeApp({ logger: log })
+    app.get('/a/:id', { params: Int }, () => 'ok')
+    app.get('/b/:id', { params: Int }, () => 'ok')
+    app.get('/c/:id<int>', { params: Int }, () => 'ok')
+    await app.ready()
+    const info = log.lines.filter((l) => l.level === 'info' && (l.obj as { code?: string }).code === 'ZEN_PARAM_MISMATCH')
+    assert.equal(info.length, 1)
+    assert.match(info[0]?.msg ?? '', /^2 path parameters are declared integer .* GET \/a\/:id \(:id\), GET \/b\/:id \(:id\)\./)
+  })
+
+  it('a schema that agrees with its path boots and validates', async () => {
+    const Id = shaped({ type: 'object', properties: { id: { type: 'string' } }, required: ['id'] })
+    const app = makeApp()
+    app.get('/users/:id', { params: Id }, (ctx) => ({ id: (ctx.params as { id: string }).id }))
+    assert.deepEqual((await app.inject('GET', '/users/7')).json(), { id: '7' })
+  })
+
+  it('a schema it cannot describe is left to the library, silently (§11.4.3)', async () => {
+    const Opaque = { '~standard': { version: 1 as const, vendor: 'opaque', validate: (v: unknown) => ({ value: v }) } }
+    const app = makeApp()
+    app.get('/users/:id', { params: Opaque }, () => 'ok')
+    await app.ready()
+  })
+})
+
+describe("a collection's when decides, once, whether its subtree exists (§6.2)", () => {
+  it('a false subtree is absent from the router, the graph and its hooks', async () => {
+    let hooked = 0
+    const app = makeApp()
+    app.collection('/debug', { when: () => false }, (c) => {
+      c.hook('onRequest', () => { hooked++ })
+      c.get('/state', () => 'state')
+    })
+    app.get('/ok', () => 'ok')
+    await app.ready()
+
+    assert.equal((await app.inject('GET', '/debug/state')).status, 404)
+    assert.equal((await app.inject('GET', '/ok')).status, 200)
+    assert.equal(hooked, 0)
+    const graph = app.graph()
+    assert.deepEqual(graph.routes.map((r) => r.path), ['/ok'])
+    assert.equal(graph.collections.length, 0)
+    assert.equal(graph.hooks.get('onRequest'), undefined)
+  })
+
+  it('reads the environment it was given, and a true subtree is an ordinary one', async () => {
+    const seen: unknown[] = []
+    const build = (feature: string) => {
+      const app = makeApp({ env: { FEATURE_X: feature } })
+      app.collection('/x', { when: (env) => { seen.push(env['FEATURE_X']); return env['FEATURE_X'] === 'on' } }, (c) => {
+        c.get('/', () => 'x')
+      })
+      return app
+    }
+    assert.equal((await build('on').inject('GET', '/x')).status, 200)
+    assert.equal((await build('off').inject('GET', '/x')).status, 404)
+    assert.deepEqual(seen, ['on', 'off'])
+  })
+
+  it('a nested collection inside an absent one is absent too', async () => {
+    const app = makeApp()
+    app.collection('/admin', { when: () => false }, (c) => {
+      c.collection('/users', (u) => { u.get('/', () => 'users') })
+    })
+    app.get('/', () => 'root')
+    await app.ready()
+    assert.equal((await app.inject('GET', '/admin/users')).status, 404)
+    assert.deepEqual(app.graph().routes.map((r) => r.path), ['/'])
+  })
+
+  it('is evaluated once, at boot, not per request', async () => {
+    let calls = 0
+    const app = makeApp()
+    app.collection('/x', { when: () => { calls++; return true } }, (c) => { c.get('/', () => 'x') })
+    for (let i = 0; i < 5; i++) await app.inject('GET', '/x')
+    assert.equal(calls, 1)
+  })
+
+  it('refuses an answer that is merely truthy — a promise, a string', async () => {
+    for (const answer of [Promise.resolve(false), 'false']) {
+      const app = makeApp()
+      app.collection('/x', { when: () => answer as never }, (c) => { c.get('/', () => 'x') })
+      const { codes, error } = await bootCodes(app)
+      assert.deepEqual(codes, ['ZEN_CONFIG_INVALID'])
+      assert.match(error.diagnostics[0]?.message ?? '', typeof answer === 'string' ? /a string, not a boolean/ : /a promise, not a boolean/)
+    }
+  })
+
+  it('reports a when that throws, naming the collection', async () => {
+    const app = makeApp()
+    app.collection('/x', { when: () => { throw new Error('no such flag') } }, (c) => { c.get('/', () => 'x') })
+    const { codes, error } = await bootCodes(app)
+    assert.deepEqual(codes, ['ZEN_CONFIG_INVALID'])
+    assert.match(error.diagnostics[0]?.message ?? '', /threw while deciding whether it exists: no such flag/)
+  })
+})
+
+describe('route-scoped middleware (§8.3)', () => {
+  it('runs after the app\'s and the collection\'s, in the order listed, and is labelled [route]', async () => {
+    const order: string[] = []
+    const app = makeApp()
+    app.use(function appWide() { order.push('app') })
+    app.collection('/notes', (c) => {
+      c.use(function collectionWide() { order.push('collection') })
+      c.get('/:id', {
+        use: [function checkOwnership() { order.push('route 1') }, function audit() { order.push('route 2') }],
+      }, () => { order.push('handler'); return 'ok' })
+    })
+    assert.equal((await app.inject('GET', '/notes/1')).status, 200)
+    assert.deepEqual(order, ['app', 'collection', 'route 1', 'route 2', 'handler'])
+
+    const route = app.graph().routes[0]!
+    const text = explainRoute(route)
+    assert.match(text, /\[route\]\s+checkOwnership/)
+    assert.match(text, /\[route\]\s+audit/)
+  })
+
+  it('short-circuits like any phase middleware, on that route alone', async () => {
+    const app = makeApp()
+    app.get('/guarded', { use: [(ctx) => ctx.json({ denied: true }, { status: 403 })] }, () => 'secret')
+    app.get('/open', () => 'open')
+    assert.equal((await app.inject('GET', '/guarded')).status, 403)
+    assert.equal((await app.inject('GET', '/open')).text(), 'open')
+  })
+
+  it('a route without use: compiles exactly as before', async () => {
+    const source = async (spec: Record<string, unknown> | null) => {
+      const app = makeApp()
+      if (spec === null) app.get('/x', () => 'x')
+      else app.get('/x', spec, () => 'x')
+      await app.ready()
+      return app.generatedSource().filter((u) => u.name.startsWith('pipeline')).map((u) => u.source).join('\n')
+    }
+    assert.equal(await source({ use: [] }), await source(null))
+  })
+})
+
+describe('the graph\'s decorations are what its type says (§2.4)', () => {
+  it('a slot decoration carries its Slot, an accessor decoration its function', async () => {
+    const userSlot = slot<{ id: number }>(uniqueName('graph.user'))
+    const app = makeApp()
+    app.decorate('user', userSlot)
+    const tenant = () => 'acme'
+    app.decorate('tenant', tenant)
+    app.get('/', () => 'ok')
+    await app.ready()
+
+    const decorations = app.graph().decorations
+    const user = decorations.find((d) => d.name === 'user')
+    const tenantRecord = decorations.find((d) => d.name === 'tenant')
+    assert.equal(user?.slot, userSlot)
+    assert.equal(user?.accessor, null)
+    assert.equal(tenantRecord?.slot, null)
+    assert.equal(tenantRecord?.accessor, tenant)
+    assert.equal('slotIndex' in (user ?? {}), false)
   })
 })

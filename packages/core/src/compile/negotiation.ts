@@ -12,6 +12,7 @@ import {
 import {
   compileStatusSerializer, type SerializerBuildOptions,
 } from './serializer.ts'
+import { exposureDiagnostics } from './exposure.ts'
 import type { Serializer } from './serializer-compiler.ts'
 
 /**
@@ -201,7 +202,7 @@ export function buildNegotiation(
         // agreed on is still the Content-Type, and disabling response filtering
         // is not the same statement as disabling negotiation.
         if (options.mode === 'off') continue
-        const built = compileStatusSerializer(schema, status, options)
+        const built = compileStatusSerializer(schema, status, options, media)
         diagnostics.push(...built.diagnostics)
         if (built.serializer !== null) writers.set(status, built.serializer)
         continue
@@ -228,6 +229,14 @@ export function buildNegotiation(
       // when the schema cannot be converted, which is the same honest `null`
       // §13.3.6 row 2 reports rather than a pretence that the contract holds.
       const shape = toJsonSchema(schema, 'output')
+      // The same check the JSON writer gets: an encoder builds its columns from
+      // this shape, so a CSV export could otherwise carry a field the JSON
+      // representation of the same route may not (§13.3, §13.4.4).
+      if (shape !== null) {
+        const exposed = exposureDiagnostics(shape, { routeId: options.routeId, status, media })
+        diagnostics.push(...exposed)
+        if (exposed.some((d) => d.severity === 'error')) continue
+      }
       try {
         writers.set(status, factory(shape, { routeId: options.routeId, status, media }))
       } catch (error) {
@@ -254,7 +263,12 @@ export function buildNegotiation(
     })
   }
 
-  if (diagnostics.length > 0) return { record: null, representations: null, diagnostics }
+  // Errors refuse the plan; warnings travel with it. Any diagnostic used to
+  // drop the plan, so a warning — an unconvertible JSON variant, a
+  // `format: 'password'` field — quietly turned a negotiated route back into a
+  // plain one, answering JSON to a client that asked for CSV, which is what
+  // §13.4.4 says keeping the writers apart from the statuses exists to prevent.
+  if (diagnostics.some((d) => d.severity === 'error')) return { record: null, representations: null, diagnostics }
 
   return {
     record: {

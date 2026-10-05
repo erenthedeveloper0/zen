@@ -1,6 +1,9 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { createApp, slot, markSync, NotFound, ZenApp, ALL_METHODS } from '@erenthedeveloper0/zen-core'
+import {
+  createApp, slot, markSync, NotFound, ZenApp, ALL_METHODS,
+  BadRequest, BodyInvalid, ServiceUnavailable, UnprocessableEntity, Codes,
+} from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
 const pathParser = {
@@ -577,3 +580,101 @@ function passthroughSchema() {
     },
   }
 }
+
+describe('every error class carries its own code (I7, §12.2)', () => {
+  test('a 503 thrown on purpose is ZEN_SERVICE_UNAVAILABLE, not the unclassified ZEN_INTERNAL', async () => {
+    const app = makeApp()
+    app.get('/maintenance', () => { throw new ServiceUnavailable('Back at noon', { retryable: true, expose: true }) })
+    app.get('/quiet', () => { throw new ServiceUnavailable('pool exhausted: db-primary') })
+    const res = await app.inject('GET', '/maintenance')
+    assert.equal(res.status, 503)
+    const problem = res.json<{ code: string; title: string }>()
+    assert.equal(problem.code, 'ZEN_SERVICE_UNAVAILABLE')
+    assert.equal(problem.title, 'Back at noon')
+
+    // A 5xx message is not exposed unless asked; its title is the status's own.
+    const quiet = await app.inject('GET', '/quiet')
+    assert.equal(quiet.json<{ title: string }>().title, 'Service Unavailable')
+    assert.doesNotMatch(quiet.text(), /db-primary/)
+  })
+
+  test('the classes and their codes', () => {
+    const cases: Array<[Error & { status: number; code: string }, number, string]> = [
+      [new BadRequest(), 400, Codes.BAD_REQUEST],
+      [new BodyInvalid(), 400, Codes.BODY_INVALID],
+      [new UnprocessableEntity(), 422, Codes.UNPROCESSABLE_ENTITY],
+      [new ServiceUnavailable(), 503, Codes.SERVICE_UNAVAILABLE],
+    ]
+    for (const [error, status, code] of cases) {
+      assert.equal(error.status, status, error.constructor.name)
+      assert.equal(error.code, code, error.constructor.name)
+    }
+  })
+
+  test('invalid JSON keeps ZEN_BODY_INVALID; a bad Host is ZEN_BAD_REQUEST', async () => {
+    const app = makeApp()
+    app.post('/echo', { body: passthroughSchema() }, (ctx) => ({ got: ctx.body }))
+    app.get('/where', (ctx) => ctx.url.href)
+
+    const json = await app.inject('POST', '/echo', { headers: { 'content-type': 'application/json' }, body: '{"a":' })
+    assert.equal(json.status, 400)
+    assert.equal(json.json<{ code: string }>().code, 'ZEN_BODY_INVALID')
+
+    const host = await app.inject('GET', '/where', { headers: { host: 'exa mple' } })
+    assert.equal(host.status, 400)
+    assert.equal(host.json<{ code: string }>().code, 'ZEN_BAD_REQUEST')
+  })
+})
+
+describe('an abort is classified by whose it was (§12.2, §4.4)', () => {
+  const abortError = (message: string, cause?: unknown) =>
+    Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { name: 'AbortError' })
+
+  test("the application's own abort is a 500 — the client was not slow, so it is not a 408", async () => {
+    const app = makeApp()
+    app.get('/upstream', () => {
+      const controller = new AbortController()
+      controller.abort()
+      throw abortError('This operation was aborted', controller.signal.reason)
+    })
+    const res = await app.inject('GET', '/upstream')
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_INTERNAL')
+  })
+
+  test('an upstream that timed out (AbortSignal.timeout) is a retryable 503', async () => {
+    const app = makeApp()
+    app.get('/upstream', async () => {
+      const signal = AbortSignal.timeout(1)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      throw signal.reason
+    })
+    const res = await app.inject('GET', '/upstream')
+    assert.equal(res.status, 503)
+    const problem = res.json<{ code: string; retryable?: boolean }>()
+    assert.equal(problem.code, 'ZEN_SERVICE_UNAVAILABLE')
+  })
+
+  test('…and so is a fetch-style AbortError whose cause is that TimeoutError', async () => {
+    const app = makeApp()
+    app.get('/upstream', async () => {
+      const signal = AbortSignal.timeout(1)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      throw abortError('The operation was aborted', signal.reason)
+    })
+    assert.equal((await app.inject('GET', '/upstream')).status, 503)
+  })
+
+  test("the request's own abort keeps its mapping", async () => {
+    const app = makeApp()
+    const controller = new AbortController()
+    app.get('/slow', (ctx) => {
+      controller.abort()
+      ctx.signal.throwIfAborted()
+      return 'unreachable'
+    })
+    const res = await app.inject('GET', '/slow', { signal: controller.signal })
+    assert.notEqual(res.status, 500, 'a client that left is not a server fault')
+    assert.notEqual(res.status, 503)
+  })
+})

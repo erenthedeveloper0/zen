@@ -335,4 +335,38 @@ app.get('/unconfigured', (ctx) => {
   return 'ok'
 })
 
+// ── 0.1.0-alpha.4: the surfaces "Nothing silent" added or corrected ─────────
+
+// §9.2 — an application phase hook is typed by its phase, not as a request
+// hook with a context it never receives.
+app.hook('onBoot', (graph) => {
+  expectType<readonly unknown[]>(graph.routes)
+  expectType<ReadonlyMap<string, unknown>>(graph.meta)
+})
+app.hook('onListen', (handle) => { expectType<string>(handle.url) })
+app.hook('onClose', (reason) => { expectType<string>(reason) })
+app.hook('onReady', () => {})
+// @ts-expect-error — onReady is called with nothing; there is no context to read.
+app.hook('onReady', (ctx: { id: string }) => ctx.id)
+
+// §7.2 — the forwarding chain and the scheme, as getters on every context.
+app.get('/whoami', (ctx) => {
+  expectExactly<readonly string[]>()<typeof ctx.ips>(true)
+  expectExactly<'http' | 'https'>()<typeof ctx.protocol>(true)
+  return 'ok'
+})
+
+// §8.3 — route-scoped middleware, the innermost of the three scopes.
+app.get('/owned/:id', { use: [(ctx) => { expectType<string>(ctx.id) }] }, () => 'ok')
+
+// §19.4 — inject() can say where the request came from.
+void app.inject('GET', '/whoami', { remote: { address: '203.0.113.7', port: 4000, family: 'IPv4' } })
+
+// Options nothing read are gone from the router contract, so passing
+// one is a compile error rather than a setting that silently does nothing.
+import type { RouterOptions } from '@erenthedeveloper0/zen-core'
+// @ts-expect-error — matching is always case-sensitive (§5.3).
+const caseless: RouterOptions = { caseSensitive: false }
+void caseless
+
 export {}

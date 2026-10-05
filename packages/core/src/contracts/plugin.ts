@@ -23,9 +23,28 @@ export interface Plugin<O = void, P extends object = {}> {
   /** name → semver range. Missing or mismatched dependencies are boot errors. */
   readonly dependsOn?: Readonly<Record<string, string>> | undefined
   readonly conflictsWith?: readonly string[] | undefined
-  /** Declared capability needs; `{ fs: true }` fails at boot on workerd. */
+  /**
+   * Declared capability needs, checked at boot against the adapter's `caps`
+   * (§14.1): `{ fs: true }` fails on workerd, and a string asks for that exact
+   * capability — `{ websocket: 'native' }`.
+   */
   readonly requires?: Partial<Capabilities> | undefined
+  /**
+   * The shape of this plugin's options — a Standard Schema, validated at boot
+   * before any plugin's `setup` runs (§10.5 step 2). A refusal is
+   * `ZEN_PLUGIN_OPTIONS`, and a key the schema does not declare is named with
+   * the one it was probably meant to be. `setup` receives the schema's
+   * *output* — defaults applied — not what was written.
+   */
   readonly options?: AnySchema | undefined
+  /**
+   * The options a *factory* plugin was built with — `cors({ origin })`,
+   * `rateLimit({ limit })` — which reach it through its closure rather than
+   * through `app.use(plugin, options)`. Stated here, they are validated against
+   * `options` exactly as that second argument would be; an explicit second
+   * argument wins over them.
+   */
+  readonly boundOptions?: unknown
   /**
    * What this plugin contributes to, and reads from, configuration — §16.1
    * layer 2 and §16.2's `used by:`.

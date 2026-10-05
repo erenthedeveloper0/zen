@@ -12,7 +12,7 @@ import type { Container, Token } from '../contracts/container.ts'
 import type { Deadline } from './deadline.ts'
 import type { Representation } from '../contracts/negotiation.ts'
 import { pathnameOf } from '../primitives/path.ts'
-import { trackDisposal, type Disposal } from '../primitives/disposal.ts'
+import { trackDisposal, trackIntrinsic, type Disposal } from '../primitives/disposal.ts'
 import { parseQuery, type QueryRecord } from './query.ts'
 import { assertCookie, parseCookies, type CookieRecord } from './cookies.ts'
 import { assertHeader } from './headers.ts'
@@ -94,7 +94,8 @@ export class PlainContext {
   $s: unknown[]
   /** What stage 10 releases, newest last — see `primitives/disposal.ts`. */
   $disposers: Disposal[] | null = null
-  $stage: ReplyStage | null = null
+  /** `ctx.res`, once read — and `SEALED_STAGE` once the reply has gone to egress (§7.3). */
+  $stage: ReplyBuilder | null = null
   $resStatus = 0
   $resHeaders: Array<[string, HeaderValue, boolean]> | null = null
   $resCookies: SetCookie[] | null = null
@@ -192,6 +193,11 @@ export class PlainContext {
     return proto !== undefined && forwardedProtocol(proto) === 'https'
   }
 
+  /** §7.2 — `secure`, as a scheme. Trusts `X-Forwarded-Proto` exactly as `secure` does. */
+  get protocol(): 'http' | 'https' {
+    return this.secure ? 'https' : 'http'
+  }
+
   /** §16.3 — the app-wide config object, shared and frozen. See `ContextEnv`. */
   get config(): never {
     return this.env.config as never
@@ -227,6 +233,11 @@ export class PlainContext {
     return this.raw.remote.address ?? ''
   }
 
+  /** §7.2, §19.4 — see `forwardedChain`. */
+  get ips(): readonly string[] {
+    return forwardedChain(this.raw, this.env.trustProxy)
+  }
+
   // ── slots (§7.4) ──────────────────────────────────────────────────────────
   get<T>(slot: Slot<T>): T {
     const v = this.$s[slot.index]
@@ -248,8 +259,11 @@ export class PlainContext {
   set<T>(slot: Slot<T>, value: T): void {
     this.$s[slot.index] = value
     // The value is what gets released, not the slot: a slot set twice holds
-    // two things that each need disposing (§7.4).
+    // two things that each need disposing (§7.4). A value that releases itself
+    // — `Symbol.asyncDispose` / `Symbol.dispose` — needs no `dispose` declared
+    // on the slot (§15.3); a primitive pays one `typeof` for asking.
     if (slot.dispose !== undefined) trackDisposal(this, slot.name, slot.dispose, value)
+    else if (typeof value === 'object' && value !== null) trackIntrinsic(this, slot.name, value)
   }
 
   has(slot: Slot<unknown>): boolean {
@@ -303,8 +317,8 @@ export const CONTEXT_MEMBERS: ReadonlySet<string> = new Set([
   // fields, in declaration order
   'raw', 'route', 'env', 'method', 'id', 'startTime', 'signal', 'aborted', 'timedOut', 'log',
   // lazy request data
-  'path', 'params', 'query', 'headers', 'cookies', 'body', 'url', 'host', 'secure', 'ip', 'config',
-  'deadline', 'timeLeft', 'negotiated',
+  'path', 'params', 'query', 'headers', 'cookies', 'body', 'url', 'host', 'secure', 'protocol', 'ip', 'ips',
+  'config', 'deadline', 'timeLeft', 'negotiated',
   // slots and services
   'get', 'find', 'set', 'has', 'resolve', 'resolveAsync',
   // response builders
@@ -340,6 +354,36 @@ export function forwardedClient(header: string, trust: true | number): string {
 }
 
 /**
+ * `ctx.ips` — §7.2, §19.4: the addresses a request came through, the client
+ * first and this process's peer last, as far as `trustProxy` believes them.
+ *
+ * `ips[0]` is `ctx.ip`, read by the same rule — the entry `trust` hops from
+ * the right of `X-Forwarded-For`, or its leftmost under `true` — followed by
+ * the trusted proxies after it and the socket's own peer. With no trust,
+ * nothing a client wrote is believed and the list is the peer alone; with no
+ * peer address either (an adapter that cannot know one), it is empty where
+ * `ctx.ip` is `''`. Computed
+ * on each read rather than cached, because a cache would be a field on every
+ * context (I2) for a value almost no request reads; keep it in a local.
+ *
+ * Shared by both context twins, like `forwardedClient`.
+ */
+export function forwardedChain(raw: RawRequest, trust: boolean | number): string[] {
+  const peer = raw.remote.address
+  const chain: string[] = []
+  if (trust !== false && trust !== 0) {
+    const header = raw.header('x-forwarded-for')
+    if (header !== undefined) {
+      const entries = header.split(',')
+      const from = trust === true ? 0 : entries.length - trust < 0 ? 0 : entries.length - trust
+      for (let i = from; i < entries.length; i++) chain.push((entries[i] as string).trim())
+    }
+  }
+  if (peer !== undefined && peer !== '') chain.push(peer)
+  return chain
+}
+
+/**
  * The scheme in an `X-Forwarded-Proto` value: its first entry. The TLS
  * terminator is the outermost proxy and writes it, and a header some proxy
  * extended to `https, http` is still a request that arrived over TLS.
@@ -351,9 +395,57 @@ export function forwardedProtocol(header: string): string {
 
 /** Structural target so the *generated* context class can reuse ReplyStage. */
 export interface StageTarget {
+  /** Read, never written, here: `SEALED_STAGE` once the reply has gone to egress. */
+  readonly $stage: ReplyBuilder | null
   $resStatus: number
   $resHeaders: Array<[string, HeaderValue, boolean]> | null
   $resCookies: SetCookie[] | null
+}
+
+/**
+ * `ctx.res` after egress — §7.3: "`ReplyBuilder` throws `ZEN_REPLY_SENT` after
+ * egress".
+ *
+ * A staged header written once the reply has been handed to the adapter used to
+ * be accepted and silently discarded — an `onResponse` hook, a handler still
+ * running behind an answered deadline, a stream's producer. Nothing it staged
+ * could reach the client, and nothing said so. The dispatcher now swaps
+ * `ctx.$stage` for this object as egress applies the staged metadata, so
+ * `ctx.res` read afterwards throws; a `ReplyStage` taken *before* egress and
+ * used after it checks for the swap on every call and throws the same way.
+ *
+ * One frozen object for the whole process: the swap is a store into a field
+ * every context already has, and allocates nothing (I2).
+ */
+class SealedStage implements ReplyBuilder {
+  status(): this { throw replySent('status') }
+  header(): this { throw replySent('header') }
+  appendHeader(): this { throw replySent('appendHeader') }
+  removeHeader(): this { throw replySent('removeHeader') }
+  vary(): this { throw replySent('vary') }
+  cookie(): this { throw replySent('cookie') }
+  clearCookie(): this { throw replySent('clearCookie') }
+}
+
+export const SEALED_STAGE: ReplyBuilder = Object.freeze(new SealedStage())
+
+/**
+ * `ZEN_REPLY_SENT`. Keeps its stack: it points at the code that wrote late,
+ * which is the one thing worth reading.
+ */
+function replySent(method: string): ZenError {
+  return new ZenError(
+    Codes.REPLY_SENT,
+    `ctx.res.${method}() was called after the reply was sent. Staged response metadata is applied once, at ` +
+      'egress, and nothing written to ctx.res after that can reach the client.',
+    {
+      status: 500,
+      expose: false,
+      hint:
+        'Stage it before the handler returns. Work that belongs after the response — counting, logging — is an ' +
+        'onResponse hook, which observes the reply and cannot change it (§9.5).',
+    },
+  )
 }
 
 /**
@@ -373,23 +465,27 @@ export class ReplyStage implements ReplyBuilder {
   }
 
   status(code: number): this {
+    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('status')
     this.#ctx.$resStatus = code
     return this
   }
 
   header(name: string, value: HeaderValue): this {
+    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('header')
     assertHeader(name, value)
     ;(this.#ctx.$resHeaders ??= []).push([name, value, false])
     return this
   }
 
   appendHeader(name: string, value: string): this {
+    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('appendHeader')
     assertHeader(name, value)
     ;(this.#ctx.$resHeaders ??= []).push([name, value, true])
     return this
   }
 
   removeHeader(name: string): this {
+    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('removeHeader')
     assertHeader(name, '')
     ;(this.#ctx.$resHeaders ??= []).push([name, '', false])
     return this
@@ -400,6 +496,7 @@ export class ReplyStage implements ReplyBuilder {
   }
 
   cookie(name: string, value: string, opts: Omit<SetCookie, 'name' | 'value'> = {}): this {
+    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('cookie')
     const cookie = { name, value, ...opts }
     assertCookie(cookie)
     ;(this.#ctx.$resCookies ??= []).push(cookie)
@@ -407,6 +504,7 @@ export class ReplyStage implements ReplyBuilder {
   }
 
   clearCookie(name: string, opts: Omit<SetCookie, 'name' | 'value'> = {}): this {
+    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('clearCookie')
     const cookie = { name, value: '', ...opts, maxAge: 0 }
     assertCookie(cookie)
     ;(this.#ctx.$resCookies ??= []).push(cookie)

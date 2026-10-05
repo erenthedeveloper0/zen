@@ -40,7 +40,7 @@ jobs:
       - name: Typecheck & build
         run: npm run typecheck
 
-      # ~1,110 tests: unit, integration, differential (compiled ≡ interpreted —
+      # ~1,250 tests: unit, integration, differential (compiled ≡ interpreted —
       # random hook plans crossed with random middleware chains, and random
       # chains where the deadline blows at a random position, which must agree
       # on *which* boundary abandoned the request), type-level, the
@@ -55,6 +55,13 @@ jobs:
       # invents no path, freezes to the leaves, and never lets a secret reach a
       # projection. It is the suite that caught the scalar/branch collision that
       # the hand-written test passed against.
+      #
+      # Two suites are about the framework rather than a feature: §20.7's
+      # leaks.test.ts — a real port served and closed with nothing left open,
+      # and 500 interleaved requests that never read one another's state — and
+      # the generated-source snapshot, every unit the compilers emit for one
+      # fixture application, so a compiler change arrives in review as a diff
+      # of code instead of a suite that still passes.
       - name: Test
         run: npm test
 
@@ -83,6 +90,16 @@ jobs:
       # as an API change, not as a diff in a routes file.
       - name: API compatibility gate
         run: npm run openapi:check
+
+      # Every "Working today" bullet in the README and every "Status: built"
+      # block in ARCHITECTURE.md carries an id, and each id is a probe against
+      # the built packages. The job fails when a claim stops holding, when a
+      # sentence has no probe, and when a gap the docs admit closes — a fixed
+      # defect must stop being described as missing. Two audits wrote these
+      # probes by hand and found every one failing; this is the same check,
+      # run by the build instead of by the next audit.
+      - name: Claims ledger
+        run: node scripts/claims.ts
 
   type-performance:
     name: type-check performance gate (M2)
@@ -246,8 +263,9 @@ jobs:
         run: node benchmarks/url/run.ts
 
       # CONTRIBUTING.md convention 3 — "a test that passes against the bug is not a
-      # test". Eighty-nine known defects are patched into the source one at a
-      # time; each must make its named suite fail. A control that *passes*
+      # test". A hundred and twenty-five known defects are patched into the
+      # source one at a time; each must make its named suite fail — or, for
+      # the strata, regex and claims checks, its script. A control that *passes*
       # means the assertion it points at is not load-bearing, and the job fails.
       #
       # It caught three things on its first run, which is why it is a script and
@@ -312,6 +330,14 @@ jobs:
             exit 1
           fi
 
+      # §3.1 — no module in core imports from a higher stratum. Reads import
+      # specifiers and needs nothing installed; the upward edges that are the
+      # design (compilers calling their interpreted twins' helpers) are listed
+      # in the script with their reasons, and a listed edge that disappears
+      # fails too, so the list cannot outlive the code it excuses.
+      - name: Assert core's strata point down (§3.1)
+        run: node scripts/check-strata.ts
+
       # §24.3 — the dependency graph has no cycles and openapi is a leaf on core.
       # Depending on the router would be the shortest way to reach param-type
       # schemas, and the one where the two copies of that table drift (§5.2).
@@ -320,3 +346,11 @@ jobs:
           deps=$(node -p "Object.keys(require('./packages/openapi/package.json').dependencies || {}).join(',')")
           echo "openapi dependencies: $deps"
           test "$deps" = "@erenthedeveloper0/zen-core" || { echo "::error::@erenthedeveloper0/zen-openapi must depend on @erenthedeveloper0/zen-core alone, got: $deps"; exit 1; }
+
+      # §19.3 — no regex in framework source can backtrack without bound. The
+      # one step here that needs an install: TypeScript's parser is what tells
+      # a regex literal from a division, which is the difference between a
+      # lint and a grep that misses half of them.
+      - run: npm ci
+      - name: Assert no regex in framework source can backtrack (§19.3)
+        run: node scripts/check-regex.ts

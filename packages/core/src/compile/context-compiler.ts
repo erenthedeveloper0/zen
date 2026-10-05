@@ -3,8 +3,8 @@ import type { RouteInfo } from '../contracts/context.ts'
 import { CodeGen, type CodeUnit } from './codegen.ts'
 import type { Deadline } from '../runtime/deadline.ts'
 import {
-  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, forwardedClient, forwardedProtocol, requestUrl,
-  type ContextEnv,
+  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, forwardedClient, forwardedChain, forwardedProtocol,
+  requestUrl, type ContextEnv,
 } from '../runtime/context.ts'
 import { pathnameOf } from '../primitives/path.ts'
 import { parseQuery } from '../runtime/query.ts'
@@ -13,7 +13,7 @@ import {
   jsonReply, textReply, htmlReply, bytesReply, emptyReply, redirectReply, fileReply, streamReply,
 } from '../runtime/reply.ts'
 import { createSseChannel } from '../runtime/sse.ts'
-import { trackDisposal } from '../primitives/disposal.ts'
+import { trackDisposal, trackIntrinsic } from '../primitives/disposal.ts'
 
 export interface Decoration {
   readonly name: string
@@ -68,6 +68,7 @@ export function compileContext(opts: CompileContextOptions): ContextClass {
       buildHeaders,
       slotEmpty,
       forwardedClient,
+      forwardedChain,
       forwardedProtocol,
       requestUrl,
       ReplyStage,
@@ -81,6 +82,7 @@ export function compileContext(opts: CompileContextOptions): ContextClass {
       streamReply,
       createSseChannel,
       trackDisposal,
+      trackIntrinsic,
       accessors: decorations.map((d) => d.accessor),
     },
   }
@@ -162,6 +164,7 @@ return class Ctx {
     const proto = this.raw.header('x-forwarded-proto')
     return proto !== undefined && forwardedProtocol(proto) === 'https'
   }
+  get protocol() { return this.secure ? 'https' : 'http' }
   get config() { return this.env.config }
   get deadline() { const d = this.$deadline; return d !== null ? d.at : null }
   get timeLeft() { const d = this.$deadline; return d !== null ? d.at - performance.now() : Infinity }
@@ -175,6 +178,7 @@ return class Ctx {
     const a = this.raw.remote.address
     return a !== undefined ? a : ''
   }
+  get ips() { return forwardedChain(this.raw, this.env.trustProxy) }
 
   get(slot) {
     const v = this.$s[slot.index]
@@ -188,6 +192,7 @@ return class Ctx {
   set(slot, value) {
     this.$s[slot.index] = value
     if (slot.dispose !== undefined) trackDisposal(this, slot.name, slot.dispose, value)
+    else if (typeof value === 'object' && value !== null) trackIntrinsic(this, slot.name, value)
   }
   has(slot) { return this.$s[slot.index] !== undefined }
 

@@ -81,9 +81,28 @@ interface plugin both can depend on.
 
 ## ZEN_PLUGIN_OPTIONS
 
-A plugin's options were rejected, or its `setup` threw. The plugin's own `hint`
-and `consequence`, when it supplies them, are printed as `fix:` and `also:`;
-plugins that depend on it are named as skipped.
+A plugin's options were rejected, or its `setup` threw.
+
+Options are checked against the plugin's `options` schema before any plugin's
+`setup` runs (§10.5 step 2), every plugin in one boot. Two things refuse them:
+the schema's own verdict, and a key the schema does not declare — named, with
+the declared key it was probably meant to be:
+
+```
+ZEN_PLUGIN_OPTIONS  Plugin "rate-limit@0.1.0" was given options it does not accept: "limt" is not an option.
+  fix: "limt" is not an option of rate-limit — did you mean "limit"?
+```
+
+A schema whose keys are open — `additionalProperties: true`, or a schema for
+them — is believed; otherwise an options object is read as a closed vocabulary,
+because the permissive reading is the one that turns a typo into a default.
+`setup` receives the schema's *output*, defaults applied. A factory plugin
+(`cors({ … })`) states what it was built with as `boundOptions`, and is checked
+the same way. Values are never quoted: options are where keys and DSNs go.
+
+When `setup` throws, the plugin's own `hint` and `consequence`, when it
+supplies them, are printed as `fix:` and `also:`; plugins that depend on it are
+named as skipped.
 
 ## ZEN_DECORATOR_CONFLICT
 
@@ -172,8 +191,38 @@ so the offer list belongs to the route.
 ## ZEN_CONFIG_INVALID
 
 A configuration value is unusable: a `defineConfig` thunk threw while computing
-from the environment, a plugin's configuration has the wrong shape, or an option
-such as `trustProxy` is out of range.
+from the environment, a plugin's configuration has the wrong shape, an option
+such as `trustProxy` is out of range — or a collection's `when` (§6.2) threw, or
+answered with something other than a boolean. A promise is always truthy and so
+is the string `'false'`, so either would turn on a subtree its author meant to
+turn off; `when` must decide synchronously, with a boolean.
+
+## ZEN_RESPONSE_WRITE_ONLY
+
+A response schema declares a property `writeOnly: true` — JSON Schema's "may be
+sent, never returned" — so the compiled serializer would return it (§13.3). The
+configuration store reads the same keyword as a secret marker (§16.2); a
+response cannot treat it as an ordinary field. The message names the route, the
+status, the media type and the JSON path. Remove the property from the response
+schema, or use a separate request schema: `writeOnly` belongs on what a client
+*sends*.
+
+`format: 'password'` in a response schema is the same report as a warning,
+under this code: it is OpenAPI's "do not display", which is weaker than "never
+returned", and a hash field might legitimately carry it. The check covers
+negotiated representations too, so a CSV export cannot carry either.
+
+## ZEN_REGEX_UNSAFE
+
+A warning, in development: a regular expression in an application parameter
+type's `test` can backtrack without bound — a quantified group that contains
+another quantifier (`(a+)+`, `(a*)*`), or alternatives under a quantifier that
+can match the same character (`(a|aa)+`) — so a crafted path segment makes the
+matcher spend exponential time (§19.3). `test` runs on every request that
+reaches the segment. Rewrite it so each repetition starts with a character the
+repeated part cannot match (`[a-z0-9]+(?:-[a-z0-9]+)*`), or bound the length
+before the expression runs. The framework's own sources are held to the same
+rule in CI (`scripts/check-regex.ts`).
 
 ## ZEN_ENV_INVALID
 
@@ -184,7 +233,9 @@ value came from, and the plugins that read it. A secret's value is never printed
 ## ZEN_CAPABILITY_UNAVAILABLE
 
 Something needs a capability the runtime lacks — a plugin's `requires`, or
-`listen()` with no adapter configured.
+`listen()` with no adapter configured. `requires` is checked against the
+adapter's own `caps` (an explicit `zen({ caps })` wins): `{ fs: true }` asks for
+a capability, and a string asks for that exact one — `{ websocket: 'native' }`.
 
 ## ZEN_APP_FROZEN
 
@@ -204,6 +255,12 @@ message lists every one of them.
 
 ## Request time
 
+## ZEN_BAD_REQUEST
+
+**400.** The request is malformed in a way that is not about its body — an
+invalid `Host` header, so `ctx.url` cannot be built (RFC 9112 §3.2). Thrown as
+`BadRequest`, which carried `ZEN_BODY_INVALID` until `0.1.0-alpha.4`.
+
 ## ZEN_VALIDATION
 
 **400 or 422.** The request failed its schemas. `errors` lists every issue across
@@ -221,7 +278,13 @@ buffering.
 ## ZEN_BODY_INVALID
 
 **400.** The body could not be parsed — invalid JSON — or nests deeper than
-`body.maxDepth` (32).
+`body.maxDepth` (32). Thrown as `BodyInvalid`.
+
+## ZEN_UNPROCESSABLE_ENTITY
+
+**422.** Thrown as `UnprocessableEntity`: the request was well-formed and
+understood, and refused on its meaning. A schema failure is `ZEN_VALIDATION`,
+which carries the issues; this is the one a handler throws itself.
 
 ## ZEN_UNSUPPORTED_MEDIA_TYPE
 
@@ -249,6 +312,12 @@ named a file that does not exist or escapes its `root`.
 body intake (the client was slow), 504 after it (the time was the server's).
 A request abandoned because the client disconnected is answered **499** with no
 body, and has no code: there is nobody left to read one.
+
+An `AbortError` a handler lets escape is a 408 only when it is the request's
+*own* abort — its error *is* `ctx.signal.reason`, or carries it as its `cause`,
+as `fetch(url, { signal: ctx.signal })` does. Any other abort was the
+application's: `ZEN_INTERNAL`, or `ZEN_SERVICE_UNAVAILABLE` when it was an
+upstream timing out (`AbortSignal.timeout`).
 
 ## ZEN_RATE_LIMITED
 
@@ -379,13 +448,26 @@ The message names the parameter, its type and the length of what it was given,
 never the value itself: a link is where a reset token or a signed id lives, and
 this message is logged. Never exposed.
 
-The same code is reserved for the boot-time check of a `params` schema against
-its path template (§5.2) — `params: z.object({ userId })` on `/users/:id` — which
-is not built yet.
+The same code is a **boot error** for a `params` schema that disagrees with its
+path template (§5.2) — `params: z.object({ userId })` on `/users/:id`, which
+would have answered every request 400 — with the parameter it was probably
+meant to be. Also an error: a path parameter the schema refuses
+(`additionalProperties: false`), and a required key only an optional segment
+supplies. A path parameter the schema does not declare is a warning (the schema
+drops it), and an integer schema reading an untyped segment is reported once,
+at boot, as information: `:id<int>` would refuse a non-number at the matcher.
+The check reads the schema through its JSON Schema; one that cannot be
+converted is not checked here.
 
 ## ZEN_REPLY_SENT
 
-Reserved (§7.3): modifying staged response metadata after egress. Not produced yet.
+**500.** `ctx.res` was written after the reply went to egress (§7.3) — from an
+`onResponse` hook, from a stream's producer, or from a handler still running
+behind a deadline that has already answered. Staged metadata is applied once, at
+egress, and a header written after that could never reach the client; it used to
+be accepted and discarded without a word. Stage it before the handler returns;
+work that belongs after the response is an `onResponse` hook, which observes the
+reply and cannot change it. Never exposed.
 
 ## ZEN_CONTEXT_ESCAPED
 
@@ -396,11 +478,20 @@ Reserved (§18.5): a pooled context used after release. Context pooling is not b
 **500.** A handler returned `undefined`. Return a value, a reply, or
 `ctx.empty()` for a 204.
 
+## ZEN_SERVICE_UNAVAILABLE
+
+**503.** The service cannot answer now. Thrown as `ServiceUnavailable` — which
+carried `ZEN_INTERNAL` until `0.1.0-alpha.4`, so a 503 thrown on purpose looked
+like a bug — and produced for an upstream call that gave up on its own timeout:
+a `TimeoutError` (`AbortSignal.timeout`), or an `AbortError` caused by one.
+That one is `retryable`, so it carries `Retry-After`. Never exposed.
+
 ## ZEN_INTERNAL
 
-**500.** An unclassified error — anything thrown that is not a `ZenError`. Its
-message is never exposed; the `requestId` in the problem document is how to
-find the full error in the logs.
+**500.** An unclassified error — anything thrown that is not a `ZenError`,
+including an `AbortError` the application caused that is neither the request's
+own abort nor a timeout. Its message is never exposed; the `requestId` in the
+problem document is how to find the full error in the logs.
 
 ---
 
@@ -467,6 +558,16 @@ can be hoisted into `components.schemas`.
 
 An `allOf` member is not an object schema, so the document keeps the `allOf`
 rather than merging it.
+
+## ZEN_OAS_META_INVALID
+
+A plugin's `openapi.*` metadata could not be used. A plugin declares security
+schemes with `app.meta('openapi.securitySchemes', { name: scheme })`, and the
+generator merges them into `components.securitySchemes`. This is reported for
+an `openapi.` field the generator does not read (with the one it probably
+meant), for a value that is not a record of schemes, and for a scheme name two
+plugins declare differently, where the first declaration is kept. The
+application's own `securitySchemes` option wins any name it declares.
 
 ---
 

@@ -6,10 +6,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { request } from 'node:http'
 import type { SseChannel } from '@erenthedeveloper0/zen-core'
-import { createApp, NoopLogger } from '@erenthedeveloper0/zen-core'
+import { BootError, createApp, definePlugin, NoopLogger } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 import { serve, capturingLogger, openAndDrop, delay, abortedWithin } from './helpers.ts'
-import { mediaTypeFor, nodeAdapter } from '../src/index.ts'
+import { mediaTypeFor, nodeAdapter, NODE_CAPABILITIES } from '../src/index.ts'
 
 /** A Standard Schema that accepts anything — the body just has to be *declared*. */
 const anyBody = { '~standard': { version: 1, vendor: 'test', validate: (value: unknown) => ({ value }) } } as never
@@ -631,5 +631,31 @@ describe('a client that leaves mid-upload (§4.4)', () => {
     } finally {
       await server.close()
     }
+  })
+})
+
+// ── §14.1: what this adapter says it can do ──────────────────────────────────
+
+describe('capabilities (§14.1, §14.2)', () => {
+  it('claims no compression and no WebSocket, because it implements neither', () => {
+    assert.equal(NODE_CAPABILITIES.compression, 'none')
+    assert.equal(NODE_CAPABILITIES.websocket, 'none')
+    assert.equal(NODE_CAPABILITIES.fs, true)
+  })
+
+  it('is what Plugin.requires is checked against, with no caps option', async () => {
+    const realtime = definePlugin({ name: 'realtime', version: '1.0.0', requires: { websocket: 'library' }, setup() {} })
+    const app = createApp({
+      router: new ZenRouter(),
+      pathParser: { parse: (p: string) => ({ path: parsePath(p).path, segments: parsePath(p).segments }) },
+      logger: new NoopLogger(),
+      adapter: nodeAdapter(),
+    }).use(realtime)
+    app.get('/', () => 'ok')
+    await assert.rejects(() => app.ready(), (error: unknown) => {
+      assert.ok(error instanceof BootError)
+      assert.equal(error.diagnostics[0]?.code, 'ZEN_CAPABILITY_UNAVAILABLE')
+      return true
+    })
   })
 })

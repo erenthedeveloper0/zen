@@ -1,5 +1,7 @@
 import { definePlugin, Codes, ZenError, type Plugin } from '@erenthedeveloper0/zen-core'
-import type { RawReading, Staging } from './shared.ts'
+import {
+  BOOLEAN, STRING, either, oneOf, optionsSchema, type OptionField, type RawReading, type Staging,
+} from './shared.ts'
 
 /**
  * Request id — rfcs/0001 §19.4, §31.1.
@@ -82,6 +84,13 @@ export interface RequestIdOptions {
  */
 const ACCEPTABLE = /^[A-Za-z0-9._-]{8,128}$/
 
+/** §10.5 step 2 — checked at boot, so `requestId({ trustHeaders: true })` is refused with "did you mean "trustHeader"?". */
+const OPTIONS = optionsSchema('requestId', {
+  header: either(STRING, oneOf(false)),
+  trustHeader: either(BOOLEAN, STRING),
+  rejectedHeader: either(STRING, oneOf(false)),
+} satisfies Record<keyof RequestIdOptions, OptionField>)
+
 export function requestId(options: RequestIdOptions = {}): Plugin<void, {}> {
   const echo = options.header === undefined ? 'x-request-id' : options.header
   const trust =
@@ -107,6 +116,8 @@ export function requestId(options: RequestIdOptions = {}): Plugin<void, {}> {
   return definePlugin<void, {}>({
     name: 'request-id',
     version: '0.1.0',
+    options: OPTIONS,
+    boundOptions: options,
     // First in the pack: a preflight answered by `cors` and a 429 refused by
     // `rate-limit` both short-circuit, and both should still carry the id that
     // the log line for them will be filed under.

@@ -23,6 +23,7 @@ export { parseDuration, formatDuration, type Duration } from './primitives/time.
 export { parseDotenv, dotenvChain, type DotenvResult, type EnvEntry } from './primitives/dotenv.ts'
 export { generateRequestId } from './primitives/id.ts'
 export { closest, editDistance } from './primitives/nearest.ts'
+export { regexHazards, regexLiterals, type RegexHazard } from './primitives/regex-safety.ts'
 export { UrlReference, classifyReference, isLocalUrl, type ReferenceKind } from './primitives/url-reference.ts'
 
 // ── errors ──────────────────────────────────────────────────────────────────
@@ -31,9 +32,9 @@ export {
   ZenError, FrameworkError, BootError, isZenError, withoutStack, type ZenErrorInit, type Diagnostic,
 } from './errors/zen-error.ts'
 export {
-  HttpError, BadRequest, Unauthorized, Forbidden, NotFound, MethodNotAllowed, NotAcceptable,
-  RequestTimeout, Conflict, PayloadTooLarge, UnsupportedMediaType, TooManyRequests, Internal,
-  ServiceUnavailable, GatewayTimeout, ValidationError, issue, type Issue,
+  HttpError, BadRequest, BodyInvalid, Unauthorized, Forbidden, NotFound, MethodNotAllowed, NotAcceptable,
+  RequestTimeout, Conflict, PayloadTooLarge, UnsupportedMediaType, UnprocessableEntity, TooManyRequests,
+  Internal, ServiceUnavailable, GatewayTimeout, ValidationError, issue, type Issue,
 } from './errors/http-errors.ts'
 
 // ── compile (stratum 3) ─────────────────────────────────────────────────────
@@ -131,8 +132,8 @@ export { ErrorEngine, classify, type ErrorMapper, type ErrorContextInfo } from '
 export { ConsoleLogger, NoopLogger } from './runtime/logger.ts'
 export { prepareForWire, stripBodyIfNeeded } from './runtime/egress.ts'
 export {
-  PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, CONTEXT_MEMBERS,
-  forwardedClient, forwardedProtocol, requestUrl,
+  PlainContext, ReplyStage, SEALED_STAGE, UNSET, buildHeaders, slotEmpty, CONTEXT_MEMBERS,
+  forwardedClient, forwardedChain, forwardedProtocol, requestUrl,
   type ContextEnv, type StageTarget,
 } from './runtime/context.ts'
 export {
@@ -143,12 +144,13 @@ export { Deadline, EXPIRED, budgetFor, abandoned, timeoutError } from './runtime
 export { HealthRegistry, type HealthRegistryOptions } from './runtime/health.ts'
 
 // ── public API ──────────────────────────────────────────────────────────────
-export { slot, slotCount, declaredSlots, allocateCell, __resetSlots } from './api/slot.ts'
+export { slot } from './api/slot.ts'
+export { slotCount, declaredSlots, allocateCell, __resetSlots } from './registry/slot-registry.ts'
 export {
   ZenApp, Collection, InjectedResponse, createApp, definePlugin, ALL_METHODS,
   type ZenOptions, type CollectionOptions, type SerializationOptions, type ConfigOf,
 } from './api/zen.ts'
-export { trackDisposal, type DisposalCarrier } from './primitives/disposal.ts'
+export { trackDisposal, trackIntrinsic, intrinsicDisposer, type DisposalCarrier } from './primitives/disposal.ts'
 
 // ── configuration (§16) ─────────────────────────────────────────────────────
 export { defineConfig } from './api/define-config.ts'

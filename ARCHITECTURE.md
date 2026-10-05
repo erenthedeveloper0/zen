@@ -123,7 +123,7 @@ Filesystem routing, DI, decorators, and auto-registration are all real features,
 Router, validator, serializer, error formatter, logger, adapter, cache store, rate-limit store, session store. The second implementation is not hypothetical — it exists in-tree and is run against the same conformance suite. A subsystem with one implementation is an unproven abstraction.
 
 **I7 — Failure is typed and stable.**
-Every error carries a stable machine-readable `code`. Codes are part of the public API and are covered by semver. Error responses conform to RFC 9457 (Problem Details) by default. Two different validation libraries produce byte-identical error envelopes.
+Every error carries a stable machine-readable `code`. Codes are part of the public API and are covered by semver. Error responses conform to RFC 9457 (Problem Details) by default. Two different validation libraries produce error envelopes of the same *shape*; the issue `code` inside them is inferred from the library's message text today, so it is not yet byte-identical across libraries (§11.2).
 
 **I8 — The framework never widens what it did not narrow.**
 No public API returns `any`. `unknown` is used where a value genuinely is unknown, and the user is given a typed way to narrow it. `as` inside framework internals requires a comment justifying it; `as` in the public type surface is a bug.
@@ -246,7 +246,7 @@ graph TD
     F --> G[Schema Registry: dedupe, convert, compile validators]
     G --> H[Serializer Compiler: response schema to stringify fn]
     H --> I[Pipeline Compiler: per-route chain to single fn]
-    I --> J[Router Compiler: trie to matcher fn]
+    I --> J[Router: trie built, params builders generated]
     J --> K[Conflict detection & static analysis]
     K --> L{Errors?}
     L -->|yes| M[Aggregate diagnostics, throw ZenBootError]
@@ -260,13 +260,15 @@ Two properties worth calling out:
 - **K happens before the app can serve traffic.** Route conflicts, unreachable routes, missing plugin dependencies, schemas that cannot be converted to JSON Schema for an OpenAPI-enabled app, response schemas that cannot serialize a declared type — all fail at boot, loudly, with every diagnostic reported at once rather than one-per-restart (§12.7).
 - **`zen build` runs A→N ahead of time** and serialises the artefacts, so production boot is `read manifest → link → listen`. This is what makes Zen viable on Workers (no `new Function`) and on Lambda (cold start).
 
+Step J is narrower than its box once said. The router builds its trie at boot and **generates** each route's params builder, but matching is an interpreted walk of that trie, not generated code: the `charCodeAt`-scanning matcher of §18.3 C1 is designed and not built (§28.8).
+
 ### 2.3 Per-request dataflow
 
 ```mermaid
 graph LR
     REQ[Socket bytes] --> AD[Adapter]
     AD --> DIS[Dispatcher]
-    DIS --> MATCH["match(method, path) — compiled"]
+    DIS --> MATCH["match(method, path) — trie walk"]
     MATCH -->|hit| CTX[Context Factory: new Ctx]
     MATCH -->|miss| NF[404 path]
     CTX --> PIPE["Compiled pipeline for this route"]
@@ -308,7 +310,7 @@ Serialisable also means **a secret must not be in it**, which is why the configu
 
 ### 3.1 Dependency rule
 
-Modules are arranged in strata. **A module may only import from a strictly lower stratum.** This is enforced in CI by `dependency-cruiser` with `zen-layers.cjs`, and violations fail the build.
+Modules are arranged in strata. **A module may only import from its own stratum or a lower one — never upward.** This is enforced in CI by `scripts/check-strata.ts`, which reads every import in `@erenthedeveloper0/zen-core` and fails the build on one that points up. Until `0.1.0-alpha.4` this sentence named `dependency-cruiser` and a `zen-layers.cjs` that did not exist, and the rule held by convention alone.
 
 ```
 Stratum 5   adapters/*            (may import 0-4)
@@ -318,6 +320,8 @@ Stratum 2   registry/*            (may import 0-1)
 Stratum 1   contracts/*           (may import 0)   ← interfaces only, zero runtime code
 Stratum 0   primitives/*          (may import nothing)
 ```
+
+Inside `@erenthedeveloper0/zen-core` the ladder is `primitives` 0, `contracts` and `errors` 1, `registry` and `di` 2, `compile` 3, `runtime` 4 and `api` 5; `index.ts` re-exports every stratum and is not on it. Two modules at one stratum may import each other, as two files in one directory do. The upward edges that exist are the compilers whose output must call exactly what their interpreted twins call (I6) — the context compiler, the pipeline compiler and the validation compiler import their twins' helpers from `runtime/` — and each is named in the script with its reason, so a new one fails the build until somebody writes down why it is not a slip.
 
 `contracts/` deserves emphasis: it contains **only** `interface`, `type`, and `const enum`-equivalent declarations. It compiles to zero bytes. Every cross-subsystem reference goes through it, which is what makes I6 (two implementations of everything) mechanically possible — a `Router` implementation imports `contracts/router` and nothing else from the framework.
 
@@ -336,7 +340,7 @@ Stratum 0   primitives/*          (may import nothing)
 | 9 | **Metadata Registry** | `core` | 2 | Arbitrary typed route/collection metadata keyed by symbol | Interpreting metadata |
 | 10 | **Service Container** | `di` | 2 | Tokens, providers, lifetimes, dependency graph | Instantiation timing at request scope (that is Context) |
 | 11 | **Config Store** | `core` (`registry/config-store.ts`) | 2 | Layered resolution with per-value provenance, env validation, deep freeze, redaction (§16) — **built** | Reading files, and reading `process` (that is the CLI, the adapter, or fifteen lines of application code) |
-| 12 | **Router Compiler** | `router` | 3 | Trie construction → matcher, conflict analysis | Route semantics |
+| 12 | **Router Compiler** | `router` | 3 | Trie construction, generated params builders, conflict analysis. Matching is an interpreted trie walk; a generated matcher is designed (§18.3 C1) and not built | Route semantics |
 | 13 | **Pipeline Compiler** | `core` | 3 | Chain flattening, phase ordering, codegen, sync fast-path | Middleware semantics |
 | 14 | **Validation Compiler** | `validation` | 3 | Strategy selection (Ajv vs native), coercion profile binding | Schema libraries |
 | 14b | **Coercion Compiler** | `compile/coercion-*` | 3 | Schema shape → coercion plan → one generated function per (route, source); interpreted twin (§11.4) | JSON Schema probe (§13.3) |
@@ -519,7 +523,7 @@ One line is deliberately absent, because it is opt-in: a route that declares a *
 
 ### 4.4 Deadlines, cancellation, backpressure
 
-> **Status: built.** Deadlines resolve from the app / collection / route scope chain at boot, the arm answers on time, the compiled pipeline stops abandoned work at the §4.1 stage boundaries, and `onTimeout` fires with the stage it blew in. Runnable in `examples/deadlines`; measured in `benchmarks/deadlines/run.ts`. Off by default — see the last subsection for why that is a position and not an oversight.
+> **Status: built.** Deadlines resolve from the app / collection / route scope chain at boot, the arm answers on time, the compiled pipeline stops abandoned work at the §4.1 stage boundaries, and `onTimeout` fires with the stage it blew in. Runnable in `examples/deadlines`; measured in `benchmarks/deadlines/run.ts`. Off by default — see the last subsection for why that is a position and not an oversight. <!-- claim: deadlines -->
 
 Every `Ctx` carries a real `AbortSignal`, wired to client disconnect (`req.on('aborted')` / `close`) **and** to the request deadline. It is not decorative: it is passed to `fetch`, to DB drivers that accept one, and to `ctx.stream()`. On abort, the pipeline stops at the next stage boundary, `onResponse` still runs (with `ctx.aborted === true`), and disposal happens. This closes the "client hung up but we kept querying Postgres for 30 seconds" hole that every Express app has.
 
@@ -608,7 +612,7 @@ On `SIGTERM`, the Lifecycle Manager (§22.9) runs a documented sequence:
 
 Each step is observable and individually overridable.
 
-> **Status: built, and it used to run inverted.** Steps 4 and 5 executed *first*, so the singletons — connection pools, clients, anything with a `dispose` — were torn down during the window in which the load balancer is still sending traffic. The default `drainDelay` of 0 kept it invisible: the window was empty, so nothing arrived to fail. It opened only for someone who set the delay this section tells them to set.
+> **Status: built, and it used to run inverted.** Steps 4 and 5 executed *first*, so the singletons — connection pools, clients, anything with a `dispose` — were torn down during the window in which the load balancer is still sending traffic. The default `drainDelay` of 0 kept it invisible: the window was empty, so nothing arrived to fail. It opened only for someone who set the delay this section tells them to set. <!-- claim: graceful-shutdown -->
 >
 > It stayed wrong through writing, implementing and reviewing because nothing could ask it a question. Step 1 is unobservable without a readiness endpoint, and there was none until §31.4. `scripts/smoke.ts` now asserts the ordering over a real socket, mid-shutdown, and `examples/health` lets you watch it: `/readyz` goes 503 immediately and the process keeps answering for the whole drain window.
 >
@@ -667,7 +671,9 @@ interface RouteRecord<S extends RouteSchema = RouteSchema> {
 }
 ```
 
-`origin` is not optional and is not debug-only. It is captured at registration via a cheap stack-frame parse (one `Error().stack` read, only during boot) and it is what makes every downstream error message able to say *"route registered at `src/routes/users.ts:42`"* instead of pointing into framework internals. This is the single highest-leverage DX decision in the registry.
+> **Not built.** `origin` is designed below and is `undefined` on every record today, as is every middleware's (§28.8); the diagnostics that would quote it name the route instead. <!-- gap: route-origin -->
+
+`origin` is not optional and is not debug-only. It is designed to be captured at registration via a cheap stack-frame parse (one `Error().stack` read, only during boot) and it is what makes every downstream error message able to say *"route registered at `src/routes/users.ts:42`"* instead of pointing into framework internals. This is the single highest-leverage DX decision in the registry.
 
 ### 5.2 Path syntax
 
@@ -697,7 +703,7 @@ A param type contributes three things at once: a matcher predicate compiled into
 
 For the third consumer to actually get it, the registry is published on the built router and carried on the frozen `AppGraph` as `graph.paramTypes`. `@erenthedeveloper0/zen-openapi` must not depend on `@erenthedeveloper0/zen-router` (§24.3), and the alternative — a second copy of the built-in table inside the OpenAPI package — is the shorter path and the one where "three consumers, one declaration" quietly becomes two declarations.
 
-Path templates are also *typed at the type level*: `ExtractParams<'/users/:id<int>/posts/:slug'>` resolves to `{ id: number; slug: string }` via template literal types, so `ctx.params` is typed **even with no schema at all**. Adding a `params` schema refines it further, and is designed to be checked for compatibility with the path at boot: declaring `params: z.object({ userId: ... })` on `/users/:id` should be the boot error `ZEN_PARAM_MISMATCH`.
+Path templates are also *typed at the type level*: `ExtractParams<'/users/:id<int>/posts/:slug'>` resolves to `{ id: number; slug: string }` via template literal types, so `ctx.params` is typed **even with no schema at all**. Adding a `params` schema refines it further, and it is checked against the path at boot (since `0.1.0-alpha.4`): declaring `params: z.object({ userId: ... })` on `/users/:id` is the boot error `ZEN_PARAM_MISMATCH`, with *did you mean to name it "id"?* — before it, that route booted and answered every request 400. A required key only an optional segment supplies is an error too, and so is a path parameter a closed schema (`additionalProperties: false`) would refuse; one an open schema would drop is a warning, and an `integer` schema on an untyped segment is reported once, as information, because `:id<int>` makes `/users/abc` a 404 at the matcher where the schema makes it a 400 after validation. A schema that cannot be described is left to `@erenthedeveloper0/zen-openapi`, which already reports it. <!-- claim: params-mismatch -->
 
 > **Designed, not built** — and until `0.1.0-alpha.3` this paragraph said it was. Today such a route boots and answers every request 400, because the schema requires a key the router never supplies. The code exists and has a producer now, from the other direction: `app.url()` raises it for parameters its route's template cannot carry (§5.7). The boot-time check is §28.8's.
 
@@ -1010,8 +1016,8 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
 
   // ── Connection ──────────────────────────────────────────────────────────
   readonly ip:        string                 // trust-proxy aware (§19.4)
-  readonly ips:       readonly string[]
-  readonly protocol:  'http' | 'https'
+  readonly ips:       readonly string[]      // the trusted chain, client first, peer last — ips[0] is ip
+  readonly protocol:  'http' | 'https'        // `secure` as a scheme; same trust rule
   readonly secure:    boolean
   readonly host:      string
   readonly signal:    AbortSignal            // disconnect *and* deadline (§4.4)
@@ -1041,7 +1047,7 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
   find<T>(slot: Slot<T>): T | undefined
   set<T>(slot: Slot<T>, value: T): void
   has(slot: Slot<unknown>): boolean
-  readonly state: InferState<X>              // typed façade over declared slots
+  readonly state: InferState<X>              // not built — proposed for removal (below)
 
   // ── Services (§15) ──────────────────────────────────────────────────────
   resolve<T>(token: Token<T>): T
@@ -1056,16 +1062,18 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
   file(path: string, init?: FileReplyInit): Reply<FileBody>
   stream(source: StreamSource, init?: ReplyInit): Reply<StreamBody>
   sse(init?: SseInit): SseChannel
-  ws(handler: WsHandler): Reply<UpgradeBody>
+  ws(handler: WsHandler): Reply<UpgradeBody>                  // not built
   respond<T>(reply: ReplyLike<T>): Reply<T>
 
   // ── Response metadata (staged; applied at egress) ───────────────────────
   readonly res: ReplyBuilder                 // .header() .cookie() .status() .vary()
 
   // ── Escape hatch ────────────────────────────────────────────────────────
-  hijack(): RawConnection                    // opt out of the response engine entirely
+  hijack(): RawConnection                    // opt out of the response engine entirely — not built
 }
 ```
+
+Three members of that listing are design rather than code: `state`, `ws` and `hijack` are not built, and `state` is proposed for removal — it would be a second way to do what slots and decorations already do, with types that are either global or need the same declarations a slot does (§7.4, Annex D question 1). `ips` and `protocol` are built since `0.1.0-alpha.4`, as getters, so neither context class gains a field (I2); both believe the forwarding headers exactly as far as `trustProxy` does (§19.4).
 
 Note what is absent: no `ctx.send()`, no `ctx.end()`, no `ctx.next()`, no `ctx.app`, no `ctx.throw()` (throw a real error — `throw new NotFound()`), no `ctx.assert()`, no `ctx.is()`/`ctx.accepts()` (those are free functions in `@erenthedeveloper0/zen-http` operating on `ctx`, so they tree-shake). Keeping this list short is a design activity, not an oversight; each method added to `Context` is a method every user must learn and every alternative implementation must provide.
 
@@ -1078,8 +1086,10 @@ Note what is absent: no `ctx.send()`, no `ctx.end()`, no `ctx.next()`, no `ctx.a
 | Request-derived data (`method`, `path`, `params`, `query`, `headers`, `cookies`, `body`, `ip`) | **Immutable after first read.** Values are computed lazily then frozen into a private field; the public accessor has no setter | `readonly` in types; `Object.freeze` on the value in dev; no setter exists at all in the generated class |
 | Validation output | Replaces the lazy value exactly once, during stage 7, before user code runs | Generated class writes the private field directly; write path is not reachable from user code |
 | Slots (`ctx.set`) | **Mutable, typed, explicit.** This is the sanctioned channel for per-request data | Type of value fixed by the `Slot<T>` declaration |
-| Response staging (`ctx.res.header(...)`) | Mutable until egress, then frozen | `ReplyBuilder` throws `ZEN_REPLY_SENT` after egress |
+| Response staging (`ctx.res.header(...)`) | Mutable until egress, then frozen | `ReplyBuilder` throws `ZEN_REPLY_SENT` after egress — built in `0.1.0-alpha.4`: egress replaces `ctx.$stage` with one shared frozen builder whose every method throws, and a builder kept from before egress checks for it on each call, so neither shape of late write is accepted and discarded |
 | Everything else | Not mutable — the property does not exist | Generated class is created with `Object.seal` in dev; in prod, sealing is unnecessary because no code path assigns |
+
+> **Status: the type-level half is built; the development-mode half is not.** No setter exists for request data in either context class, and a staging call after egress throws. Development mode does not seal the class or freeze request-derived values — those two cells describe the design — so an assignment to an undeclared property in development is not caught today (§28.8). <!-- claim: reply-sent -->
 
 The critical claim: **immutability is enforced by the type system and by the absence of setters, not by runtime freezing.** `Object.freeze` on hot objects pushes V8 into slower property access paths and costs on every request. Dev mode freezes (catching mistakes during development); production does not (paying nothing for a guarantee the compiler already gave). This is the same trade React makes with `Object.freeze` on props in development only.
 
@@ -1105,7 +1115,7 @@ Mechanics:
 - `slot<T>(name, opts)` creates an opaque token. During boot the Slot Registry assigns each declared slot a **dense integer index**.
 - The generated `Ctx` constructor allocates `this.$s = new Array(SLOT_COUNT)` — one array, fixed length, per request.
 - `ctx.get(s)` compiles to `this.$s[s.i]`, `ctx.set(s, v)` to `this.$s[s.i] = v`. Both are monomorphic array accesses.
-- Slots with `dispose` are tracked in a small dirty-list so stage 10 can tear them down in reverse order. The list records *values*, not slots: a slot set twice holds two things that each need releasing, and reading the slot's current value at settle time — which is what the first implementation did — disposed the second value twice and leaked the first.
+- Slots with `dispose` are tracked in a small dirty-list so stage 10 can tear them down in reverse order. A slot with no `dispose` whose *value* implements `Symbol.asyncDispose` or `Symbol.dispose` is released through that, `asyncDispose` preferred as `await using` prefers it (§15.3) — checked with one `typeof` per `set` of an object, and nothing for a primitive. The list records *values*, not slots: a slot set twice holds two things that each need releasing, and reading the slot's current value at settle time — which is what the first implementation did — disposed the second value twice and leaked the first.
 - A slot read before write throws `ZEN_SLOT_EMPTY` naming the slot and the route — vastly better than `undefined` propagating three layers into your business logic, which is the actual daily experience of `req.user`.
 
 Why this beats the alternatives:
@@ -1321,6 +1331,8 @@ Properties of the generated form:
 
 ### 8.4 The sync fast path
 
+> **Status: reachable through `markSync()` only.** The classifier and the `sync` and `async` rows below are built; the `maybe` row is not. A function that is neither `async` nor marked is emitted on the async path, so an ordinary handler never reaches the fully synchronous pipeline — which is why the listing in the README's "The idea" marks every function it shows. Emitting the `maybe` row speculatively, so plain functions reach the fast path, is designed and not built (§28.8). <!-- claim: sync-fast-path -->
+
 Most phase middleware are synchronous (a header check, a flag read). Marking them `async` forces a promise allocation and a microtask tick per hop; `await`ing a non-promise costs an extra tick even in modern V8.
 
 The compiler classifies each middleware at boot:
@@ -1416,7 +1428,9 @@ app.use(compression(), { when: ctx => ctx.headers['accept-encoding']?.includes('
 app.use(devToolbar(),  { when: env => env.NODE_ENV === 'development' })                  // boot-time
 ```
 
-The compiler distinguishes by arity/marker: an `Env`-typed predicate is evaluated at boot and the middleware is either inlined or **omitted from the generated source entirely**; a `Context`-typed predicate compiles to a guarded call. Same API, two very different costs, and `zen routes --explain` shows which one you got.
+> **Not built.** `MiddlewareOptions.when` is declared, documented `@experimental — not read`, and read by nothing: `app.use()` takes `{ name }` alone, so a `when` passed today omits and guards nothing (§28.8). For a subtree that exists only in some environments, a collection's `when` is built (§6.2). <!-- gap: middleware-when -->
+
+The compiler is designed to distinguish by arity/marker: an `Env`-typed predicate is evaluated at boot and the middleware is either inlined or **omitted from the generated source entirely**; a `Context`-typed predicate compiles to a guarded call. Same API, two very different costs, and `zen routes --explain` shows which one you got.
 
 ### 8.8 Error boundaries
 
@@ -1433,7 +1447,7 @@ Compiles into a `try/catch` region in the generated pipeline scoped exactly to t
 
 ## 9. Hook System Specification
 
-> **Status: built.** All twelve request phases fire. `onTimeout` was refused at boot until the deadline arm of §4.4 existed; deleting its one row from `UNAVAILABLE_PHASES` is the entire change that made it live, which was the point of making that table data. All three scopes, the mirror ordering, and the zero-cost property of §9.4 are implemented and tested. Runnable in `examples/observability` and `examples/deadlines`; measured in `benchmarks/hooks/run.ts`.
+> **Status: built.** All twelve request phases fire. `onTimeout` was refused at boot until the deadline arm of §4.4 existed; deleting its one row from `UNAVAILABLE_PHASES` is the entire change that made it live, which was the point of making that table data. All three scopes, the mirror ordering, and the zero-cost property of §9.4 are implemented and tested. Runnable in `examples/observability` and `examples/deadlines`; measured in `benchmarks/hooks/run.ts`. <!-- claim: hooks, onboot-hook -->
 
 ### 9.1 Hooks vs middleware
 
@@ -1684,7 +1698,9 @@ The `app` handle passed to `setup` is a **scoped registrar**, not the applicatio
 | `app.config` | *Reads* the resolved configuration | §16.3. Not a registration — the frozen tree, readable because §16.2 already folded it before any `setup` ran |
 | `app.url(name, params, query)` | *Builds* the path of a named route | §5.7. Not a registration either — for the plugin's handlers, at request time; from `setup` it is `ZEN_APP_NOT_READY`, because routes compile after every plugin has run |
 
-Built today: `route`, `use`/`around`/`after`, `hook` (all twelve live phases, §9), `slot`, `decorate`, `provide`, `errorMap`, `health`, `probe`, `meta`, `onBoot`, `exportsOf`, `config`, and `url`. `command` waits on §17.
+Built today: `route`, `use`/`around`/`after`, `hook` (all twelve live phases, §9), `slot`, `decorate`, `provide`, `errorMap`, `health`, `probe`, `meta`, `onBoot`, `exportsOf`, `config`, and `url`. `command` waits on §17; `schema` and `adapterHook` are not built.
+
+Two of those were not true until `0.1.0-alpha.4`, and both were §9.7's failure — a registration that silently does nothing. **`meta`** wrote into the root scope's map, and the graph was handed a fresh empty one, so nothing a plugin wrote could be read; `graph.meta` now carries it, keyed `<plugin>.<key>`, and `@erenthedeveloper0/zen-openapi` merges a plugin's `openapi.securitySchemes` into the document. **`hook('onBoot', fn)`** passed every phase check, was stored, and was never called, because boot ran only the separate list `onBoot(fn)` filled; the two are now one table, run in registration order with the frozen graph. <!-- claim: plugin-meta, onboot-hook -->
 
 The last of those needs a note, because the row above it says `config` was deliberately *removed* from this table. Both are true and they are about different directions. **Declaring** a config namespace is a manifest field, for the ordering reason above: it has to be readable before any plugin runs. **Reading** the resolved tree is a registrar property, and it was missing — so a plugin could declare layer-2 defaults it had no way to read back. §32.5 is how that was noticed: an allowlist is exactly the value that belongs in configuration, so `cors()` wanted it on its first line, and the ordering it depends on had been correct since §16 landed.
 
@@ -1735,7 +1751,7 @@ app.get('/me', ctx => ({ id: ctx.user.id, cached: ctx.redis.status }))   // full
 Two safeguards against the well-known failure mode of this pattern (unbounded intersection growth destroying `tsc` performance — see §28.2):
 
 1. `ProvidesOf<P>` is a **flat object type**, never a conditional or mapped type over another plugin's output. Intersections of flat object types are cheap; intersections of conditional types are not.
-2. A documented escape: `app.seal()` returns `App<Prettify<Extensions>>`, materialising the accumulated intersection into a single resolved object type. Large apps call `seal()` once after plugin registration, and every subsequent route pays a single-type lookup instead of an N-way intersection.
+2. A documented escape: `app.seal()` returns `App<Prettify<Extensions>>`, materialising the accumulated intersection into a single resolved object type. Large apps call `seal()` once after plugin registration, and every subsequent route pays a single-type lookup instead of an N-way intersection. `0.1.0-alpha.4` was to deprecate it, on §28.2's −0.4% against a 7% spread — and re-measured it first: −7.8% and −8.1%, each with a 0–3% spread, the first runs in which the harness calls the effect above the noise. It is therefore not deprecated. One machine is not the CI matrix, so Annex D question 5 stays open until the matrix agrees.
 
 ### 10.5 Resolution algorithm
 
@@ -1757,6 +1773,8 @@ Two safeguards against the well-known failure mode of this pattern (unbounded in
 9. Run `onBoot` hooks with the frozen AppGraph.
 ```
 
+Step 2 is built since `0.1.0-alpha.4`, and was not before it: `Plugin.options` was declared and read by nothing, so `rateLimit({ limt: 100 })` booted with the default limit — the misconfiguration was not merely unreported, it became a different working configuration. Every plugin's options are now checked before any `setup` runs, two ways: the schema's own verdict, awaited when it is async, and every key the schema's JSON Schema does not declare, named with the one it was probably meant to be (`"limt" is not an option of rate-limit — did you mean "limit"?`). An options object is a closed vocabulary, so an absent `additionalProperties` reads as closed here. `setup` receives the schema's *output*, defaults applied. A factory plugin — `cors({ … })` — states the options it was built with as `boundOptions`, which are checked the same way, and an explicit `app.use(plugin, options)` wins over them. A refusal names keys, never values: options are where API keys are passed. <!-- claim: plugin-options -->
+
 Steps 2–6 are pure analysis over data. `zen plugin graph` renders the result as Mermaid or DOT without executing any `setup`, which means you can inspect a plugin tree that fails to boot.
 
 ### 10.6 Plugin errors
@@ -1777,7 +1795,7 @@ Published plugins must:
 
 ## 11. Validation Engine Architecture
 
-> **Status: partly built.** Standard Schema integration (§11.1), issue normalisation (§11.2) and **coercion profiles (§11.4)** are live. The Ajv strategy of §11.3 is not: every schema takes the `StandardSchemaStrategy` path, and `zen inspect validation` needs the CLI. Response validation (§11.5) exists only as the compiled serializer's guarantee, which is the security-relevant half. `check` (§11.7) is unbuilt. Coercion is runnable in `examples/coercion`; measured and gated in `benchmarks/coercion/run.ts`.
+> **Status: partly built.** Standard Schema integration (§11.1), issue normalisation (§11.2) and **coercion profiles (§11.4)** are live. The Ajv strategy of §11.3 is not: every schema takes the `StandardSchemaStrategy` path, and `zen inspect validation` needs the CLI. Response validation (§11.5) exists only as the compiled serializer's guarantee, which is the security-relevant half. `check` (§11.7) is unbuilt. Coercion is runnable in `examples/coercion`; measured and gated in `benchmarks/coercion/run.ts`. <!-- claim: validation-envelopes, coercion -->
 
 ### 11.1 Core decision: Standard Schema
 
@@ -1839,7 +1857,7 @@ interface Issue {                     // normalised, library-independent
 }
 ```
 
-The `Issue` normalisation is what makes I7 true: a Zod app and a Valibot app produce identical error response bodies. Clients — including generated SDKs — can rely on `issues[].code` across the entire ecosystem.
+The `Issue` normalisation is what gives I7 its shape: a Zod app and a Valibot app produce envelopes with the same fields, in the same places. It does not yet give them the same `code`. That is inferred from the message text — Zod 4's `"Too small: expected number to be >=1"` contains "expected" and reads as `type`, not `min` — so a localised library changes every code, and a client should not switch on `issues[].code` across libraries until per-vendor issue mappers exist (§28.8). <!-- gap: issue-codes -->
 
 ### 11.3 Strategy selection
 
@@ -2076,7 +2094,10 @@ Pipeline catch region (innermost error boundary first, §8.8)
   ↓
 Classification:  ZenError? → use it
                  known mapped class? → mapper
-                 AggregateError / DOMException(AbortError)? → special-case
+                 AbortError / TimeoutError? → by whose it was:
+                     the request's own abort → ZEN_TIMEOUT
+                     an upstream's AbortSignal.timeout() → ZEN_SERVICE_UNAVAILABLE (503, retryable)
+                     any other abort → ZEN_INTERNAL (500)
                  unknown? → wrap in Internal(500, expose:false, cause: original)
   ↓
 onError hooks (innermost scope first; first Reply wins)
@@ -2090,7 +2111,9 @@ Logger (level by status: 5xx→error, 429/408→warn, other 4xx→info/debug)
 onResponse hooks
 ```
 
-Every step is a documented extension point. Crucially, the pipeline is **compiled per route** like everything else: the set of applicable mappers and boundaries is known at boot, so error handling does not scan a global list.
+Every step is a documented extension point. Crucially, the pipeline is designed to be **compiled per route** like everything else: the set of applicable mappers and boundaries known at boot, so error handling does not scan a global list.
+
+> **Built today: global mappers only.** `app.onError(Class, map)` and a plugin's `errorMap` register app-wide, looked up by constructor and then by `instanceof` in registration order; route- and scope-level mappers and §8.8's error boundaries are designed and not built (§28.8). The abort rule above is built since `0.1.0-alpha.4`; before it, every `AbortError` became a 408 — telling the client *it* had been slow, when what had happened was the application's own `AbortController` around an upstream call.
 
 ### 12.5 Typed error mappers
 
@@ -2130,7 +2153,7 @@ Mappers are keyed by constructor and resolved at boot into a `Map<Function, Mapp
 
 Non-exposed errors collapse to title/status/code/requestId. The `requestId` is always present and always logged alongside the full internal detail — so support can turn a user's screenshot into the exact stack trace without ever having shipped that stack to the user.
 
-**Development** — the same JSON, plus a `debug` object with the stack, the source frame with a code excerpt, the route id, the resolved middleware chain, and suggestions:
+**Development** — the same JSON, plus a `debug` object. Built today, it carries the stack, the cause, the route and the error's `meta`; the source frame with a code excerpt, the resolved middleware chain, the suggestions and the hyperlinked terminal rendering below are designed and not built (§28.8):
 
 ```
   ZEN_VALIDATION  Validation failed (422)     POST /api/v2/users     req 01JC8X4M9K2Q7T
@@ -2178,7 +2201,7 @@ This is a deliberate inversion of the usual "throw the first error" behaviour an
 
 - `unhandledRejection` / `uncaughtException` handlers are installed by default (configurable): log at `fatal` with full context, then initiate graceful shutdown. **Zen never keeps serving after an uncaught exception**, because the process's state is unknown at that point — the "keep the server up" instinct is how corrupted data gets written.
 - Errors thrown inside `onResponse`, `onClose`, or the error formatter itself are caught, logged, and never re-enter the pipeline.
-- A circuit-breaker on the error path: if the formatter throws more than N times per window, Zen falls back to a hard-coded minimal 500 responder and logs the formatter as broken.
+- A circuit-breaker on the error path: if the formatter throws more than N times per window, Zen falls back to a hard-coded minimal 500 responder and logs the formatter as broken. *The window is designed, not built:* a formatter that throws degrades that one response to a minimal 500 and is logged at `fatal`, every time, with no latch.
 
 ---
 ## 13. Serialization Architecture
@@ -2230,7 +2253,7 @@ Handler return values are normalised at the entry to stage 9:
 | `SafeHtml` (`` html`…` ``) | `text/html; charset=utf-8` — recognised in the async-iterable branch, so an object return pays nothing for it (§19.5.1) |
 | `Uint8Array`/`Buffer` | `application/octet-stream` |
 | `ReadableStream`/`Readable` | `stream` |
-| `Response` (WHATWG) | pass-through, adapter-native |
+| `Response` (WHATWG) | **a 500 today**, `ZEN_SERIALIZATION` — designed as pass-through, adapter-native, and not built (§28.8) <!-- gap: whatwg-response --> |
 | anything else | `json` |
 
 ### 13.3 The compiled JSON serializer
@@ -2350,7 +2373,7 @@ There is a trap here that `examples/openapi` documents rather than hides. Zod's 
 
 ### 13.4 Content negotiation
 
-> **Status: built.** This section was one paragraph before it was built. Seven subsections now, because building it turned that paragraph into decisions somebody has to be able to look up — where in the lifecycle it runs, what happens to a status it does not cover, and which of two defensible readings of `Accept: text/csv;q=0, */*` is the right one. Runnable in `examples/negotiation`; measured and gated in `benchmarks/negotiation/run.ts`.
+> **Status: built.** This section was one paragraph before it was built. Seven subsections now, because building it turned that paragraph into decisions somebody has to be able to look up — where in the lifecycle it runs, what happens to a status it does not cover, and which of two defensible readings of `Accept: text/csv;q=0, */*` is the right one. Runnable in `examples/negotiation`; measured and gated in `benchmarks/negotiation/run.ts`. <!-- claim: negotiation -->
 
 ```ts
 app.get('/sales', {
@@ -2550,17 +2573,17 @@ app.get('/events', ctx => {
 
 SSE is first-class rather than a recipe: `SseChannel` handles event framing, `id`/`retry` fields, `Last-Event-ID` resumption (the route can declare a `resume` function), heartbeat comments to defeat proxy idle timeouts, and automatic `Cache-Control: no-cache, no-transform` + `X-Accel-Buffering: no` so it works behind nginx without the config change everyone discovers the hard way.
 
-> **Status: built, except resumption.** `ctx.sse()` frames events per the WHATWG grammar and refuses a line break in `event` or `id` rather than let it forge a field; heartbeats start with the first read, so an unconsumed channel owns no timer; backpressure is the adapter pulling frames, and `maxBuffered` (1 MiB) bounds what a client that stopped reading can make the server hold; and open streams receive a final `event: shutdown` during drain (§30.2). The `resume` function for `Last-Event-ID` is not built — the header reaches the handler, which can resume by hand.
+> **Status: built, except resumption.** `ctx.sse()` frames events per the WHATWG grammar and refuses a line break in `event` or `id` rather than let it forge a field; heartbeats start with the first read, so an unconsumed channel owns no timer; backpressure is the adapter pulling frames, and `maxBuffered` (1 MiB) bounds what a client that stopped reading can make the server hold; and open streams receive a final `event: shutdown` during drain (§30.2). The `resume` function for `Last-Event-ID` is not built — the header reaches the handler, which can resume by hand. <!-- claim: sse -->
 
 Files get conditional-request handling for free: `ETag` (weak, from size+mtime), `Last-Modified`, `If-None-Match`/`If-Modified-Since` → 304, and `Range` → 206. Path traversal is blocked at the IR level: `{ kind: 'file' }` paths are resolved against a declared root and rejected if they escape it — on the *real* path, so a symlink inside the root pointing out of it is refused too — so no plugin can accidentally serve `/etc/passwd`.
 
-> **Status: built, with two narrowings.** One byte range is honoured; a request for several is answered with the whole representation, which RFC 9110 §14.2 permits — `multipart/byteranges` is a known amplification vector (§19.3) for a feature almost nothing uses. And the ETag is weak only: a strong one needs a content hash, which means reading the file to answer a request that may only want to know whether it changed. A missing file, or a path that escapes its root, is an ordinary 404 through the error engine — decided before the status line is written, not a dropped connection.
+> **Status: built, with two narrowings.** One byte range is honoured; a request for several is answered with the whole representation, which RFC 9110 §14.2 permits — `multipart/byteranges` is a known amplification vector (§19.3) for a feature almost nothing uses. And the ETag is weak only: a strong one needs a content hash, which means reading the file to answer a request that may only want to know whether it changed. A missing file, or a path that escapes its root, is an ordinary 404 through the error engine — decided before the status line is written, not a dropped connection. <!-- claim: files -->
 
 ### 13.6 Headers, cookies, and interaction ordering
 
 `HeaderBag` stores lowercase names with a small-array backing (real responses have 6–12 headers; a `Map` is slower at that size and allocates more). Multi-value headers are held as arrays only when a second value is added.
 
-Cookies are staged, not stringified, until egress — so a later middleware can override an earlier one's cookie by name rather than emitting two conflicting `Set-Cookie` headers. Signing and encryption use rotating keys (`keys: [current, ...previous]`, verify against all, sign with first).
+Cookies are staged, not stringified, until egress — so a later middleware can override an earlier one's cookie by name rather than emitting two conflicting `Set-Cookie` headers. Signing and encryption are designed to use rotating keys (`keys: [current, ...previous]`, verify against all, sign with first); *neither is built*.
 
 Staged metadata (`ctx.res.*`) is applied here, and "here" is downstream of every path — success, error, timeout, and unmatched alike. That is what makes it the right place for a cross-cutting header rather than an `after` middleware, which §4.6 keeps off the error path entirely: §32.2 builds the whole middleware pack on the distinction, and the observable difference is whether a 404 carries `Access-Control-Allow-Origin`.
 
@@ -2577,9 +2600,11 @@ serialize → onSerialize hooks → ETag → conditional (304?) → onSend hooks
           → compression → security headers → write
 ```
 
-Compression runs *after* ETag so the ETag identifies the resource, not its encoding, and `Vary: Accept-Encoding` is added automatically.
+Compression runs *after* ETag so the ETag identifies the resource, not its encoding, and `Vary: Accept-Encoding` is added automatically. *That order is the design.* Built today are serialize, `onSerialize` and `onSend`; ETag and the conditional 304 exist for file responses only (§13.5), and compression is not built — every adapter declares `compression: 'none'` (§14.1).
 
 ### 13.7 Zero-copy and allocation discipline
+
+> **Designed, not built**, except the second bullet: the compiled serializers do build one string. Pre-encoded static bodies, interned header buffers and frozen 204/304/404 replies do not exist.
 
 - Static bodies (constant JSON, health payloads, redirect shells) are pre-encoded to `Buffer` at boot and written directly — one syscall, zero per-request allocation.
 - Compiled serializers build a single string; the adapter converts with `Buffer.from(s, 'utf8')` (one allocation) rather than through a `TextEncoder` + stream.
@@ -2630,13 +2655,13 @@ interface Capabilities {
 }
 ```
 
-`Capabilities` is not documentation — it is consumed by the compilation layer. `eval: false` selects interpreted router, validator, serializer, and context factory. `cpuTimeLimited: true` changes default body-size limits and disables the sync fast-path's long-chain trampolining threshold. Feature detection happens once, at boot, and its results are compiled in.
+`Capabilities` is not documentation — it is consumed by the compilation layer, and it is the adapter's: the app reads `opts.caps ?? adapter.caps ?? DEFAULT_CAPABILITIES`, so `Plugin.requires` is checked against what the runtime can do. Until `0.1.0-alpha.4` only an explicit `caps` option was read and the adapter's were ignored, so a plugin requiring `{ fs: true }` would have booted on workerd; and the Node adapter claimed `compression` and `websocket` it implements neither of. It declares `'none'` for both now, as core's defaults do. `eval: false` selects interpreted router, validator, serializer, and context factory. `cpuTimeLimited: true` changes default body-size limits and disables the sync fast-path's long-chain trampolining threshold. Feature detection happens once, at boot, and its results are compiled in.
 
 ### 14.2 Supported targets
 
 | Adapter | Package | Entry | Notes |
 | --- | --- | --- | --- |
-| Node | `@erenthedeveloper0/zen-adapter-node` | `http`/`https`/`http2` | Default; the optimised path (§14.3) |
+| Node | `@erenthedeveloper0/zen-adapter-node` | `node:http` (`https`/`http2` designed, not built) | Default; the optimised path (§14.3) |
 | Bun | `@erenthedeveloper0/zen-adapter-bun` | `Bun.serve` | Native WS, native file streaming |
 | Deno | `@erenthedeveloper0/zen-adapter-deno` | `Deno.serve` | |
 | Cloudflare Workers | `@erenthedeveloper0/zen-adapter-workers` | `fetch(req, env, ctx)` | `eval: false` → requires `zen build` |
@@ -2751,7 +2776,7 @@ A token is a unique symbol-backed object carrying a phantom type. No `reflect-me
 
 Request-scoped services reusing the slot array is the key implementation detail: a scoped token is assigned a slot index at boot, so `ctx.resolve(TenantService)` is `this.$s[i] ?? (this.$s[i] = create())` — an array read, not a map lookup, and no per-request container object is allocated. A request that resolves nothing allocates nothing.
 
-> **Status: built — and disposal only since the pre-release audit.** A scoped provider's `dispose` was accepted and never called, so a per-request transaction or pooled connection was dropped rather than released. A scoped instance with a `dispose` now joins the same stage-10 list as a disposable slot's value (§7.4), and is released newest first on every path, including a request that failed and one whose error reply could not be written either. Something acquired *after* its request settled — a handler still running behind a deadline that has already answered, whose transaction finishes opening a moment later — is released on arrival rather than queued on a list nothing will read again. A request that creates nothing disposable still allocates nothing, and awaits nothing to find that out — asserted in `benchmarks/request-path`.
+> **Status: built — and disposal only since the pre-release audit.** A scoped provider's `dispose` was accepted and never called, so a per-request transaction or pooled connection was dropped rather than released. A scoped instance with a `dispose` now joins the same stage-10 list as a disposable slot's value (§7.4), and is released newest first on every path, including a request that failed and one whose error reply could not be written either. Something acquired *after* its request settled — a handler still running behind a deadline that has already answered, whose transaction finishes opening a moment later — is released on arrival rather than queued on a list nothing will read again. A request that creates nothing disposable still allocates nothing, and awaits nothing to find that out — asserted in `benchmarks/request-path`. <!-- claim: di, intrinsic-dispose -->
 
 Disposal integrates with the explicit resource management proposal where available (`Symbol.asyncDispose`), and falls back to a `dispose` option otherwise.
 
@@ -2786,7 +2811,7 @@ Overrides are applied before compilation, so the app under test is compiled with
 
 ## 16. Configuration System
 
-> **Status: built.** Layered resolution with per-value provenance (§16.1), schema-validated environment with aggregated diagnostics (§16.2), typed access on `app.config` and `ctx.config` (§16.3), and deep-freeze with serialisation-time redaction (§16.4) are live. What is **not** built: file *discovery* — core parses `.env` text and states the precedence but does not open files (§3.2 assigns that to the CLI or the host, and `examples/config` shows the fifteen lines); `zen.config.<NODE_ENV>.ts` overlays and CLI flags exist as layers with nothing yet supplying them; `reloadable` keys and `onConfigChange` (§16.4); and secret sources (§16.5). Runnable in `examples/config`; measured and gated in `benchmarks/config/run.ts`.
+> **Status: built.** Layered resolution with per-value provenance (§16.1), schema-validated environment with aggregated diagnostics (§16.2), typed access on `app.config` and `ctx.config` (§16.3), and deep-freeze with serialisation-time redaction (§16.4) are live. What is **not** built: file *discovery* — core parses `.env` text and states the precedence but does not open files (§3.2 assigns that to the CLI or the host, and `examples/config` shows the fifteen lines); `zen.config.<NODE_ENV>.ts` overlays and CLI flags exist as layers with nothing yet supplying them; `reloadable` keys and `onConfigChange` (§16.4); and secret sources (§16.5). Runnable in `examples/config`; measured and gated in `benchmarks/config/run.ts`. <!-- claim: config -->
 
 ### 16.1 Layers
 
@@ -3188,9 +3213,9 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 
 | Control | Default | Why not looser |
 | --- | --- | --- |
-| Body size limit | 1 MB, per-route overridable | Unbounded bodies are trivial memory exhaustion |
-| Header count / size | 64 / 8 KB | Slowloris and hash-flood surface |
-| URL length | 8 KB | |
+| Body size limit | 1 MB, app-wide (`body.limit`). Per-route overrides are designed and not built — a route's own limit is ignored today (§28.8) <!-- gap: per-route-body-limit --> | Unbounded bodies are trivial memory exhaustion |
+| Header count / size | 64 headers (the Node adapter's `maxHeadersCount`) / Node's default of 16 KB — an 8 KB size limit is designed and not built | Slowloris and hash-flood surface |
+| URL length | Node's default; an 8 KB limit is designed and not built | |
 | Param count in query | 100 | Hash flooding, `qs` complexity |
 | JSON depth | 32 | Stack exhaustion in parsers |
 | JSON `__proto__`/`constructor`/`prototype` keys | **stripped** | Prototype pollution; there is no legitimate use in request data |
@@ -3214,10 +3239,10 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 
 ### 19.3 Parser hardening
 
-Every parser (JSON, urlencoded, multipart, cookie, `Accept`, `Range`) is written to bounded-work rules and fuzzed continuously (§20.6):
+Every parser (JSON, urlencoded, multipart, cookie, `Accept`, `Range`) is written to bounded-work rules and is designed to be fuzzed continuously (§20.6; property suites only today):
 
 - Limits are enforced **during** parsing, not after — a 5 GB body is aborted at byte 1,048,577, not buffered then rejected.
-- No backtracking regexes anywhere in the request path; the router forbids regex paths entirely (§5.2). A CI lint rule (`eslint-plugin-zen/no-unbounded-regex`) rejects regexes with nested quantifiers in framework source.
+- No backtracking regexes anywhere in the request path; the router forbids regex paths entirely (§5.2). `scripts/check-regex.ts` enforces it in CI (since `0.1.0-alpha.4`; this line named an ESLint rule that did not exist): TypeScript's parser finds every regex literal and `RegExp(…)` call in the framework's sources, and an analyser refuses a variable-length repetition inside an unbounded one (`(a+)+`, `(-?[a-z]+)*`) and alternatives under one that can match the same text (`(a|aa)+`) — unless each iteration starts or ends with a character the inner repetition cannot match, which is what keeps `[a-z0-9]+(?:-[a-z0-9]+)*` linear. A `RegExp` built from a value must be listed with its reason. `app.paramType()`'s `test` is the application's code, so in development the same analyser reports a regex in it as `ZEN_REGEX_UNSAFE`, a warning.
 - Cookie and header parsing use single-pass scanners with explicit bounds.
 - `Range` header parsing caps the number of ranges (multipart range requests are a known amplification vector).
 - Multipart streams to disk above a threshold, with `O_EXCL` random filenames in a dedicated directory, cleaned up on `onResponse` even on error paths.
@@ -3235,7 +3260,7 @@ Configuration is explicit and typed: `trustProxy: 'loopback' | 'linklocal' | 'un
 - **XSS:** `ctx.html()` accepts only `SafeHtml`, which two functions produce: the `html` template tag, which escapes every interpolation for the position it sits in and refuses a template that puts one where escaping cannot help, and `unsafeHtml()`, the explicit mark for markup the application vouches for (§19.5.1). JSON responses carry `X-Content-Type-Options: nosniff` (`securityHeaders()`, §32.4); the compiled serializer does **not** escape `<`, `>`, `&` or U+2028/2029 — decided against, below.
 - **Over-serialization:** covered by §13.3 — the highest-value control in this list.
 
-> **Status: built** in `0.1.0-alpha.2` — both defences, after two releases in which this section described them and neither existed, which the pre-release audit recorded rather than hid. The serializer escaping stays **decided against**: its output is *byte-identical to `JSON.stringify`* for the fields it emits, on purpose — that identity is what the differential suite and the serializer benchmark assert — and escaping `<` and `&` would send every string containing one down the slow path to protect a use, pasting an API response into a `<script>`, that is the embedding template's to escape. The one place in the framework that does embed JSON in a page — the OpenAPI viewer's data island — escapes `<` as `\u003c` itself, and says so where it marks the page with `unsafeHtml`.
+> **Status: built** in `0.1.0-alpha.2` — both defences, after two releases in which this section described them and neither existed, which the pre-release audit recorded rather than hid. The serializer escaping stays **decided against**: its output is *byte-identical to `JSON.stringify`* for the fields it emits, on purpose — that identity is what the differential suite and the serializer benchmark assert — and escaping `<` and `&` would send every string containing one down the slow path to protect a use, pasting an API response into a `<script>`, that is the embedding template's to escape. The one place in the framework that does embed JSON in a page — the OpenAPI viewer's data island — escapes `<` as `\u003c` itself, and says so where it marks the page with `unsafeHtml`. <!-- claim: injection-defences -->
 
 #### 19.5.1 HTML escaped by construction
 
@@ -3330,7 +3355,7 @@ Double-submit cookie plus `Origin`/`Sec-Fetch-Site` verification, on by default 
 ### 19.8 Supply chain
 
 - **Zero runtime dependencies in `@erenthedeveloper0/zen-core`.** Not a slogan — a CI check. Router, validation engine, and adapters have small, audited dependency sets with pinned versions and an allowlist reviewed on every change.
-- Every release is published with npm provenance/attestation and a signed SBOM (CycloneDX).
+- Every release is published with npm provenance/attestation. A signed SBOM (CycloneDX) is designed and not produced.
 - `zen doctor --supply-chain` reports the app's transitive dependency count, known advisories, and any package that gained an install script since the last lockfile.
 - A published security policy: coordinated disclosure, 90-day window, security advisories for every fix, and backports to the last two minor versions.
 
@@ -3473,14 +3498,16 @@ The rate limiter's suite also does something the others have not needed: it **pi
 
 ### 20.6 Security fuzzing
 
+> **Not built.** What exists are seeded property suites — the coercion fuzzer, the configuration fold, the negotiation and `html` properties — run on every CI build; there is no continuous fuzzing and no `jazzer.js`.
+
 Continuous fuzzing (OSS-Fuzz-style, via `jazzer.js`) of every parser and the router against malformed input, with assertions on: no crash, no unbounded memory, no unbounded time, no prototype pollution, and limit enforcement. Corpus seeded from real-world attack payloads.
 
 ### 20.7 What the framework's own tests must demonstrate
 
 Beyond correctness, three properties are asserted directly because they are architectural commitments that silently erode:
 
-1. **No handle leaks.** After `app.close()`, `process._getActiveHandles()` and `getActiveResourcesInfo()` must be clean. Run for every plugin.
-2. **No cross-request leakage.** A test issues interleaved requests with distinct slot values and asserts no bleed, including with pooling enabled.
+1. **No handle leaks.** After `app.close()`, `getActiveResourcesInfo()` must hold nothing the application opened. `packages/core/test/leaks.test.ts` listens on a real port, serves an SSE stream, a deadline kept and one blown, a file and JSON, closes, and fails on any resource left over (since `0.1.0-alpha.4`; this item had no test before it). Running it for every plugin is the conformance suite's job, which is not built.
+2. **No cross-request leakage.** The same file issues 500 interleaved requests across plain and deadline-bearing routes, each writing a distinct slot value in a hook and in the handler before an `await` and reading it after, and resolving a scoped service twice — and asserts no request reads another's value or instance. There is no pooling to enable (§18.5).
 3. **Monomorphism.** A test using `%HaveSameMap` (via `--allow-natives-syntax`) asserts that contexts from different requests share one hidden class. If a change introduces a dynamic property assignment, this test fails — which is the only reliable way to defend I2 mechanically.
 4. **Absence of code.** Several of this design's claims are about what is *not* emitted — an unused hook phase (§9.4), a deadline on a route that declared none (§4.4), an intake stage for a route with no body (§4.2), a validator for a source with no schema, a coercer for a source whose schema declares only strings (§11.4), and any trace of configuration on a route that does not read it (§16.3). Those are asserted against the generated source, not inferred from a benchmark: the CI gate for §9.4 fails unless a hookless route's pipeline is byte-identical whether or not eight phases are registered elsewhere in the app, and the gate for §4.4 fails unless three pipelines are byte-identical — no deadline configured anywhere, a deadline on a sibling collection, and an app-wide default that this route opted out of. A timing result inside the noise is compatible with the cost being there and small; byte-identical output is not.
 
@@ -3492,7 +3519,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 
    Shutdown ordering belongs in this list too, and it lives in `scripts/smoke.ts` rather than here, because "readiness went red before the socket stopped accepting" needs a real socket to be open while the process is shutting down. It was unfalsifiable before §31.4 existed, and it was wrong for exactly that long.
 
-6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. Eighty-nine controls, one per defect this design would be silently wrong about; a control that *passes* means the assertion it points at is not doing the work its name claims.
+6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. A hundred and twenty-five controls, one per defect this design would be silently wrong about — and a control's suite may be a script, so the strata check, the regex check and the claims ledger are held to the same standard as the tests; a control that *passes* means the assertion it points at is not doing the work its name claims.
 
    This is a different property from every other entry in this list, and it is the one nothing else in the repo checks. Correctness tests answer "is the code right"; this answers "would we find out if it stopped being right", and the two come apart constantly and invisibly. Every pass of this codebase had run some version of it by hand and written down that it was worth automating; §13.4 was the pass that did.
 
@@ -3789,6 +3816,8 @@ export const handler = toLambda(makeApp())
 
 ### 21.8 End-to-end typed client
 
+> **Not built, and not as drawn.** `typeof app` carries no routes, by design: routes registered in a collection's callback cannot pass a type back out, and accumulating them through the builder chain is the mapped-type growth §10.4 and §28.2 exist to avoid. A typed client will be generated from the graph rather than inferred through `typeof app`.
+
 ```ts
 // server
 export type AcmeApi = typeof app
@@ -4084,7 +4113,7 @@ declare function ok<T>(value: T): Result<T, never>
 declare function err<E extends ZenError>(error: E): Result<never, E>
 ```
 
-Handlers may return `Result`; the Response Engine unwraps `ok` and routes `err` through the error pipeline. Offered, never required (§12.1).
+Handlers may return `Result`; the Response Engine unwraps `ok` and routes `err` through the error pipeline. Offered, never required (§12.1). *Designed, not built: neither the helpers nor the unwrapping exist.*
 
 ### 22.9 Lifecycle
 
@@ -4104,6 +4133,8 @@ Built today as a coarser four-state machine on the health registry, reachable as
 ## 23. Folder Structure
 
 ### 23.1 Repository root
+
+The **target** layout. The repository today is an npm-workspaces monorepo without `tools/`, `e2e/`, `rfcs/`, `bench.yml`, `fuzz.yml`, changesets or Turborepo; HANDOFF's map of the code is the layout as it is.
 
 A pnpm + Turborepo monorepo, laid out as a real OSS framework.
 
@@ -4304,6 +4335,8 @@ my-api/
 
 ### 24.2 Packages
 
+The packages that exist are `@erenthedeveloper0/zen`, `-core`, `-router`, `-adapter-node`, `-openapi` and `-middleware`. Validation and DI live in core, as configuration and health do; `zen-testing`, `zen-client` and `zen-cli` are not built. The table is the design.
+
 | Package | Purpose | Deps | Target size (min+gz) | Stability |
 | --- | --- | --- | --- | --- |
 | `zen` | Meta-package: re-exports core + router + node adapter + common middleware | workspace | — | v1 |
@@ -4320,7 +4353,7 @@ my-api/
 | `@erenthedeveloper0/zen-cli` | CLI kernel, loader, commands | many (dev only) | — | v1 |
 | `create-zen` | `npm create zen@latest` | — | — | v1 |
 | **Adapters** | | | | |
-| `@erenthedeveloper0/zen-adapter-node` | `http`/`https`/`http2`, fast path | core | ~7 kB | v1 |
+| `@erenthedeveloper0/zen-adapter-node` | `node:http`, fast path — **built** (`https`/`http2` designed) | core | ~7 kB | v1 |
 | `@erenthedeveloper0/zen-adapter-bun` / `-deno` / `-workers` / `-edge` / `-lambda` / `-faas` | | core | 2–5 kB | v1 / beta |
 | `@erenthedeveloper0/zen-adapter-conformance` | The suite every adapter must pass | testing | — | v1 |
 | **Middleware** | | | | |
@@ -4712,7 +4745,7 @@ Deep generic inference (path templates → params, schema → body/query, plugin
 >
 > Three honest findings from running it:
 >
-> 1. **`seal()` is unmeasurable.** It came in at 0.6% before the harness was fixed, at −4.2%, −10.4% and −4.5% across three consecutive reruns, and at **−0.4% against a 7% spread** once best-of-3 landed. The spread *is* the result. `seal()` does not currently earn its API surface, which reopens Annex D question 5. It stays for now because its value should grow with plugin count and with conditional types we have not yet added — but if it is still inside the noise at v1.0 it should be deleted, not documented. The harness now labels the verdict itself so nobody has to eyeball it.
+> 1. **`seal()` is unmeasurable.** It came in at 0.6% before the harness was fixed, at −4.2%, −10.4% and −4.5% across three consecutive reruns, and at **−0.4% against a 7% spread** once best-of-3 landed. The spread *is* the result. `seal()` does not currently earn its API surface, which reopens Annex D question 5. It stays for now because its value should grow with plugin count and with conditional types we have not yet added — but if it is still inside the noise at v1.0 it should be deleted, not documented. The harness now labels the verdict itself so nobody has to eyeball it. **Re-measured for `0.1.0-alpha.4`** (TypeScript 5.9.3, Node 24, macOS): −7.8% and then −8.1% at 500 routes / 12 plugins, with spreads of 0–3% — the first runs the harness labels *above noise*. The deprecation planned for that release was withheld on that evidence; whether the effect holds on the CI matrix is what decides question 5.
 > 2. **Fixed startup dominates until ~250 routes.** At 50 routes the per-route figure is 13.5 ms and means nothing; at 500 it is 2.1 ms and means something. Any future budget should be stated against the marginal slope, never against a small-fixture total.
 > 3. **The fixture immediately found a real defect**: `put`/`patch`/`delete`/`head`/`options` had been given only untyped implementation signatures, so `ctx` silently degraded to `any` on five of eight verbs — a direct I8 violation that every hand-written test had missed, because hand-written tests use `get` and `post`. A generated fixture exercising *every* verb is now part of the suite.
 
@@ -4764,7 +4797,7 @@ The strongest architecture loses to the framework people already know. Nothing i
 | i18n of error messages | Interface exists (`ErrorFormatter`), no first-party implementation |
 | Per-route resource limits (CPU/memory) | Requires worker isolation; researched, not designed |
 | `zen build` reproducibility across Node versions | Verified in CI for the supported matrix only |
-| OpenAPI `securitySchemes` are declared, but no route-level policy generates them | §29 reads `meta.security`; the `authorize` machinery of §19.6 that should populate it does not exist yet, so security requirements are hand-written today |
+| OpenAPI `securitySchemes` are declared, but no route-level policy generates them | §29 reads `meta.security`; the `authorize` machinery of §19.6 that should populate it does not exist yet, so security requirements are hand-written today. The *schemes* no longer need to be: since `0.1.0-alpha.4` a plugin declares its own with `app.meta('openapi.securitySchemes', { … })`, and the generator merges them into `components.securitySchemes` — the application's option winning a name both declare, and a name two plugins declare differently reported as `ZEN_OAS_META_INVALID` |
 | Query parameters are documented from a plain object schema only | A `$ref` or union at the root of a `query` schema cannot be split into `ParameterObject`s; reported as an `info` diagnostic rather than guessed at |
 | ~~An unmatched request costs ~10× a matched one, and it is the `Error` object~~ | **Fixed** — a 404 now costs ~2.3× a served request, a 405 ~2.6×, and `benchmarks/refusals` fails the build if a framework refusal captures a stack frame again. The history, kept because it is the argument: measured in §32.5: 24.1 µs against 2.7 µs, of which 15.9 µs is constructing `NotFound` and 8.3 µs of *that* is `Error.captureStackTrace`. A 404 flood is the cheapest hostile traffic there is and it arrives with a free amplification factor of ten. Not fixed here because the fix — not capturing a stack on the routine 404/405 path — changes what a developer sees in dev mode, which is a decision rather than an optimisation. `zen.ts`'s comment calling that path "off the hot path by construction" is also now wrong for a browser-facing service, where every preflight lands there until CORS answers it. **This row has now been reached twice from two directions** — §32.5 found it behind a preflight, §13.4.6 behind a 406 — which is the signal that the amplification is a property of the framework's routine refusal path rather than of either feature, and the strongest argument yet for fixing it |
 | Rate limiting is a **fixed window** | Up to `2 × limit` across a window's worth of time straddling a boundary (§32.4). A sliding log is unbounded memory per key and the key is attacker-chosen; a sliding-window counter cannot be expressed as `INCR` + `PEXPIRE`, so it would push every alternate `Store` into a Lua script. The trade is stated in the source, not hidden |
@@ -4813,8 +4846,21 @@ The strongest architecture loses to the framework people already know. Nothing i
 | An unnamed route cannot be linked to | §5.7 — by design. A name is a route's identity to the `operationId`, the metrics labels and now its links; linking by path would repeat the one thing a link should not have to. `ZEN_ROUTE_UNKNOWN` says to name it |
 | `url()` returns a path, never an absolute URL | §5.7 — an absolute URL needs an origin, and the only one on a request is the `Host` header the client wrote (§19.5.2). An application that needs one (an email) prefixes the origin it configured |
 | A collection's `name` does not namespace its routes' names | §6.3, corrected — the merge table said "dot-join", and it was never built; by the time names were read as keys, applications namespaced them by hand, and composing them now would rename every such route |
-| A `params` schema is not checked against its path template at boot | §5.2, corrected — the paragraph described the check as built. `ZEN_PARAM_MISMATCH` has a producer now (`url()`); the boot check that would make `params: z.object({ userId })` on `/users/:id` an error instead of a 400 on every request is not built |
-| `ctx.log` is not bound to the request | §7.2, §31.1, corrected — designed pre-bound with the request id and route, and the application's logger in fact. A lazy child, made on the first read and re-made if `ctx.id` changes (the request-id plugin adopting an inbound id), would cost nothing on a request that never logs and one allocation on one that does; not built |
+| ~~A `params` schema is not checked against its path template at boot~~ | **Built in `0.1.0-alpha.4`** (§5.2). `params: z.object({ userId })` on `/users/:id` is `ZEN_PARAM_MISMATCH` at boot, with the name that was probably meant, instead of a 400 on every request |
+| `ctx.log` is not bound to the request | §7.2, §31.1, corrected — designed pre-bound with the request id and route, and the application's logger in fact. A lazy child, made on the first read and re-made if `ctx.id` changes (the request-id plugin adopting an inbound id), would cost nothing on a request that never logs and one allocation on one that does; not built <!-- gap: ctx-log --> |
+| Matching is a trie walk, not generated code | §2.2 step J, §18.3 C1, §22.2, corrected — each described a generated, `charCodeAt`-scanning matcher. The router generates params builders; `match` walks the trie, and `CompiledRouter.source` is not produced. Synthesising the matcher is the next large router change <!-- gap: router-codegen --> |
+| The sync fast path needs `markSync()` | §8.4, corrected — the `maybe` row of its table is not built, so a plain function is emitted on the async path. The README's listing marks every function it shows |
+| A returned WHATWG `Response` is a 500 | §13.2, corrected — the table said pass-through. It is neither an async iterable nor bytes, so it reaches the JSON encoder and fails with `ZEN_SERIALIZATION` |
+| Issue codes are inferred from message text | I7, §11.2, corrected — the envelope has one shape across libraries, and its `code` is guessed from the English message, so a localised library changes every code |
+| `MiddlewareOptions.when` is not read | §8.7, corrected — declared and documented, and `app.use()` takes `{ name }` alone. A collection's `when` is built (§6.2) |
+| A route cannot override the body limit | §4.2, §19.2, corrected — `body.limit` is app-wide; a route's own is ignored |
+| `RouteRecord.origin` is always `undefined` | §5.1, corrected — designed as "not optional and not debug-only". Diagnostics name the route instead of the file and line that registered it |
+| Error mappers are global; error boundaries are not built | §8.8, §12.4, corrected |
+| The development error page is a `debug` object | §12.6, corrected — stack, cause, route and `meta`; no code frame, chain, suggestions or hyperlinks |
+| Dev mode neither seals the context nor freezes request data | §7.3, corrected — the type-level half of the immutability model is built, the runtime half is not |
+| Cookie signing, ETag and compression in egress, pre-encoded bodies, frozen replies | §13.6, §13.7, corrected — designed, not built; ETag and 304 exist for file responses |
+| Request header size and URL length are Node's limits | §19.2, corrected — the header count is capped at 64 by the adapter; the 8 KB size and URL limits are designed |
+| No SBOM and no continuous fuzzing | §19.8, §20.6, corrected — releases carry npm provenance; the property suites run on every build |
 | The API diff compares the branches of a multi-branch union by type only | §29.7 — a nullable union is compared as its one non-null branch, fields and all; a union of several object shapes is compared by the types it admits, because which branch corresponds to which across two documents is not knowable in general. A field removed inside one of them is not reported |
 
 ---
@@ -4822,7 +4868,7 @@ The strongest architecture loses to the framework people already know. Nothing i
 
 ## 29. OpenAPI & Code Generation
 
-> **Status: built** (`@erenthedeveloper0/zen-openapi`), except client generation (§29.6). Runnable in `examples/openapi`.
+> **Status: built** (`@erenthedeveloper0/zen-openapi`), except client generation (§29.6). Runnable in `examples/openapi`. <!-- claim: openapi, plugin-meta -->
 
 ### 29.1 Why this is architecture, not a plugin concern
 
@@ -5022,7 +5068,7 @@ Leadership election (so one replica runs a cron, not all twelve) is delegated to
 
 ## 31. Observability
 
-> **Status: demonstrated, not packaged — except §31.4, which is built.** The hook surface this section needs exists (§9), and `examples/observability` is a complete metrics + request-log + per-stage-timing stack written entirely against the public plugin API — one plugin, ten phases, nothing patched. The first-party `@erenthedeveloper0/zen-plugin-metrics` and `@erenthedeveloper0/zen-plugin-tracing` are still M4 work; the point of building the example first was to find out whether the surface was sufficient before shipping a package that depends on it. It was, with one correction: global `onRequest` hooks were not running for unmatched requests, so 404s produced no telemetry at all (§9.2).
+> **Status: demonstrated, not packaged — except §31.4, which is built.** The hook surface this section needs exists (§9), and `examples/observability` is a complete metrics + request-log + per-stage-timing stack written entirely against the public plugin API — one plugin, ten phases, nothing patched. The first-party `@erenthedeveloper0/zen-plugin-metrics` and `@erenthedeveloper0/zen-plugin-tracing` are still M4 work; the point of building the example first was to find out whether the surface was sufficient before shipping a package that depends on it. It was, with one correction: global `onRequest` hooks were not running for unmatched requests, so 404s produced no telemetry at all (§9.2). <!-- claim: unmatched-hooks, health -->
 >
 > Health and readiness (§31.4) went the other way and shipped as `healthPlugin` in core, because it is not observability in the reporting sense: it owns lifecycle state, it is what §4.5 step 1 flips, and a service cannot deploy safely without it. Same finding about surface sufficiency, though — it is written against `Registrar` alone, and needed exactly two additions to it (`health`, `probe`).
 
@@ -5058,7 +5104,7 @@ Zod validation is 45% of that request. Establishing it took one header and no in
 
 ### 31.4 Health and readiness
 
-> **Status: built.** `app.health(name, probe)` registers a check, `healthPlugin` serves `/healthz` and `/readyz`, and readiness flips to `draining` at the top of `close()` — before the server stops accepting, which is the whole point. Runnable in `examples/health`; measured and gated in `benchmarks/health/run.ts`.
+> **Status: built.** `app.health(name, probe)` registers a check, `healthPlugin` serves `/healthz` and `/readyz`, and readiness flips to `draining` at the top of `close()` — before the server stops accepting, which is the whole point. Runnable in `examples/health`; measured and gated in `benchmarks/health/run.ts`. <!-- claim: health -->
 
 ```ts
 app.use(healthPlugin, { path: '/healthz', readiness: '/readyz', checks: ['db', 'redis'] })
@@ -5306,7 +5352,9 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_NEGOTIATION_INCONSISTENT` | Two statuses on one route offer different media types, or the same ones in a different order (§13.4.2). `Accept` is matched once, at stage 5, before the status exists — so the offer list cannot depend on it, and order is part of it because order is the server's preference |
 | `ZEN_ENV_INVALID` | An environment variable is missing, or its value was rejected by the `env` schema (§16.2). One diagnostic **per key**, naming the constraint the schema declares, the file and line the value came from, and any plugin that declared it reads the variable. A secret's value is never in the message; a non-secret's always is |
 | `ZEN_CONFIG_INVALID` | A `defineConfig` thunk threw while being computed from the environment (§16.2). A thunk is meant to be a pure function of a validated environment; anything that can fail belongs where it has an error channel |
-| `ZEN_CAPABILITY_UNAVAILABLE` | A plugin requires a capability the target runtime lacks |
+| `ZEN_CAPABILITY_UNAVAILABLE` | A plugin requires a capability the target runtime lacks — checked against the adapter's `caps` |
+| `ZEN_RESPONSE_WRITE_ONLY` | A response schema declares a `writeOnly` field, which the serializer would return (§13.3); `format: 'password'` is the same report as a warning |
+| `ZEN_REGEX_UNSAFE` | Development only, a warning: a regex in a param type's `test` can backtrack without bound (§19.3) |
 | `ZEN_APP_FROZEN` | Registration attempted after boot |
 | `ZEN_APP_NOT_READY` | `dispatch` or `graph()` used before `ready()` |
 | `ZEN_BOOT_FAILED` | The aggregate: a `BootError` carrying every diagnostic above that applies, rendered with `fix:` and `also:` lines (§12.7) |
@@ -5333,13 +5381,16 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_HTML_UNSAFE` | 500 | `ctx.html()` was given something other than `SafeHtml`, or an `html` template put a hole where escaping cannot make it safe — inside `<script>`, in an `onclick`, in an unquoted attribute — or is read differently by HTML and by SVG (§19.5.1). Refused on the template's first render, whatever the values; a fragment is refused where it is nested, if it could end the text element it lands in or carries an HTML-only script into SVG |
 | `ZEN_REDIRECT_EXTERNAL` | 500 | `ctx.redirect()` would have left the origin for one `redirect.allowExternal` does not name — the open redirect, refused, with no `Location` sent (§19.5.2) |
 | `ZEN_ROUTE_UNKNOWN` | 500 | `app.url()` named a route nothing registered under that name — with the name that was probably meant (§5.7) |
-| `ZEN_PARAM_MISMATCH` | 500 | Parameters that disagree with a route's path template. Produced by `app.url()`: a parameter missing or extra, a value its type refuses or no URL can carry (`.`, `..`, empty), or a path another route outranks, which the message names (§5.7). Reserved too for the boot-time check of a `params` schema against its template (§5.2), which is not built |
-| `ZEN_REPLY_SENT` | 500 | Attempted to modify a Reply after egress |
+| `ZEN_PARAM_MISMATCH` | 500 | Parameters that disagree with a route's path template. Produced by `app.url()`: a parameter missing or extra, a value its type refuses or no URL can carry (`.`, `..`, empty), or a path another route outranks, which the message names (§5.7). And at boot, since `0.1.0-alpha.4`, by a `params` schema that disagrees with its template — a required key the path does not supply, or a parameter a closed schema refuses (§5.2) |
+| `ZEN_REPLY_SENT` | 500 | `ctx.res` written after the reply went to egress (§7.3) — thrown by the staging call itself, from a builder re-read or kept, since `0.1.0-alpha.4` |
+| `ZEN_BAD_REQUEST` | 400 | `BadRequest` — a malformed request that is not a body problem, such as an invalid `Host` header |
+| `ZEN_UNPROCESSABLE_ENTITY` | 422 | `UnprocessableEntity` — understood, and refused on its meaning; a schema failure is `ZEN_VALIDATION` |
+| `ZEN_SERVICE_UNAVAILABLE` | 503 | `ServiceUnavailable`, or an upstream that timed out (`AbortSignal.timeout`) — retryable (§12.4) |
 | `ZEN_CONTEXT_ESCAPED` | 500 | A pooled context was used after release (dev only) |
 | `ZEN_BODY_INVALID` | 400 | The body did not parse as its content type, or nests past the depth limit (§19.3) |
 | `ZEN_CONFLICT` | 409 | `Conflict` — the request clashes with the resource's current state |
 | `ZEN_HANDLER_NO_RETURN` | 500 | A handler returned `undefined`; return a value, a `Reply`, or `ctx.empty()` |
-| `ZEN_INTERNAL` | 500 | Unclassified error |
+| `ZEN_INTERNAL` | 500 | Unclassified error — including an `AbortError` the application caused that is neither the request's own abort nor an upstream timeout |
 
 Two boot *warnings*, logged rather than refused: `ZEN_ROUTE_SHADOWED_BY_WILDCARD` (a route wins over a wildcard on its prefix — usually intended) and `ZEN_ROUTE_TYPES_UNDECIDED` (two parameter types in one position whose overlap cannot be established, §5.5).
 
@@ -5379,7 +5430,7 @@ Genuinely unresolved. Input on these is the main reason this document exists.
 3. **How far should the type-only client go?** Streaming responses and SSE do not map cleanly to a request/response client type. Options: exclude them from the client surface; model them as `AsyncIterable`; or provide a separate realtime client.
    - Related, and newly concrete: the generator now publishes `OrderLine` and `OrderLineInput` when a named type differs between the request and response directions (§29.3). That is honest, and it is also two names for what a user thinks of as one type. Options: keep it; unify by closing request schemas too (wrong — the validator, not Zen, decides what a request accepts); or emit one component plus a documented convention that generated clients treat `*Input` as the constructor type.
 4. **Should validation failures default to 400 or 422?** 400 is conventional in the ecosystem; 422 is more correct for well-formed-but-invalid payloads. Current design: 400 for malformed syntax, 422 for schema violations. This is defensible and will still surprise people.
-5. **Should `seal()` exist at all?** It was introduced as the escape hatch for intersection growth, but measurement (§28.2) cannot find its benefit: −0.4% against a 7% run-to-run spread on a 500-route / 12-plugin fixture, having previously read anywhere between +0.6% and −10.4% depending on which single run you looked at. Options: keep it and re-measure once conditional types land; make materialisation automatic past a plugin threshold; or delete it. Shipping an API whose stated justification the numbers do not support would be the worst of the three.
+5. **Should `seal()` exist at all?** It was introduced as the escape hatch for intersection growth, but measurement (§28.2) cannot find its benefit: −0.4% against a 7% run-to-run spread on a 500-route / 12-plugin fixture, having previously read anywhere between +0.6% and −10.4% depending on which single run you looked at. Options: keep it and re-measure once conditional types land; make materialisation automatic past a plugin threshold; or delete it. Shipping an API whose stated justification the numbers do not support would be the worst of the three. *The `0.1.0-alpha.4` runs, −7.8% and −8.1% with spreads under 3%, are the first above the noise; the question stays open until the CI matrix agrees, and the deprecation once planned for that release was withheld.*
 6. **Should the framework ship a first-party ORM-agnostic transaction plugin?** It is the single most common `around` middleware, and getting it right (nesting, savepoints, isolation levels, per-request pooling) is subtle enough that most teams get it wrong. Counter-argument: §1.3 says no data layer.
 7. **Filesystem routing in core or forever a plugin?** A large cohort will not evaluate a framework that lacks it out of the box. Keeping it a plugin preserves I5.
 8. **Should `zen build` be the default for `zen start`?** It would make the fast path the default path, at the cost of Express's "just run the file" property.
@@ -5398,5 +5449,5 @@ The parts of this design most likely to be wrong are named in §28: TypeScript i
 
 ---
 
-*RFC 0001 · Draft · comments welcome in `rfcs/0001`.*
+*RFC 0001 · Draft · comments welcome as [GitHub issues](https://github.com/erenthedeveloper0/zen/issues).*
 

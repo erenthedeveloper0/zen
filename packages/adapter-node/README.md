@@ -46,6 +46,10 @@ const app = zen({
   serves a single `Range` with 206.
 - **Server-sent events.** `ctx.sse()` streams with backpressure, and on shutdown
   each open stream receives a final `shutdown` event and closes cleanly.
+- **Capabilities it can keep.** It declares `fs` and `eval`, and
+  `compression: 'none'` and `websocket: 'none'` because it implements neither —
+  so a plugin that `requires` one of those fails at boot, not on its first
+  request.
 - **Graceful shutdown**, in RFC 0001 §4.5's order: after `drainDelay` the server
   stops accepting, every response still in flight is its connection's last
   (`Connection: close`), and nothing waits on an idle keep-alive connection.

@@ -8,9 +8,18 @@ export interface PathParser {
   parse(path: string): { readonly path: string; readonly segments: readonly PathSegment[] }
 }
 
+/**
+ * What a router is built with.
+ *
+ * Matching is **case-sensitive**, and a trailing slash is **normalised away**
+ * before a request is matched (`normalizePath`: `/users/` is `/users`). Both
+ * are fixed behaviour rather than options. `caseSensitive` and
+ * `ignoreTrailingSlash` were declared here until `0.1.0-alpha.4`, read by no
+ * router and unreachable through `zen()` — a contract promising an option
+ * nothing reads is §9.7's failure at the type level, so they were removed
+ * rather than left to look configurable.
+ */
 export interface RouterOptions {
-  readonly caseSensitive?: boolean | undefined
-  readonly ignoreTrailingSlash?: boolean | undefined
   readonly paramTypes?: ReadonlyMap<string, ParamType> | undefined
   /** When false the interpreted twin is used regardless of capabilities (§20.5). */
   readonly compile?: boolean | undefined

@@ -66,6 +66,15 @@ export interface AppGraph {
    * values and it is not this one.
    */
   readonly config: ConfigSnapshot
+  /**
+   * What plugins wrote with `app.meta(key, value)` (§10.2), keyed
+   * `<plugin>.<key>` so two plugins cannot overwrite each other.
+   *
+   * Read by tools, not by the request path: `@erenthedeveloper0/zen-openapi`
+   * merges `<plugin>.openapi.securitySchemes` into the document's
+   * `components.securitySchemes`. Empty on every release before
+   * `0.1.0-alpha.4`, whatever plugins wrote.
+   */
   readonly meta: ReadonlyMap<string, unknown>
   readonly builtAt: number
 }

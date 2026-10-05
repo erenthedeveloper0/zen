@@ -4,6 +4,193 @@ All notable changes to Zen. The packages are versioned together; every entry
 applies to all six. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Zen is an alpha: until `1.0`, any prerelease may change the API.
 
+## [0.1.0-alpha.4] — 2026-10-05
+
+Nothing silent. An audit of the alpha.3 build wrote fourteen probes, each a
+sentence the docs said in the present tense, and every one found the code
+saying something else: a hook accepted and never called, an options schema
+read by nothing, metadata written where no reader could look, a check
+described as built that let every request through to a 400. Seven of those are
+fixed here; the other seven are now admitted where the docs made them, and the
+build watches all fourteen. Every "Working today" bullet in the README and
+every "Status: built" block in the architecture carries an id that
+`scripts/claims.ts` maps to a probe against the built packages, in CI — so a
+sentence cannot claim what the code does not do, and a gap that closes fails
+the build until the docs stop calling it missing.
+
+### Added
+
+- **Plugin options are validated at boot** (§10.5 step 2), before any plugin's
+  `setup` runs and for every plugin in one boot: the schema's own verdict,
+  awaited when it is async, and every key its JSON Schema does not declare,
+  named with the one it was probably meant to be —
+  `"limt" is not an option of rate-limit — did you mean "limit"?`. An options
+  object is a closed vocabulary, so an absent `additionalProperties` reads as
+  closed. A refusal names keys, never values. `ZEN_PLUGIN_OPTIONS` is produced
+  for the first time for what its entry always said it meant.
+- `Plugin.boundOptions` — the options a factory plugin was built with, checked
+  against `Plugin.options` exactly as `app.use(plugin, options)`'s second
+  argument is; an explicit second argument wins.
+- **Options schemas for the four first-party middleware factories** —
+  `cors`, `securityHeaders`, `requestId`, `rateLimit` — hand-written Standard
+  Schemas, so the pack stays dependency-free. `rateLimit({ limt: 100 })` fails
+  at startup with a spelling suggestion, which is §8.6's sentence verbatim.
+- **A `params` schema is checked against its path at boot** (§5.2):
+  `params: { userId }` on `/users/:id` is `ZEN_PARAM_MISMATCH` with
+  *did you mean to name it "id"?*, where it used to boot and answer every
+  request 400. A required key only an optional segment supplies, and a path
+  parameter a closed schema refuses, are errors too; a parameter an open
+  schema would drop is a warning; an `integer` schema on an untyped segment is
+  reported once, as information.
+- **A response field its own schema marks `writeOnly` is refused at boot**
+  (`ZEN_RESPONSE_WRITE_ONLY`, naming route, status, media type and JSON path),
+  in the plain form, every negotiated representation and every schema handed
+  to a media encoder, through arrays, records, unions and `$ref`s.
+  `format: 'password'` is a warning. The OpenAPI response projection withholds
+  `writeOnly` properties, strict mode or not.
+- **Conditional collections** (§6.2):
+  `app.collection('/debug', { when: (env) => … }, …)`, evaluated once at boot
+  against the validated environment. A subtree that is off is absent from the
+  router, the graph and the OpenAPI document. A `when` that throws, or answers
+  with anything but a boolean, is `ZEN_CONFIG_INVALID`.
+- **Route-scoped middleware** (§8.3): `{ use: [checkOwnership] }` on a route,
+  after the app's and every enclosing collection's, labelled `[route]` by
+  `explainRoute`. The README has called middleware route-scoped since the first
+  release; until now nothing could put one there.
+- **`ctx.ips` and `ctx.protocol`** (§7.2), getters on both context classes, so
+  neither gains a field. `ips` is the trusted forwarding chain, client first and
+  socket peer last, so `ips[0]` is `ip`; `protocol` is `secure` as a scheme.
+  Both believe the headers exactly as far as `trustProxy` does.
+- **`Symbol.dispose` and `Symbol.asyncDispose`** (§15.3): a singleton, a scoped
+  service or a slot value with no `dispose` of its own is released through the
+  protocol — at shutdown, or at stage 10 — `asyncDispose` preferred. An
+  explicit `dispose` wins; `dispose: () => {}` opts out.
+- `inject(method, url, { remote })` — the peer a request comes from, so
+  `ctx.ip`-keyed behaviour and `trustProxy` hop counting are testable in
+  process. `127.0.0.1` unless given.
+- **`@erenthedeveloper0/zen-openapi` reads `graph.meta`**: a plugin declares
+  its security schemes with `app.meta('openapi.securitySchemes', { … })` and
+  they are merged into `components.securitySchemes`, the application's own
+  option winning a name both declare. A misspelt `openapi.` field, a value that
+  is not a record of schemes, and a name two plugins declare differently are
+  `ZEN_OAS_META_INVALID` warnings.
+- `ZEN_REGEX_UNSAFE`: in development, `app.paramType()` reports a regex in its
+  `test` that can backtrack without bound. `regexHazards` and `regexLiterals`,
+  the analyser behind it and behind the CI check, are exported.
+- Error classes `BodyInvalid` (400, `ZEN_BODY_INVALID`) and
+  `UnprocessableEntity` (422, `ZEN_UNPROCESSABLE_ENTITY`, from §12.2's
+  taxonomy), and codes `ZEN_BAD_REQUEST`, `ZEN_SERVICE_UNAVAILABLE`,
+  `ZEN_UNPROCESSABLE_ENTITY`, `ZEN_RESPONSE_WRITE_ONLY`, `ZEN_REGEX_UNSAFE` and
+  `ZEN_OAS_META_INVALID`, each in [docs/errors.md](./docs/errors.md).
+- `SEALED_STAGE`, `forwardedChain`, `trackIntrinsic` and `intrinsicDisposer`
+  exported from `@erenthedeveloper0/zen-core`, for an alternative context
+  implementation.
+
+### Changed
+
+- **`setup` receives the validated options** — the schema's *output*, with its
+  defaults applied and its transforms run — rather than what was written. A
+  plugin whose schema transforms its input now sees the transformed value; a
+  plugin whose options were silently wrong now fails at boot instead of
+  running on a default.
+- **Two error codes moved** (I7: codes are semver-protected, so they move in an
+  alpha, and here):
+  - `ServiceUnavailable` is **`ZEN_SERVICE_UNAVAILABLE`**. It was `ZEN_INTERNAL`
+    — the code for an *unclassified* error — so a 503 thrown on purpose was
+    indistinguishable from a bug on every dashboard.
+  - `BadRequest` is **`ZEN_BAD_REQUEST`**. It was `ZEN_BODY_INVALID`, so an
+    invalid `Host` header reported an invalid body. A body that does not parse,
+    or nests too deep, is the new `BodyInvalid` and keeps `ZEN_BODY_INVALID`.
+- **An abort is classified by whose it was.** The request's own abort keeps
+  `ZEN_TIMEOUT`. An upstream's `AbortSignal.timeout()` — a `TimeoutError`, or
+  an `AbortError` caused by one — is a retryable 503,
+  `ZEN_SERVICE_UNAVAILABLE`. Any other `AbortError`, the application's own
+  `AbortController` around an upstream call, is `ZEN_INTERNAL` 500. Every one
+  of them used to be a 408, telling the client it had been slow.
+- **Capabilities come from the adapter**:
+  `caps ?? adapter.caps ?? DEFAULT_CAPABILITIES`. And the Node adapter, and
+  core's defaults, declare `compression: 'none'` and `websocket: 'none'` — they
+  implement neither. A plugin requiring either now fails at boot, which is what
+  `requires` is for.
+- A write to `ctx.res` after the reply was sent throws `ZEN_REPLY_SENT` — from
+  `onResponse`, or from a handler a deadline has already answered — where it
+  used to be accepted and discarded.
+- A response schema with a `writeOnly` field fails boot (above). An application
+  that returned one was sending what its schema said must never be returned.
+- Misspelt or mistyped options to `cors`, `securityHeaders`, `requestId` and
+  `rateLimit` fail boot with `ZEN_PLUGIN_OPTIONS`; they used to be ignored.
+- `RouterOptions.caseSensitive` and `ignoreTrailingSlash` are removed from the
+  contract. Nothing read them; matching is case-sensitive and a trailing slash
+  is normalised, which is now what the contract documents.
+- The application phases of `HookFn` are typed: `onBoot` receives the
+  `AppGraph`, `onListen` the `ServerHandle`, `onClose` the reason, `onReady`
+  nothing. A hook written against the wrong signature is now a type error.
+- `RouteSpec` has `use`, `CollectionOptions` has `when`, and `BaseContext` has
+  `ips` and `protocol` — a hand-written context double needs the two getters.
+
+### Fixed
+
+- **`app.hook('onBoot', fn)` was accepted and never called.** It passed every
+  phase check and was stored in a table boot never read; only
+  `Registrar.onBoot` ran. The two are now one table, run in registration order.
+- **`Registrar.meta` wrote into a map no reader could reach** — the graph was
+  handed a fresh empty one. `graph.meta` carries it now, keyed `<plugin>.<key>`.
+- `AppGraph.decorations` held the compiler's records, with a slot *index*,
+  through an `as unknown as`; its type promised a `Slot`. Each decoration now
+  carries its `Slot`.
+- `Plugin.requires` with a string — `{ websocket: 'native' }` — was satisfied by
+  any capability at all. It now asks for that exact one.
+- A negotiated response whose schema drew only a *warning* lost its negotiation
+  plan along with the warning, and answered JSON whatever was asked. Only an
+  error drops it now.
+- `@erenthedeveloper0/zen-core`'s DI container imported from its own `api/`
+  layer, the one upward import between strata the rule did not excuse; the slot
+  table moved down to `registry/`.
+
+### Documentation
+
+- Twenty-six sentences in the architecture that described the design as the
+  code are corrected in place, and the gaps they hid are rows in §28.8: the
+  router generates params builders but walks a trie to match; the sync fast
+  path needs `markSync()`; `ctx.state`, `ws` and `hijack` are not built, and
+  `state` is proposed for removal; development mode neither seals the context
+  nor freezes request data; issue codes are inferred from message text; error
+  mappers are global and error boundaries unbuilt; a returned WHATWG
+  `Response` is a 500; cookie signing, ETag and compression in egress,
+  pre-encoded bodies and frozen replies are design; the Node adapter is
+  `node:http` only; header size and URL length are Node's limits; there is no SBOM and no
+  continuous fuzzing; `typeof app` cannot drive a typed client; the repository
+  tree and the package table are the target layout; the RFC's footer pointed
+  at a directory that does not exist. And §5.1's route origin, §8.7's
+  middleware `when` and §19.2's per-route body limit are marked not built.
+- The README's "The idea" listing is the real output of
+  `scripts/show-generated.ts`, with the note that it uses `markSync()`.
+- `app.seal()` was to be deprecated in this release, on §28.2's measurement of
+  −0.4% against a 7% spread. Re-measured first, it came out at −7.8% and
+  −8.1% with spreads under 3% — above the noise for the first time — so it is
+  not deprecated; §28.2 and Annex D question 5 record both results, and the CI
+  matrix decides.
+
+### Repository
+
+- `scripts/claims.ts` — the claims ledger, a CI step. 44 claims and 7 admitted
+  gaps, each a probe against `dist/`.
+- `scripts/check-strata.ts` (§3.1) and `scripts/check-regex.ts` (§19.3), in
+  the zero-dependencies job. Both rules were described as enforced in CI, by
+  tools the repository did not have.
+- `packages/core/test/leaks.test.ts` (§20.7 items 1–2): a real port served and
+  closed with nothing left open, and 500 interleaved requests that never read
+  one another's state.
+- `packages/core/test/generated-source.test.ts`: everything the compilers emit
+  for one fixture application, committed as a snapshot, so a compiler change is
+  a reviewable diff of code. `UPDATE_SNAPSHOTS=1` regenerates it.
+- `benchmarks/request-path`: three more byte-identical gates — a collection
+  `when` turned off, a route without `use` beside one with it, and the
+  `writeOnly` check emitting nothing — and the costs this release put on the
+  request path.
+- Thirty-six negative controls, 125 in all; one control a refactor had made
+  stale is updated, and the harness runs a script as a control's suite.
+
 ## [0.1.0-alpha.3] — 2026-10-03
 
 URL generation, §5.7 of the architecture: `app.url()` builds the path of a
@@ -374,6 +561,7 @@ Found by the first push to CI, on Windows:
   rather than `string`, because its `parse` may return anything.
 - `Router.analyze` takes the same options as `Router.build`.
 
+[0.1.0-alpha.4]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.1

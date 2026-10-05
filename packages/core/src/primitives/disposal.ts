@@ -73,6 +73,51 @@ export function trackDisposal(
 }
 
 /**
+ * The explicit-resource-management symbols, where the runtime has them —
+ * rfcs/0001 §15.3. Read off `Symbol` rather than named, so a runtime without
+ * them leaves the feature inert instead of failing to load core.
+ */
+const ASYNC_DISPOSE: symbol | undefined = (Symbol as { readonly asyncDispose?: symbol }).asyncDispose
+const DISPOSE: symbol | undefined = (Symbol as { readonly dispose?: symbol }).dispose
+
+/**
+ * Module-level, so one value queued twice is recognised as the same entry by
+ * `trackDisposal`'s duplicate check — a fresh closure per call would not be.
+ */
+const viaAsyncDispose = (value: never): void | Promise<void> =>
+  (value as unknown as Record<symbol, () => void | Promise<void>>)[ASYNC_DISPOSE as symbol]!()
+const viaDispose = (value: never): void | Promise<void> =>
+  (value as unknown as Record<symbol, () => void | Promise<void>>)[DISPOSE as symbol]!()
+
+/**
+ * How a value releases itself, when it says so — `Symbol.asyncDispose`
+ * preferred, as `await using` prefers it, then `Symbol.dispose` — or
+ * `undefined` for a value that does not.
+ *
+ * What lets a scoped service, a singleton or a slot value with no explicit
+ * `dispose` still be released at stage 10 or at shutdown (§15.3): a pooled
+ * client or a transaction from a library that implements the protocol needs no
+ * second declaration of how to close it.
+ */
+export function intrinsicDisposer(value: unknown): ((value: never) => void | Promise<void>) | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<symbol, unknown>
+  if (ASYNC_DISPOSE !== undefined && typeof record[ASYNC_DISPOSE] === 'function') return viaAsyncDispose
+  if (DISPOSE !== undefined && typeof record[DISPOSE] === 'function') return viaDispose
+  return undefined
+}
+
+/**
+ * A slot value with no `dispose` of its own, released through the protocol if
+ * it implements one. Called only with an object — the context's `set` tests
+ * that inline, so a primitive pays one `typeof` and no call.
+ */
+export function trackIntrinsic(carrier: DisposalCarrier, name: string, value: object): void {
+  const dispose = intrinsicDisposer(value)
+  if (dispose !== undefined) trackDisposal(carrier, name, dispose, value)
+}
+
+/**
  * Release something that arrived after its request settled. Never throws: the
  * caller is whatever finished late — a factory's promise, an abandoned handler
  * — and the request it belonged to has already been answered and logged.

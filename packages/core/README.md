@@ -36,6 +36,12 @@ npm install @erenthedeveloper0/zen-core@alpha
 - **URL generation.** `app.url('notes.show', { id: 7 })` is `/notes/7` — each
   value encoded as one segment, tested by its parameter's type, and checked
   against the router, so a link reaches the route it names or is refused.
+- **Nothing silent at boot.** A registration that cannot take effect is a boot
+  error, aggregated with the rest: plugin options checked against their schema
+  before any plugin runs, with the key a typo meant; a `params` schema checked
+  against its path; a response field its schema marks `writeOnly` refused
+  before it can reach the wire; and a collection whose `when` is off absent
+  from the router and the graph rather than skipped at runtime.
 - **Configuration.** Layered resolution with per-value provenance, a
   schema-validated environment checked before any plugin runs, and secrets that
   redact themselves when serialised.

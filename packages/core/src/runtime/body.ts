@@ -1,7 +1,5 @@
 import type { PlainContext } from './context.ts'
-import { ZenError } from '../errors/zen-error.ts'
-import { Codes } from '../errors/codes.ts'
-import { PayloadTooLarge, UnsupportedMediaType, BadRequest } from '../errors/http-errors.ts'
+import { PayloadTooLarge, UnsupportedMediaType, BodyInvalid } from '../errors/http-errors.ts'
 import { isForbiddenKey } from './query.ts'
 
 export interface BodyOptions {
@@ -119,7 +117,7 @@ export const jsonParser: BodyParser = (bytes, _ctx, opts) => {
     // so a polluted object never exists, not even briefly.
     parsed = JSON.parse(text, protoStripper)
   } catch (cause) {
-    throw new BadRequest('Body is not valid JSON', { cause, expose: true })
+    throw new BodyInvalid('Body is not valid JSON', { cause })
   }
   assertDepth(parsed, opts.maxDepth)
   return parsed
@@ -186,10 +184,7 @@ function decodeFormComponent(value: string): string | null {
 /** Bounded work: stack exhaustion in parsers is a real DoS vector (§19.2). */
 function assertDepth(value: unknown, max: number, depth = 0): void {
   if (depth > max) {
-    throw new ZenError(Codes.BODY_INVALID, `Body nesting exceeds the maximum depth of ${max}`, {
-      status: 400,
-      expose: true,
-    })
+    throw new BodyInvalid(`Body nesting exceeds the maximum depth of ${max}`)
   }
   if (typeof value !== 'object' || value === null) return
   if (Array.isArray(value)) {

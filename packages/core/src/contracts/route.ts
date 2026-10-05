@@ -5,6 +5,7 @@ import type { CoercionRecord, CoercionSpec } from './coercion.ts'
 import type { HookRecord, RequestPhase, RouteHooks } from './hook.ts'
 import type { TimeoutRecord, TimeoutSpec } from './deadline.ts'
 import type { NegotiationRecord, ResponseSpec } from './negotiation.ts'
+import type { PhaseMiddleware } from './middleware.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Path syntax — rfcs/0001 §5.2. No regex, ever: regex paths defeat trie
@@ -107,6 +108,17 @@ export interface RouteSchema {
 export interface RouteSpec extends RouteSchema {
   readonly name?: string | undefined
   readonly meta?: Readonly<Record<string, unknown>> | undefined
+  /**
+   * Phase middleware for this route alone — the innermost of §6.3's three
+   * middleware scopes (§8.3's `route.use(checkOwnership)`). It runs after the
+   * app's and every enclosing collection's, in the order listed, and
+   * `explainRoute` labels it `[route]`.
+   *
+   * Typed as a route hook is (§9.2): the framework surface, without the route's
+   * schema — a middleware is written once and listed on many routes, so no one
+   * route's `params` or `body` can be its type.
+   */
+  readonly use?: readonly PhaseMiddleware<never>[] | undefined
   /** Route-scoped hooks — the innermost scope of §9.3. */
   readonly hooks?: RouteHooks | undefined
   /**

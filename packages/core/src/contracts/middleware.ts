@@ -30,9 +30,14 @@ export type AnyMiddleware = PhaseMiddleware<never, never> | AroundMiddleware<nev
 export interface MiddlewareOptions {
   readonly name?: string | undefined
   /**
-   * Boot-time predicates (arity 1 over `Env`) eliminate the middleware from the
-   * generated source entirely. Request-time predicates compile to a guarded
-   * call. Same API, very different costs — `zen routes --explain` shows which.
+   * @experimental — **not read.** §8.7's conditional middleware is designed
+   * and not built: `app.use()` accepts `{ name }` alone, and nothing reads
+   * this field, so a `when` passed today does not omit or guard anything. It
+   * stays in the contract because the design does (a boot-time predicate over
+   * the environment omits the step from the generated source; a request-time
+   * one compiles to a guarded call), and it is marked so that nobody mistakes
+   * it for a working option. For a subtree that exists only in some
+   * environments, a collection's `when` is built (§6.2).
    */
   readonly when?: ((ctx: never) => boolean) | undefined
 }

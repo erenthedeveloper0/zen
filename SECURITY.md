@@ -46,8 +46,10 @@ two minor versions.
 
 The threat model is RFC 0001 [§19.1](./ARCHITECTURE.md#191-threat-model). In
 short, in scope: malformed or malicious HTTP input, resource exhaustion through
-request shape, response injection, over-serialization (a field reaching the
-wire that its schema does not declare), a value reaching an `html` template's
+request shape — including a regex in the framework's own sources that can
+backtrack without bound — response injection, over-serialization (a field
+reaching the wire that its schema does not declare, or one its schema marks
+`writeOnly`), a value reaching an `html` template's
 output as markup or as a script-capable URL, a `ctx.redirect()` that leaves the
 origin its policy allows, a link `app.url()` returns that reaches a route other
 than the one it names or leaves the origin, path traversal in file responses,

@@ -31,10 +31,19 @@
  *   4. **Disposal**: a request that sets one disposable slot, and one that
  *      resolves a scoped service with a `dispose`, against one that does
  *      neither.
+ *   5. **`0.1.0-alpha.4` — nothing silent.** Three more gates, each the
+ *      byte-identical kind: a collection that `when` turns off leaves no trace
+ *      on the routes beside it, a route without `use` compiles exactly as it
+ *      did beside one with it, and the `writeOnly` check emits nothing — it is
+ *      a boot-time walk. Then the three costs the release put on the request
+ *      path, published whichever way they come out: the seal check on every
+ *      `ctx.res` staging call, the protocol check `ctx.set` now makes for an
+ *      object value, and the store at egress that seals the builder.
  */
 import {
-  createApp, markSync, pathnameOf, slot, token,
-  type Logger, type ZenApp,
+  createApp, jsonSchema, markSync, pathnameOf, slot, token, trackIntrinsic, CodeGen, compileContext,
+  DEFAULT_CAPABILITIES, NoopLogger, ZenContainer,
+  type Logger, type RawRequest, type ZenApp,
 } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 
@@ -289,6 +298,115 @@ console.log('\n  The request path after the pre-release fixes\n')
   const scoped = await compare(() => app.inject('GET', '/none'), () => app.inject('GET', '/scoped'))
   console.log(`     one scoped service with dispose      ${scoped.b.toFixed(2).padStart(6)} µs   ${verdict(scoped.a, scoped.b, 'µs', scoped.a * 0.05)}`)
   console.log('     (the scoped arm includes building the service — before the fix it was built and never released)\n')
+}
+
+// ── 5. 0.1.0-alpha.4 ────────────────────────────────────────────────────────
+{
+  console.log('  5. 0.1.0-alpha.4 — nothing silent  (gates)\n')
+
+  // §6.2 — a subtree `when` turned off is absent, not skipped at runtime.
+  const alone = makeApp()
+  alone.get('/plain', markSync(() => 'plain'))
+  await alone.ready()
+  const beside = makeApp()
+  beside.collection('/debug', { when: () => false }, (c) => {
+    c.use(async function debugOnly() {})
+    c.hook('onRequest', function debugHook() {})
+    c.get('/state', () => 'state')
+  })
+  beside.get('/plain', markSync(() => 'plain'))
+  await beside.ready()
+  const absentHere = beside.generatedSource().some((u) => u.name.includes('/debug'))
+  if (source(alone, 'pipeline:GET_/plain') === source(beside, 'pipeline:GET_/plain') && !absentHere &&
+      source(alone, 'context') === source(beside, 'context')) {
+    pass("a collection its when turned off leaves the app byte-identical, and compiles nothing of its own")
+  } else {
+    fail('a collection turned off by when left code behind')
+  }
+
+  // §8.3 — route-scoped middleware is the route's alone.
+  const owned = makeApp()
+  owned.get('/plain', markSync(() => 'plain'))
+  owned.get('/owned/:id', { use: [markSync(function checkOwnership() {})] }, markSync(() => 'mine'))
+  await owned.ready()
+  if (source(alone, 'pipeline:GET_/plain') === source(owned, 'pipeline:GET_/plain')) {
+    pass('a route without use is byte-identical beside one with it')
+  } else {
+    fail("a route's use leaked into a route that does not declare it")
+  }
+
+  // §13.3 — the writeOnly check is a walk at boot; it emits no code.
+  const shape = (format?: string) => jsonSchema({
+    type: 'object',
+    properties: { id: { type: 'integer' }, hash: format === undefined ? { type: 'string' } : { type: 'string', format } },
+    required: ['id', 'hash'],
+  })
+  const plainSchema = makeApp()
+  plainSchema.get('/u', { response: { 200: shape() } }, () => ({ id: 1, hash: 'h' }) as never)
+  await plainSchema.ready()
+  const flagged = createApp({ router: new ZenRouter(), pathParser, logger: new NoopLogger() }) as unknown as ZenApp
+  flagged.get('/u', { response: { 200: shape('password') } }, () => ({ id: 1, hash: 'h' }) as never)
+  await flagged.ready()
+  if (source(plainSchema, 'serializer:GET /u#200') === source(flagged, 'serializer:GET /u#200')) {
+    pass('a field the check warns about compiles to the serializer it always did — the check adds no code')
+  } else {
+    fail('the writeOnly check changed what the serializer emits')
+  }
+  console.log('')
+
+  console.log(`     costs on the request path (paired, median of ${REPS})\n`)
+
+  // The seal check: one identity comparison per staging call. Measured on the
+  // call itself, against a builder whose context has no seal to compare.
+  const raw: RawRequest = {
+    method: 'GET', url: '/', header: () => undefined, headerNames: () => [],
+    body: { kind: 'none', length: 0, read: async () => new Uint8Array(0), stream: async function* () {} },
+    remote: { address: '127.0.0.1', port: 0, family: 'IPv4' }, native: null,
+  }
+  const env = { log: silent, maxQueryParams: 100, trustProxy: false, container: new ZenContainer(), config: {} }
+  const Ctx = compileContext({ decorations: [], slotCount: 8, codegen: new CodeGen({ caps: DEFAULT_CAPABILITIES }) })
+  const fresh = () => new Ctx(raw, null, {}, env, new AbortController().signal) as unknown as {
+    res: { header(name: string, value: string): unknown }
+    set(slot: unknown, value: unknown): void
+    $stage: unknown
+    $disposers: unknown
+  }
+  const staged = compareSync(
+    () => { const ctx = fresh(); return ctx },
+    () => { const ctx = fresh(); ctx.res.header('x-request-cost', '1'); return ctx },
+    200_000,
+  )
+  console.log(`     a context, nothing staged             ${staged.a.toFixed(1).padStart(6)} ns`)
+  console.log(`     …and one ctx.res.header() call        ${staged.b.toFixed(1).padStart(6)} ns   ${verdict(staged.a, staged.b, 'ns', staged.a * 0.05)}  (builder, validation, seal check)`)
+
+  // The seal check in isolation: the same staging work with and without the
+  // comparison, so its own share is not hidden inside the call above.
+  const SEALED = Object.freeze({})
+  const holder = { $stage: null as unknown, staged: 0 }
+  const withCheck = (): unknown => { if (holder.$stage === SEALED) throw new Error('sealed'); holder.staged++; return holder }
+  const withoutCheck = (): unknown => { holder.staged++; return holder }
+  const check = compareSync(withoutCheck, withCheck)
+  console.log(`     staging without the seal check        ${check.a.toFixed(1).padStart(6)} ns`)
+  console.log(`     staging with it                       ${check.b.toFixed(1).padStart(6)} ns   ${verdict(check.a, check.b, 'ns', Math.max(0.3, check.a * 0.1))}  (one comparison of a loaded field)`)
+
+  // ctx.set's protocol check: an object value now costs one symbol lookup
+  // (two, for a value with neither); a primitive pays one `typeof`.
+  const Plain = slot<object>('bench.request-path.plain-object')
+  const Count = slot<number>('bench.request-path.number')
+  const value = { id: 1 }
+  const setCtx = fresh()
+  const sets = compareSync(() => { setCtx.set(Count, 1); return setCtx }, () => { setCtx.set(Plain, value); return setCtx })
+  console.log(`     ctx.set(slot, 1)                       ${sets.a.toFixed(1).padStart(6)} ns`)
+  console.log(`     ctx.set(slot, { id: 1 })               ${sets.b.toFixed(1).padStart(6)} ns   ${verdict(sets.a, sets.b, 'ns', Math.max(0.3, sets.a * 0.1))}  (the Symbol.dispose / asyncDispose probe)`)
+  const carrier = { $disposers: null, log: silent }
+  const probe = compareSync(() => carrier, () => { trackIntrinsic(carrier as never, 'x', value); return carrier })
+  console.log(`     the probe alone, on a plain object     ${(probe.b - probe.a).toFixed(1).padStart(6)} ns   (nothing is queued: the value implements neither)`)
+
+  // The egress store: one write of a shared frozen object into a field every
+  // context already has.
+  const store = compareSync(() => { const ctx = fresh(); return ctx }, () => { const ctx = fresh(); ctx.$stage = SEALED; return ctx }, 200_000)
+  console.log(`     sealing at egress                      ${(store.b - store.a).toFixed(1).padStart(6)} ns   ${Math.abs(store.b - store.a) <= Math.max(0.5, store.a * 0.05) ? 'inside noise' : ''}  (one store, no allocation)`)
+  console.log('')
 }
 
 if (failures > 0) {

@@ -44,6 +44,10 @@ interface Control {
   readonly file: string
   readonly find: string
   readonly replace: string
+  /**
+   * A test file, run with `node --test`; or a script — `check-strata.ts`, the
+   * claims ledger — run with `node`, which must exit non-zero.
+   */
   readonly suite: string
   /** Which assertion is supposed to notice. Printed on a miss. */
   readonly caughtBy: string
@@ -381,7 +385,7 @@ const CONTROLS: readonly Control[] = [
   {
     name: "accept a scoped provider's dispose and never call it",
     file: `${CORE}/di/container.ts`,
-    find: '        trackDisposal(scope as DisposalCarrier, entry.token.name, entry.dispose, value)\n',
+    find: '        trackDisposal(scope as DisposalCarrier, entry.token.name, dispose, value)\n',
     replace: '',
     suite: 'packages/core/test/di.test.ts',
     caughtBy: '"each request disposes the instance it created, once, after the response"',
@@ -816,6 +820,296 @@ const CONTROLS: readonly Control[] = [
     suite: 'packages/openapi/test/openapi.test.ts',
     caughtBy: '"a component used twice in one response is reported at both uses"',
   },
+
+  // ── 0.1.0-alpha.4: nothing silent ────────────────────────────────────────
+  {
+    name: 'leave anyOf branches out of the writeOnly walk, so a union carries the field out',
+    file: `${CORE}/compile/exposure.ts`,
+    find: '    for (const branch of [node.anyOf, node.oneOf, node.allOf]) {',
+    replace: '    for (const branch of [node.oneOf, node.allOf]) {',
+    suite: 'packages/core/test/negotiation.test.ts',
+    caughtBy: '"…however deep, through arrays, records and every branch of a union"',
+  },
+  {
+    name: 'check the plain JSON form for writeOnly and skip the schema handed to an encoder',
+    file: `${CORE}/compile/negotiation.ts`,
+    find: '        const exposed = exposureDiagnostics(shape, { routeId: options.routeId, status, media })',
+    replace: '        const exposed = exposureDiagnostics(shape, { routeId: options.routeId, status, media }).slice(0, 0)',
+    suite: 'packages/core/test/negotiation.test.ts',
+    caughtBy: '"every negotiated representation is checked, and a schema handed to an encoder too"',
+  },
+  {
+    name: 'document a writeOnly field as returned, because boot refuses one anyway',
+    file: 'packages/openapi/src/schema.ts',
+    find: '        if (this.#opts.closed && this.#writeOnly(properties[key])) {',
+    replace: '        if (this.#opts.closed && this.#writeOnly(properties[key]) && key.length < 0) {',
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: '"withholds it from a response projection, and from its required list"',
+  },
+  {
+    name: "skip the options schema, so setup gets { limt: 100 } and falls back to a default",
+    file: `${CORE}/api/zen.ts`,
+    find: '      const verdict = await validatePluginOptions(entry.plugin, given)',
+    replace: '      const verdict = await validatePluginOptions({ ...entry.plugin, options: undefined }, given)',
+    suite: 'packages/core/test/plugins.test.ts',
+    caughtBy: '"a key the schema does not declare is named, with the one it was meant to be"',
+  },
+  {
+    name: 'validate the options, then hand setup what was written rather than the output',
+    file: `${CORE}/api/zen.ts`,
+    find: '            accepted.get(entry) as never,',
+    replace: '            entry.options as never,',
+    suite: 'packages/core/test/plugins.test.ts',
+    caughtBy: '"setup receives the validated output — defaults applied — not what was written"',
+  },
+  {
+    name: "name an unknown option without the declared key it was probably meant to be",
+    file: `${CORE}/compile/plugin-options.ts`,
+    find: '    out.push({ key, suggestion: closest(key, declared) })',
+    replace: '    out.push({ key, suggestion: declared.length < 0 ? closest(key, declared) : null })',
+    suite: 'packages/middleware/test/pack.test.ts',
+    caughtBy: '"rateLimit({ limt: 100 }) fails at startup with a spelling suggestion — §8.6, verbatim"',
+  },
+  {
+    name: "build a factory plugin without stating its options, so they are never checked",
+    file: 'packages/middleware/src/rate-limit.ts',
+    find: '    boundOptions: options,\n',
+    replace: '',
+    suite: 'packages/middleware/test/pack.test.ts',
+    caughtBy: '"rateLimit({ limt: 100 }) fails at startup with a spelling suggestion — §8.6, verbatim"',
+  },
+  {
+    name: "run onBoot from a list hook('onBoot') never reaches",
+    file: `${CORE}/api/zen.ts`,
+    find: "    for (const hook of this.#hooks.get('onBoot') ?? []) {",
+    replace: "    for (const hook of (this.#hooks.get('onBoot') ?? []).filter((h) => h.name === '\\u0000')) {",
+    suite: 'packages/core/test/plugins.test.ts',
+    caughtBy: `"app.hook('onBoot') is called with the frozen graph"`,
+  },
+  {
+    name: 'hand the graph a fresh map, so everything a plugin wrote with meta() is lost',
+    file: `${CORE}/api/zen.ts`,
+    find: '      meta: new Map(this.#rootScope.meta),',
+    replace: '      meta: new Map(),',
+    suite: 'packages/core/test/plugins.test.ts',
+    caughtBy: '"what a plugin wrote is on graph.meta, namespaced by the plugin"',
+  },
+  {
+    name: "ignore what plugins declared in graph.meta when writing security schemes",
+    file: 'packages/openapi/src/document.ts',
+    find: '    const securitySchemes = this.#securitySchemes()',
+    replace: '    const securitySchemes = this.#opts.securitySchemes ?? (this.#securitySchemes(), undefined)',
+    suite: 'packages/openapi/test/openapi.test.ts',
+    caughtBy: `"merges a plugin's security schemes into components"`,
+  },
+  {
+    name: 'put the compiler index on the graph where its type says a Slot is',
+    file: `${CORE}/api/zen.ts`,
+    find: '      slot: d.slotIndex === null ? null : (slots.find((s) => s.index === d.slotIndex) ?? null),',
+    replace: '      slot: d.slotIndex === null ? null : (slots.find((s) => s.index === -1) ?? null),',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"a slot decoration carries its Slot, an accessor decoration its function"',
+  },
+  {
+    name: 'mark a 503 thrown on purpose ZEN_INTERNAL, the code for an unclassified error',
+    file: `${CORE}/errors/http-errors.ts`,
+    find: "export const ServiceUnavailable = http(503, Codes.SERVICE_UNAVAILABLE, 'Service Unavailable')",
+    replace: "export const ServiceUnavailable = http(503, Codes.INTERNAL, 'Service Unavailable')",
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"a 503 thrown on purpose is ZEN_SERVICE_UNAVAILABLE, not the unclassified ZEN_INTERNAL"',
+  },
+  {
+    name: 'report an invalid Host header as an invalid body',
+    file: `${CORE}/errors/http-errors.ts`,
+    find: "export const BadRequest = http(400, Codes.BAD_REQUEST, 'Bad Request')",
+    replace: "export const BadRequest = http(400, Codes.BODY_INVALID, 'Bad Request')",
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"invalid JSON keeps ZEN_BODY_INVALID; a bad Host is ZEN_BAD_REQUEST"',
+  },
+  {
+    name: "read capabilities from options alone, so the adapter's are ignored",
+    file: `${CORE}/api/zen.ts`,
+    find: '    this.#caps = opts.caps ?? opts.adapter?.caps ?? DEFAULT_CAPABILITIES',
+    replace: '    this.#caps = opts.caps ?? DEFAULT_CAPABILITIES',
+    suite: 'packages/core/test/plugins.test.ts',
+    caughtBy: '"a plugin requiring fs fails at boot on an adapter that declares fs: false"',
+  },
+  {
+    name: 'compare a string requirement as truthiness, so websocket: "native" passes on "library"',
+    file: `${CORE}/registry/plugin-registry.ts`,
+    find: "      if ((required === true || typeof required === 'string') && actual !== required) {",
+    replace: "      if (required === true && actual !== required) {",
+    suite: 'packages/core/test/plugins.test.ts',
+    caughtBy: '"a string requirement asks for that exact capability"',
+  },
+  {
+    name: 'let the Node adapter claim compression it does not implement',
+    file: ADAPTER,
+    find: "  compression: 'none',",
+    replace: "  compression: 'library',",
+    suite: 'packages/adapter-node/test/adapter.test.ts',
+    caughtBy: '"claims no compression and no WebSocket, because it implements neither"',
+  },
+  {
+    name: "call every AbortError the request's own, so an upstream's is blamed on the client",
+    file: `${CORE}/runtime/error-engine.ts`,
+    find: '  if (signal !== undefined && signal.aborted && (error === signal.reason || error.cause === signal.reason)) {',
+    replace: '  if (signal !== undefined || error.name.length > 0) {',
+    suite: 'packages/core/test/app.test.ts',
+    caughtBy: '"an upstream that timed out (AbortSignal.timeout) is a retryable 503"',
+  },
+  {
+    name: 'keep a reply builder writable after egress, so a late header is accepted and dropped',
+    file: `${CORE}/api/zen.ts`,
+    find: '    ctx.$stage = SEALED_STAGE\n',
+    replace: '',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"a handler that never touched ctx.res is sealed too"',
+  },
+  {
+    name: 'seal ctx.res but let a builder kept from before egress keep writing',
+    file: `${CORE}/runtime/context.ts`,
+    find: "    if (this.#ctx.$stage === SEALED_STAGE) throw replySent('header')\n",
+    replace: '',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"a ctx.res kept from the handler refuses every write after egress"',
+  },
+  {
+    name: 'hard-code the injected peer, so ctx.ip cannot be tested against a real address',
+    file: `${CORE}/api/zen.ts`,
+    find: '      remote: init.remote ?? LOOPBACK,',
+    replace: '      remote: LOOPBACK ?? init.remote,',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"the given peer is ctx.ip, and the last hop when a proxy is trusted"',
+  },
+  {
+    name: 'start ctx.ips at the leftmost entry whatever trustProxy says',
+    file: `${CORE}/runtime/context.ts`,
+    find: '      const from = trust === true ? 0 : entries.length - trust < 0 ? 0 : entries.length - trust',
+    replace: '      const from = trust === true ? 0 : entries.length - trust < 0 ? 0 : 0',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"one trusted hop: the address the load balancer saw, then the balancer itself"',
+  },
+  {
+    name: "drop the params schema's required-key check, so every request is a 400 again",
+    file: `${CORE}/compile/params-check.ts`,
+    find: '  for (const key of shape.required ?? []) {',
+    replace: '  for (const key of (shape.required ?? []).slice(0, 0)) {',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"refuses a required key the path does not supply, and names the one it has"',
+  },
+  {
+    name: 'treat a closed params schema as open, so it refuses every request instead of booting',
+    file: `${CORE}/compile/params-check.ts`,
+    find: '    if (closed) {',
+    replace: '    if (closed && name.length < 0) {',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"refuses a path parameter a closed schema would reject"',
+  },
+  {
+    name: "evaluate a collection's when, and register its routes anyway",
+    file: `${CORE}/api/zen.ts`,
+    find: '      if (absent.size > 0 && inScope(pending.scope, absent)) continue',
+    replace: '      if (absent.size < 0 && inScope(pending.scope, absent)) continue',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"a false subtree is absent from the router, the graph and its hooks"',
+  },
+  {
+    name: 'accept use: on a route and never put it in the chain',
+    file: `${CORE}/api/zen.ts`,
+    find: '      middleware: (schema.use ?? []).map((fn) => ({',
+    replace: '      middleware: (schema.use ?? []).slice(0, 0).map((fn) => ({',
+    suite: 'packages/core/test/registration.test.ts',
+    caughtBy: '"runs after the app\'s and the collection\'s, in the order listed, and is labelled [route]"',
+  },
+  {
+    name: "ignore Symbol.asyncDispose on a singleton with no dispose of its own",
+    file: `${CORE}/di/container.ts`,
+    find: '      if (!entry.resolved) {\n        const dispose = entry.dispose ?? intrinsicDisposer(value)',
+    replace: '      if (!entry.resolved) {\n        const dispose = entry.dispose ?? (value === intrinsicDisposer ? intrinsicDisposer(value) : undefined)',
+    suite: 'packages/core/test/di.test.ts',
+    caughtBy: '"a singleton with Symbol.asyncDispose and no dispose is released at shutdown"',
+  },
+  {
+    name: 'release a slot value through its protocol in the interpreted context only',
+    file: `${CORE}/compile/context-compiler.ts`,
+    find: "    else if (typeof value === 'object' && value !== null) trackIntrinsic(this, slot.name, value)",
+    replace: "    else if (typeof value === 'object' && value === null) trackIntrinsic(this, slot.name, value)",
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"Symbol.dispose alone works, and every value a slot held is released, in reverse order"',
+  },
+  {
+    name: 'drop warnings with errors, so a negotiated route with a password field answers JSON only',
+    file: `${CORE}/compile/negotiation.ts`,
+    find: "  if (diagnostics.some((d) => d.severity === 'error')) return { record: null, representations: null, diagnostics }",
+    replace: "  if (diagnostics.length > 0) return { record: null, representations: null, diagnostics }",
+    suite: 'packages/core/test/negotiation.test.ts',
+    caughtBy: `"format: 'password' is a warning, and the route still boots and negotiates"`,
+  },
+  {
+    name: 'call every iteration delimited, so (a+)+ passes the regex lint',
+    file: `${CORE}/primitives/regex-safety.ts`,
+    find: '      if (!delimited(node.body, repeated)) {',
+    replace: '      if (!delimited(node.body, repeated) && inner.length < 0) {',
+    suite: 'packages/core/test/regex-safety.test.ts',
+    caughtBy: '"refuses /(a+)+/"',
+  },
+  {
+    name: "never run paramType's development check",
+    file: `${CORE}/api/zen.ts`,
+    find: '    if (this.#opts.dev === true) this.#warnUnsafeTest(name, type.test)',
+    replace: '    if (this.#opts.dev === true && name.length < 0) this.#warnUnsafeTest(name, type.test)',
+    suite: 'packages/core/test/regex-safety.test.ts',
+    caughtBy: '"in development, names the param type and the repetition"',
+  },
+  {
+    name: 'ship a backtracking regex in framework source',
+    file: 'packages/middleware/src/request-id.ts',
+    find: 'const ACCEPTABLE = /^[A-Za-z0-9._-]{8,128}$/',
+    replace: 'const ACCEPTABLE = /^(?:[A-Za-z0-9._-]+)+$/',
+    suite: 'scripts/check-regex.ts',
+    caughtBy: 'scripts/check-regex.ts refusing a variable repetition inside an unbounded one',
+  },
+  {
+    name: 'import upward, from the registry into the runtime',
+    file: `${CORE}/registry/plugin-registry.ts`,
+    find: "import { Codes } from '../errors/codes.ts'\n",
+    replace: "import { Codes } from '../errors/codes.ts'\nexport type { PlainContext as UpwardEdge } from '../runtime/context.ts'\n",
+    suite: 'scripts/check-strata.ts',
+    caughtBy: 'scripts/check-strata.ts refusing an edge that points up the ladder',
+  },
+  {
+    name: 'emit different code with every suite still passing',
+    file: `${CORE}/compile/pipeline-compiler.ts`,
+    find: "    lines.push('  let reply = d.finalize(out, false)')",
+    replace: "    lines.push('  let reply = d.finalize(out, false) ')",
+    suite: 'packages/core/test/generated-source.test.ts',
+    caughtBy: '"every unit the compilers emit for the fixture app matches the committed snapshot"',
+  },
+  {
+    name: "disarm a deadline without clearing its timer, so a probe's budget outlives the app",
+    file: `${CORE}/runtime/deadline.ts`,
+    find: '      clearTimeout(this.#timer)\n',
+    replace: '',
+    suite: 'packages/core/test/leaks.test.ts',
+    caughtBy: '"listen, SSE, a deadline kept and one blown, a file, a health probe, close() — and nothing is left open"',
+  },
+  {
+    name: 'regress a documented claim — the ledger, not only its unit suite, must notice',
+    file: `${CORE}/errors/http-errors.ts`,
+    find: "export const ServiceUnavailable = http(503, Codes.SERVICE_UNAVAILABLE, 'Service Unavailable')",
+    replace: "export const ServiceUnavailable = http(503, Codes.INTERNAL, 'Service Unavailable')",
+    suite: 'scripts/claims.ts',
+    caughtBy: 'the claims ledger\'s "503-code" probe',
+  },
+  {
+    name: 'promote a sentence to "Working today" with nothing to check it',
+    file: 'README.md',
+    find: ' <!-- claim: twins -->',
+    replace: '',
+    suite: 'scripts/claims.ts',
+    caughtBy: 'the claims ledger refusing a "Working today" bullet with no marker',
+  },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -879,7 +1173,9 @@ for (const control of selected) {
       // A per-test ceiling, because some defects hang rather than fail — a
       // shutdown that waits on a connection nobody closes — and a control
       // that never returns would stall CI instead of reporting.
-      const status = run(['--test', '--test-timeout=30000', control.suite])
+      const status = control.suite.endsWith('.test.ts')
+        ? run(['--test', '--test-timeout=30000', control.suite])
+        : run([control.suite])
       outcome = status === 0 ? 'NOT CAUGHT' : 'CAUGHT'
     }
   } finally {

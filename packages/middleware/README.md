@@ -68,6 +68,11 @@ works in the browser and one that works only in Postman.
 The pack orders itself: register them in any order and they run request id →
 security headers → CORS → rate limit.
 
+Each factory has an options schema, checked at boot before any plugin runs, so
+`rateLimit({ limt: 100 })` fails with `"limt" is not an option of rate-limit —
+did you mean "limit"?` rather than running with the default limit. The refusal
+names the key, never the value.
+
 ## Behind a proxy
 
 `ctx.ip` — and so the rate limiter — reads `X-Forwarded-For` only when the app

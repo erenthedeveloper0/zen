@@ -28,14 +28,23 @@ export interface NodeAdapterOptions {
   readonly shutdownTimeout?: number | undefined
 }
 
+/**
+ * What this adapter provides — rfcs/0001 §14.1, read by the app since
+ * `0.1.0-alpha.4` (a plugin's `requires` is checked against it).
+ *
+ * `compression` and `websocket` are `'none'` because this adapter implements
+ * neither. They said `'library'` until then, which a plugin requiring either
+ * would have believed: a capability descriptor that claims what is not built
+ * turns "fails at boot" back into "fails at 3am".
+ */
 export const NODE_CAPABILITIES: Capabilities = {
   eval: true,
   webStreams: true,
   nodeStreams: true,
   fs: true,
-  compression: 'library',
+  compression: 'none',
   http2: false,
-  websocket: 'library',
+  websocket: 'none',
   timers: 'full',
   asyncLocalStorage: true,
   cpuTimeLimited: false,
@@ -56,9 +65,11 @@ export const NODE_CAPABILITIES: Capabilities = {
 class NodeRawRequest implements RawRequest {
   readonly native: IncomingMessage
   #body: BodySource | null = null
+  readonly #clientGone: () => unknown
 
-  constructor(message: IncomingMessage) {
+  constructor(message: IncomingMessage, clientGone: () => unknown) {
     this.native = message
+    this.#clientGone = clientGone
   }
 
   get method(): string {
@@ -81,7 +92,7 @@ class NodeRawRequest implements RawRequest {
 
   /** Not constructed until a route actually declares a body. */
   get body(): BodySource {
-    return (this.#body ??= new NodeBodySource(this.native))
+    return (this.#body ??= new NodeBodySource(this.native, this.#clientGone))
   }
 
   get remote(): RemoteInfo {
@@ -96,9 +107,11 @@ class NodeRawRequest implements RawRequest {
 
 class NodeBodySource implements BodySource {
   #message: IncomingMessage
+  readonly #clientGone: () => unknown
 
-  constructor(message: IncomingMessage) {
+  constructor(message: IncomingMessage, clientGone: () => unknown) {
     this.#message = message
+    this.#clientGone = clientGone
   }
 
   get kind(): 'none' | 'stream' {
@@ -150,9 +163,13 @@ class NodeBodySource implements BodySource {
       // was logged as an application 500. The connection signal normally says
       // so first; report that instead. The response's `close` and the request's
       // error arrive in whichever order the socket delivers them, so Node's
-      // error is recognised on its own as well.
+      // error is recognised on its own as well — and answered with the
+      // connection's own abort, raised here rather than waited for, because the
+      // error engine reads an abort as the request's only when it *is*
+      // `ctx.signal.reason` (§12.4). A fresh `AbortError` would be one the
+      // application caused: an application 500 for a client that left.
       if (signal?.aborted === true && error !== signal.reason) throw signal.reason
-      if (isClientAbort(error)) throw new DOMException('The client disconnected during the request body.', 'AbortError')
+      if (isClientAbort(error)) throw this.#clientGone()
       throw error
     }
 
@@ -221,6 +238,16 @@ class NodeConnection implements Connection {
     response.once('close', () => {
       if (!response.writableFinished) this.#controller.abort()
     })
+  }
+
+  /**
+   * The client went away mid-body: abort this connection now — the response's
+   * `close` may not have arrived yet — and hand back the reason, which every
+   * `ctx.signal` composed from this one now carries (§4.4).
+   */
+  clientGone(): unknown {
+    if (!this.signal.aborted) this.#controller.abort()
+    return this.signal.reason
   }
 
   async send(reply: Reply): Promise<void> {
@@ -438,8 +465,8 @@ export function nodeAdapter(options: NodeAdapterOptions = {}): RuntimeAdapter {
       const state: ServerState = { closing: false, streams: new Set() }
 
       const server: Server = createServer((request, response) => {
-        const raw = new NodeRawRequest(request)
         const conn = new NodeConnection(response, request, state)
+        const raw = new NodeRawRequest(request, () => conn.clientGone())
         void Promise.resolve(dispatch(raw, conn)).catch((error: unknown) => {
           // Last resort: the dispatcher owns error handling, so reaching here
           // means the error engine itself failed. Never leave a socket hanging —

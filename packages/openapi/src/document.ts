@@ -2,7 +2,7 @@ import type {
   AppGraph, CoercePlan, CollectionId, CollectionRecord, JsonSchema, ParamType, PathSegment,
   RouteRecord,
 } from '@erenthedeveloper0/zen-core'
-import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem } from '@erenthedeveloper0/zen-core'
+import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem, closest } from '@erenthedeveloper0/zen-core'
 import {
   Components, canonical, declaredName, projectSchema, sanitizeName,
   type DocDiagnostic,
@@ -162,10 +162,11 @@ class DocumentBuilder {
 
     const schemas = this.#components.toRecord()
     const hasSchemas = Object.keys(schemas).length > 0
-    if (hasSchemas || this.#opts.securitySchemes !== undefined) {
+    const securitySchemes = this.#securitySchemes()
+    if (hasSchemas || securitySchemes !== undefined) {
       const components: Record<string, unknown> = {}
       if (hasSchemas) components['schemas'] = schemas
-      if (this.#opts.securitySchemes !== undefined) components['securitySchemes'] = this.#opts.securitySchemes
+      if (securitySchemes !== undefined) components['securitySchemes'] = securitySchemes
       document['components'] = components
     }
 
@@ -597,10 +598,85 @@ class DocumentBuilder {
     }
   }
 
+  /**
+   * The application's security schemes, and the ones its plugins declared —
+   * rfcs/0001 §10.2, where `app.meta` is "consumed by OpenAPI".
+   *
+   * A plugin that authenticates knows its scheme and the application does not:
+   * a bearer-token plugin writes
+   * `app.meta('openapi.securitySchemes', { bearer: { type: 'http', scheme: 'bearer' } })`,
+   * which `graph.meta` carries as `<plugin>.openapi.securitySchemes`, and the
+   * scheme appears in `components.securitySchemes` without the application
+   * restating it. The application's own `securitySchemes` option wins a name
+   * both declare — it is the explicit statement, as `app.use`'s second argument
+   * is over a factory's options.
+   *
+   * Metadata the generator cannot use is a warning, not a silence: an
+   * `openapi.` field it does not read (`openapi.securitySchemas` is told the
+   * one it meant), a value that is not a record of schemes, and a name two
+   * plugins declare differently — the first declaration is kept and the second
+   * named. A key outside the `openapi.` family is somebody else's metadata and
+   * is left alone.
+   */
+  #securitySchemes(): Readonly<Record<string, SecurityScheme>> | undefined {
+    const own = this.#opts.securitySchemes
+    const merged: Record<string, SecurityScheme> = { ...own }
+    const declaredBy = new Map<string, string>()
+
+    for (const [key, value] of this.#graph.meta) {
+      const at = key.lastIndexOf(META_FAMILY)
+      if (at <= 0) continue
+      const plugin = key.slice(0, at)
+      const field = key.slice(at + META_FAMILY.length)
+      if (!META_FIELDS.includes(field)) {
+        const meant = closest(field, META_FIELDS)
+        this.#warn(
+          'ZEN_OAS_META_INVALID',
+          `Plugin "${plugin}" wrote metadata "openapi.${field}", which the generator does not read.`,
+          key,
+          meant === null ? `It reads ${META_FIELDS.map((f) => `"openapi.${f}"`).join(', ')}.` : `Did you mean "openapi.${meant}"?`,
+        )
+        continue
+      }
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        this.#warn(
+          'ZEN_OAS_META_INVALID',
+          `Plugin "${plugin}" wrote "openapi.securitySchemes" as ${Array.isArray(value) ? 'an array' : typeof value}; ` +
+            'it is a record of security schemes keyed by name, and was ignored.',
+          key,
+          "Write app.meta('openapi.securitySchemes', { name: { type: 'http', scheme: 'bearer' } }).",
+        )
+        continue
+      }
+      for (const [name, scheme] of Object.entries(value as Record<string, SecurityScheme>)) {
+        if (own !== undefined && Object.hasOwn(own, name)) continue
+        const first = declaredBy.get(name)
+        if (first === undefined) {
+          merged[name] = scheme
+          declaredBy.set(name, plugin)
+        } else if (canonical(merged[name]) !== canonical(scheme)) {
+          this.#warn(
+            'ZEN_OAS_META_INVALID',
+            `Plugins "${first}" and "${plugin}" both declare the security scheme "${name}", differently; ` +
+              `"${first}"'s is documented.`,
+            key,
+            "Declare the scheme once, in the application's securitySchemes option, which wins over both.",
+          )
+        }
+      }
+    }
+
+    return Object.keys(merged).length === 0 ? undefined : merged
+  }
+
   #warn(code: string, message: string, where: string, hint?: string): void {
     this.#diagnostics.push({ severity: 'warning', code, message, where, hint })
   }
 }
+
+/** The `graph.meta` family this generator reads, `<plugin>.openapi.<field>` (§10.2). */
+const META_FAMILY = '.openapi.'
+const META_FIELDS: readonly string[] = ['securitySchemes']
 
 const REF_PREFIX = '#/components/schemas/'
 

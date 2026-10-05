@@ -45,7 +45,9 @@ because Zen's serializer drops any field a response schema does not declare: a
 document generated from the raw schema would promise clients fields that can
 never arrive. Parameter serialization follows the route's actual coercion
 settings, and a negotiated route publishes one `content` entry per media type,
-in the server's preference order.
+in the server's preference order. A property marked `writeOnly` is withheld from
+every response schema — boot refuses one there anyway — and kept in requests,
+where it belongs.
 
 ## Breaking-change detection
 
@@ -73,6 +75,11 @@ where it repeats.
 `securitySchemes`, `license`, `contact`, `json` / `ui` (paths, or `false`),
 `strict` (turn documentation warnings into boot errors — worth enabling once an
 API is public), and `onDocument` (receives the finished document at boot).
+
+A plugin that authenticates can declare its own scheme, so the application does
+not restate it: `app.meta('openapi.securitySchemes', { bearer: { type: 'http',
+scheme: 'bearer' } })` in its `setup` is merged into `components.securitySchemes`.
+The application's `securitySchemes` option wins a name both declare.
 
 ## Documentation
 

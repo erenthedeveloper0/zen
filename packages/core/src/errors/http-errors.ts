@@ -12,7 +12,16 @@ function http(status: number, code: string, defaultMessage: string) {
   }
 }
 
-export const BadRequest = http(400, Codes.BODY_INVALID, 'Bad Request')
+/**
+ * A malformed request — `ZEN_BAD_REQUEST`.
+ *
+ * It carried `ZEN_BODY_INVALID` until `0.1.0-alpha.4`, so an invalid `Host`
+ * header, which has nothing to do with a body, reported itself as one (I7: a
+ * code has to mean something). A body that does not parse is `BodyInvalid`.
+ */
+export const BadRequest = http(400, Codes.BAD_REQUEST, 'Bad Request')
+/** The body did not parse as its content type, or nests past `body.maxDepth`. */
+export const BodyInvalid = http(400, Codes.BODY_INVALID, 'Bad Request')
 export const Unauthorized = http(401, Codes.UNAUTHORIZED, 'Unauthorized')
 export const Forbidden = http(403, Codes.FORBIDDEN, 'Forbidden')
 export const NotFound = http(404, Codes.NOT_FOUND, 'Not Found')
@@ -22,9 +31,20 @@ export const RequestTimeout = http(408, Codes.TIMEOUT, 'Request Timeout')
 export const Conflict = http(409, Codes.CONFLICT, 'Conflict')
 export const PayloadTooLarge = http(413, Codes.BODY_TOO_LARGE, 'Payload Too Large')
 export const UnsupportedMediaType = http(415, Codes.UNSUPPORTED_MEDIA_TYPE, 'Unsupported Media Type')
+/**
+ * Well-formed and understood, and refused on its meaning — §12.2's taxonomy.
+ * A schema failure is `ValidationError` (`ZEN_VALIDATION`), which carries the
+ * issues; this is the one a handler throws itself.
+ */
+export const UnprocessableEntity = http(422, Codes.UNPROCESSABLE_ENTITY, 'Unprocessable Entity')
 export const TooManyRequests = http(429, Codes.RATE_LIMITED, 'Too Many Requests')
 export const Internal = http(500, Codes.INTERNAL, 'Internal Server Error')
-export const ServiceUnavailable = http(503, Codes.INTERNAL, 'Service Unavailable')
+/**
+ * `ZEN_SERVICE_UNAVAILABLE`. It reached clients as `ZEN_INTERNAL` — the code
+ * for an *unclassified* error — until `0.1.0-alpha.4`, so a 503 a handler
+ * threw on purpose was indistinguishable from a bug (I7).
+ */
+export const ServiceUnavailable = http(503, Codes.SERVICE_UNAVAILABLE, 'Service Unavailable')
 /** A deadline blown after intake — §4.4. 408 is for the client being slow; this
  *  one says the time was ours, which is a different alert and a different fix. */
 export const GatewayTimeout = http(504, Codes.TIMEOUT, 'Gateway Timeout')

@@ -399,3 +399,53 @@ describe('async providers under concurrency', () => {
     assert.deepEqual(disposed, ['c', 'a'], 'reverse creation order, and B did not stop A')
   })
 })
+
+describe('a service that releases itself is released (§15.3)', () => {
+  const asyncDispose = (Symbol as { asyncDispose?: symbol }).asyncDispose
+  const dispose = (Symbol as { dispose?: symbol }).dispose
+
+  test('a singleton with Symbol.asyncDispose and no dispose is released at shutdown', async (tc) => {
+    if (asyncDispose === undefined) return tc.skip('no Symbol.asyncDispose in this runtime')
+    let closed = 0
+    const Pool = t<object>('intrinsic-pool')
+    const c = new ZenContainer()
+    c.provide(Pool, { factory: () => ({ [asyncDispose]: async () => { closed++ } }) })
+    c.resolve(Pool)
+    await c.dispose()
+    assert.equal(closed, 1)
+  })
+
+  test('a scoped service with Symbol.dispose is released at stage 10, every request', async (tc) => {
+    if (dispose === undefined) return tc.skip('no Symbol.dispose in this runtime')
+    const events: string[] = []
+    let built = 0
+    const Tx = t<object>('intrinsic-tx')
+    const app = makeApp()
+    app.provide(Tx, { lifetime: 'scoped', factory: () => { const id = ++built; return { [dispose]: () => { events.push(`release ${id}`) } } } })
+    app.get('/', (ctx) => { ctx.resolve(Tx); return 'ok' })
+    app.hook('onResponse', () => { events.push('onResponse') })
+
+    await app.inject('GET', '/')
+    await app.inject('GET', '/')
+    assert.deepEqual(events, ['onResponse', 'release 1', 'onResponse', 'release 2'])
+  })
+
+  test('an explicit dispose wins over the protocol — `dispose: () => {}` is the opt-out', async (tc) => {
+    if (dispose === undefined) return tc.skip('no Symbol.dispose in this runtime')
+    const calls: string[] = []
+    const Owned = t<object>('opt-out')
+    const c = new ZenContainer()
+    c.provide(Owned, { factory: () => ({ [dispose]: () => { calls.push('protocol') } }), dispose: () => { calls.push('explicit') } })
+    c.resolve(Owned)
+    await c.dispose()
+    assert.deepEqual(calls, ['explicit'])
+  })
+
+  test('a value with neither is left alone', async () => {
+    const Plain = t<{ n: number }>('plain-value')
+    const c = new ZenContainer()
+    c.provide(Plain, { factory: () => ({ n: 1 }) })
+    c.resolve(Plain)
+    await c.dispose()
+  })
+})

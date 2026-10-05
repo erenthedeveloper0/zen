@@ -926,3 +926,126 @@ describe('the plugin (§29.2)', () => {
     assert.equal((seen as OpenApiDocument | null)?.info.title, 'Test API')
   })
 })
+
+describe('plugin metadata reaches the document (§10.2)', () => {
+  const bearer = { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } as const
+  const auth = (name: string, schemes: unknown, key = 'openapi.securitySchemes') => definePlugin({
+    name,
+    version: '1.0.0',
+    setup(app) { app.meta(key, schemes) },
+  })
+
+  async function documentWith(plugins: ReturnType<typeof auth>[], options: Record<string, unknown> = {}) {
+    const app = makeApp()
+    for (const plugin of plugins) app.use(plugin)
+    app.get('/me', { response: { 200: PublicUser } }, () => null as never)
+    await app.ready()
+    return { graph: app.graph(), ...openapiDocument(app.graph(), { ...INFO, ...options }) }
+  }
+
+  const schemesOf = (document: OpenApiDocument): Record<string, unknown> | undefined =>
+    (document as unknown as { components?: { securitySchemes?: Record<string, unknown> } }).components?.securitySchemes
+
+  it('carries what a plugin wrote on the graph, namespaced by the plugin', async () => {
+    const { graph } = await documentWith([auth('jwt', { bearer })])
+    assert.deepEqual([...graph.meta.keys()], ['jwt.openapi.securitySchemes'])
+  })
+
+  it("merges a plugin's security schemes into components", async () => {
+    const { document, diagnostics } = await documentWith([auth('jwt', { bearer })])
+    assert.deepEqual(schemesOf(document), { bearer })
+    assert.equal(diagnostics.filter((d) => d.code === 'ZEN_OAS_META_INVALID').length, 0)
+  })
+
+  it("lets the application's own securitySchemes win a name both declare", async () => {
+    const own = { bearer: { type: 'http', scheme: 'bearer' } }
+    const { document, diagnostics } = await documentWith([auth('jwt', { bearer })], { securitySchemes: own })
+    assert.deepEqual(schemesOf(document), own)
+    assert.equal(diagnostics.filter((d) => d.code === 'ZEN_OAS_META_INVALID').length, 0)
+  })
+
+  it('keeps the first of two different declarations of one name, and names both plugins', async () => {
+    const other = { type: 'apiKey', in: 'header', name: 'x-api-key' }
+    const { document, diagnostics } = await documentWith([auth('jwt', { bearer }), auth('keys', { bearer: other })])
+    assert.deepEqual(schemesOf(document), { bearer })
+    const conflict = diagnostics.find((d) => d.code === 'ZEN_OAS_META_INVALID')
+    assert.match(conflict?.message ?? '', /"jwt" and "keys" both declare the security scheme "bearer"/)
+  })
+
+  it('accepts the same declaration twice without a word', async () => {
+    const { diagnostics } = await documentWith([auth('jwt', { bearer }), auth('jwt-too', { bearer: { ...bearer } })])
+    assert.equal(diagnostics.filter((d) => d.code === 'ZEN_OAS_META_INVALID').length, 0)
+  })
+
+  it('names the field a misspelled openapi key meant, rather than dropping it in silence', async () => {
+    const { document, diagnostics } = await documentWith([auth('jwt', { bearer }, 'openapi.securitySchemas')])
+    assert.equal(schemesOf(document), undefined)
+    const warning = diagnostics.find((d) => d.code === 'ZEN_OAS_META_INVALID')
+    assert.equal(warning?.hint, 'Did you mean "openapi.securitySchemes"?')
+  })
+
+  it('refuses a value that is not a record of schemes', async () => {
+    const { document, diagnostics } = await documentWith([auth('jwt', [bearer])])
+    assert.equal(schemesOf(document), undefined)
+    assert.match(diagnostics.find((d) => d.code === 'ZEN_OAS_META_INVALID')?.message ?? '', /as an array/)
+  })
+
+  it("leaves another plugin's metadata alone", async () => {
+    const { document, diagnostics } = await documentWith([auth('cache', { ttl: 60 }, 'defaults')])
+    assert.equal(schemesOf(document), undefined)
+    assert.equal(diagnostics.filter((d) => d.code === 'ZEN_OAS_META_INVALID').length, 0)
+  })
+})
+
+describe('writeOnly is never documented as returned (§13.3)', () => {
+  const Account = schema({
+    title: 'Account',
+    type: 'object',
+    properties: { email: { type: 'string' }, password: { type: 'string', writeOnly: true } },
+    required: ['email', 'password'],
+  })
+
+  it('keeps a writeOnly field on the request side, where it belongs', async () => {
+    const { document } = await documentFor((app) => {
+      app.post('/accounts', { body: Account, response: { 201: PublicUser } }, () => null as never)
+    })
+    const body = operation(document, '/accounts', 'post')['requestBody'] as Record<string, Record<string, Record<string, Record<string, unknown>>>>
+    const request = deref(document, body['content']?.['application/json']?.['schema'])
+    assert.deepEqual(Object.keys(request['properties'] as object), ['email', 'password'])
+    assert.deepEqual(request['required'], ['email', 'password'])
+  })
+
+  it('withholds it from a response projection, and from its required list', async () => {
+    // `ready()` refuses this response schema (ZEN_RESPONSE_WRITE_ONLY), so the
+    // graph is assembled by hand — the generator is a pure function of a graph,
+    // and it does not lean on the boot check to keep the document honest.
+    const app = makeApp()
+    app.get('/accounts/me', { response: { 200: PublicUser } }, () => null as never)
+    await app.ready()
+    const graph = app.graph()
+    const route = graph.routes[0]!
+    const forged = { ...graph, routes: [{ ...route, schema: { ...route.schema, response: { 200: Account } } }] }
+
+    const { document } = openapiDocument(forged as typeof graph, INFO)
+    const returned = responseSchema(document, '/accounts/me', 'get', '200')
+    assert.deepEqual(Object.keys(returned['properties'] as object), ['email'])
+    assert.deepEqual(returned['required'], ['email'])
+  })
+
+  it('also withholds a writeOnly field that is a $ref to a writeOnly definition', async () => {
+    const WithRef = schema({
+      type: 'object',
+      properties: { id: { type: 'integer' }, secret: { $ref: '#/$defs/Secret' } },
+      $defs: { Secret: { type: 'string', writeOnly: true } },
+    })
+    const app = makeApp()
+    app.get('/s', { response: { 200: PublicUser } }, () => null as never)
+    await app.ready()
+    const graph = app.graph()
+    const route = graph.routes[0]!
+    const forged = { ...graph, routes: [{ ...route, schema: { ...route.schema, response: { 200: WithRef } } }] }
+
+    const { document } = openapiDocument(forged as typeof graph, INFO)
+    assert.deepEqual(Object.keys(responseSchema(document, '/s', 'get', '200')['properties'] as object), ['id'])
+  })
+})

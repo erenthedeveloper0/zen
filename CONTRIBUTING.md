@@ -18,7 +18,7 @@ git clone https://github.com/erenthedeveloper0/zen.git
 cd zen
 npm ci
 npm run typecheck      # builds all six packages, then type-checks the ten examples
-npm test               # ~1,110 tests: unit, integration, differential and property suites
+npm test               # ~1,250 tests: unit, integration, differential and property suites
 ```
 
 **Tests import each package's built `dist/`, not its source.** After editing
@@ -33,7 +33,14 @@ npm test
 node scripts/smoke.ts          # real sockets: what inject() cannot see
 npm run openapi:check          # the API compatibility gate
 npm run controls               # negative controls: are the tests load-bearing?
+node scripts/claims.ts         # every "built" sentence in the docs, probed against dist/
+node scripts/check-strata.ts   # no import in core points up a stratum (§3.1)
+node scripts/check-regex.ts    # no regex in framework source can backtrack without bound (§19.3)
 ```
+
+If you changed what a compiler emits, the generated-source snapshot fails —
+on purpose. Read the diff, then regenerate it and commit it with the change:
+`UPDATE_SNAPSHOTS=1 node --test packages/core/test/generated-source.test.ts`.
 
 If you touched a subsystem with a benchmark in `benchmarks/`, run it — several
 are CI gates that assert on generated code rather than on timings.
@@ -52,7 +59,9 @@ argument in its description, not a workaround.
 3. **A test that passes against the bug is not a test.** Break the thing your
    test covers and watch it fail. When you add a feature, add a control to
    `scripts/negative-controls.ts`: a name, a file, a string to replace, a suite,
-   and the assertion that ought to notice.
+   and the assertion that ought to notice. The suite may be a script — the
+   strata check, the regex check, the claims ledger — which must then exit
+   non-zero.
 4. **Performance claims need numbers**, and losses are published as prominently
    as wins. Prefer a structural assertion ("the generated source is byte
    identical") to a timing ("the difference was inside the noise").
@@ -63,6 +72,17 @@ argument in its description, not a workaround.
 7. **Monomorphism (I2).** The generated context class and `PlainContext` declare
    the same fields in the same order. Add a field to one, add it to the other in
    the same position.
+8. **A sentence about what is built has a probe.** Each bullet of the README's
+   "Working today" and each `> **Status:` block in ARCHITECTURE.md ends with a
+   `<!-- claim: id -->` marker, and `scripts/claims.ts` has a probe of that id
+   that runs against `dist/`. A gap the docs admit is marked
+   `<!-- gap: id -->`, and its probe asserts the gap is still there — so the
+   day it is built, CI fails until the sentence calling it missing is
+   corrected. Two audits found every "built" sentence they probed by hand to be
+   false in some way; this is what keeps a third from needing to.
+9. **Imports point down.** Within `@erenthedeveloper0/zen-core` a module imports
+   from its own stratum or a lower one (§3.1). An upward edge that is the
+   design goes in `scripts/check-strata.ts`'s allowlist with its reason.
 
 ## Code style
 

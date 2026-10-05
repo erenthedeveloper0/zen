@@ -1,0 +1,566 @@
+// ─── serializer:GET /export#200 ────────────────────────────────────────────
+function f$1(v) {
+  let t0, t1
+  if (v === null || typeof v !== 'object') return $notObject(v, "$[]")
+  let s = '{'
+  t0 = v.id
+  if (t0 === undefined) $missing("$[].id")
+  s += "\"id\":" + (typeof t0 === 'number' && (t0 | 0) === t0 ? '' + t0 : $int(t0, "$[].id"))
+  t1 = v.email
+  if (t1 === undefined) $missing("$[].email")
+  s += ",\"email\":" + (typeof t1 === 'string' ? $esc(t1) : $str(t1, "$[].email"))
+  return s + '}'
+}
+
+function f$0(v) {
+  let t0
+  if (!Array.isArray(v)) return $notArray(v, "$")
+  let s = '['
+  for (let i = 0; i < v.length; i++) {
+    if (i !== 0) s += ','
+    t0 = v[i]
+    s += f$1(t0)
+  }
+  return s + ']'
+}
+
+return f$0
+
+// ─── serializer:GET /users/:id<int>#200 ────────────────────────────────────
+function f$1(v) {
+  let t0
+  if (!Array.isArray(v)) return $notArray(v, "$.tags")
+  let s = '['
+  for (let i = 0; i < v.length; i++) {
+    if (i !== 0) s += ','
+    t0 = v[i]
+    s += (typeof t0 === 'string' ? $esc(t0) : $str(t0, "$.tags[]"))
+  }
+  return s + ']'
+}
+
+function f$0(v) {
+  let t0, t1, t2
+  if (v === null || typeof v !== 'object') return $notObject(v, "$")
+  let s = '{'
+  t0 = v.id
+  if (t0 === undefined) $missing("$.id")
+  s += "\"id\":" + (typeof t0 === 'number' && (t0 | 0) === t0 ? '' + t0 : $int(t0, "$.id"))
+  t1 = v.email
+  if (t1 === undefined) $missing("$.email")
+  s += ",\"email\":" + (typeof t1 === 'string' ? $esc(t1) : $str(t1, "$.email"))
+  t2 = v.tags
+  if (t2 === undefined) $missing("$.tags")
+  s += ",\"tags\":" + f$1(t2)
+  return s + '}'
+}
+
+return f$0
+
+// ─── serializer:POST /users#201 ────────────────────────────────────────────
+function f$1(v) {
+  let t0
+  if (!Array.isArray(v)) return $notArray(v, "$.tags")
+  let s = '['
+  for (let i = 0; i < v.length; i++) {
+    if (i !== 0) s += ','
+    t0 = v[i]
+    s += (typeof t0 === 'string' ? $esc(t0) : $str(t0, "$.tags[]"))
+  }
+  return s + ']'
+}
+
+function f$0(v) {
+  let t0, t1, t2
+  if (v === null || typeof v !== 'object') return $notObject(v, "$")
+  let s = '{'
+  t0 = v.id
+  if (t0 === undefined) $missing("$.id")
+  s += "\"id\":" + (typeof t0 === 'number' && (t0 | 0) === t0 ? '' + t0 : $int(t0, "$.id"))
+  t1 = v.email
+  if (t1 === undefined) $missing("$.email")
+  s += ",\"email\":" + (typeof t1 === 'string' ? $esc(t1) : $str(t1, "$.email"))
+  t2 = v.tags
+  if (t2 === undefined) $missing("$.tags")
+  s += ",\"tags\":" + f$1(t2)
+  return s + '}'
+}
+
+return f$0
+
+// ─── serializer:POST /hooked/echo#200 ──────────────────────────────────────
+function f$1(v) {
+  let t0
+  if (!Array.isArray(v)) return $notArray(v, "$.tags")
+  let s = '['
+  for (let i = 0; i < v.length; i++) {
+    if (i !== 0) s += ','
+    t0 = v[i]
+    s += (typeof t0 === 'string' ? $esc(t0) : $str(t0, "$.tags[]"))
+  }
+  return s + ']'
+}
+
+function f$0(v) {
+  let t0, t1, t2
+  if (v === null || typeof v !== 'object') return $notObject(v, "$")
+  let s = '{'
+  t0 = v.id
+  if (t0 === undefined) $missing("$.id")
+  s += "\"id\":" + (typeof t0 === 'number' && (t0 | 0) === t0 ? '' + t0 : $int(t0, "$.id"))
+  t1 = v.email
+  if (t1 === undefined) $missing("$.email")
+  s += ",\"email\":" + (typeof t1 === 'string' ? $esc(t1) : $str(t1, "$.email"))
+  t2 = v.tags
+  if (t2 === undefined) $missing("$.tags")
+  s += ",\"tags\":" + f$1(t2)
+  return s + '}'
+}
+
+return f$0
+
+// ─── context ───────────────────────────────────────────────────────────────
+return class Ctx {
+  constructor(raw, route, params, env, signal, deadline) {
+    // Fixed field order → one hidden class, no dictionary mode, no transitions.
+    this.raw = raw
+    this.route = route
+    this.env = env
+    this.method = raw.method
+    this.$params = params
+    this.$path = UNSET
+    this.$query = UNSET
+    this.$headers = UNSET
+    this.$cookies = UNSET
+    this.$url = UNSET
+    this.$body = undefined
+    this.$s = [undefined]
+    this.$disposers = null
+    this.$stage = null
+    this.$resStatus = 0
+    this.$resHeaders = null
+    this.$resCookies = null
+    // Every context declares the field even though most requests carry no
+    // deadline: the alternative is two hidden classes, and a polymorphic
+    // context is a far larger tax than one store of null (§7.6, I2).
+    this.$deadline = deadline === undefined ? null : deadline
+    // §13.4 — same argument, same position as in PlainContext. The field order
+    // here *is* the hidden class, and the monomorphism fixture compares it
+    // against the twin's declaration order, so a field added to one and not the
+    // other fails CI rather than quietly costing throughput.
+    this.$negotiated = null
+    this.id = ''
+    this.startTime = 0
+    this.signal = signal
+    this.aborted = false
+    this.timedOut = false
+    this.log = env.log
+  }
+
+  get path() { const v = this.$path; return v !== UNSET ? v : (this.$path = pathnameOf(this.raw.url)) }
+  get params() { return this.$params }
+  get query() { const v = this.$query; return v !== UNSET ? v : (this.$query = parseQuery(this.raw.url, this.env.maxQueryParams)) }
+  get headers() { const v = this.$headers; return v !== UNSET ? v : (this.$headers = buildHeaders(this.raw)) }
+  get cookies() { const v = this.$cookies; return v !== UNSET ? v : (this.$cookies = parseCookies(this.raw.header('cookie'))) }
+  get body() { return this.$body }
+  get url() { const v = this.$url; return v !== UNSET ? v : (this.$url = requestUrl(this.raw.url, this.secure, this.host)) }
+  get host() { const h = this.raw.header('host'); return h !== undefined ? h : 'localhost' }
+  get secure() {
+    const trust = this.env.trustProxy
+    if (trust === false || trust === 0) return false
+    const proto = this.raw.header('x-forwarded-proto')
+    return proto !== undefined && forwardedProtocol(proto) === 'https'
+  }
+  get protocol() { return this.secure ? 'https' : 'http' }
+  get config() { return this.env.config }
+  get deadline() { const d = this.$deadline; return d !== null ? d.at : null }
+  get timeLeft() { const d = this.$deadline; return d !== null ? d.at - performance.now() : Infinity }
+  get negotiated() { const n = this.$negotiated; return n !== null ? n.media : null }
+  get ip() {
+    const trust = this.env.trustProxy
+    if (trust !== false && trust !== 0) {
+      const fwd = this.raw.header('x-forwarded-for')
+      if (fwd !== undefined) return forwardedClient(fwd, trust)
+    }
+    const a = this.raw.remote.address
+    return a !== undefined ? a : ''
+  }
+  get ips() { return forwardedChain(this.raw, this.env.trustProxy) }
+
+  get(slot) {
+    const v = this.$s[slot.index]
+    if (v === undefined) {
+      if (slot.defaultValue !== undefined) { const d = slot.defaultValue(); this.$s[slot.index] = d; return d }
+      if (!slot.optional) throw slotEmpty(slot, this)
+    }
+    return v
+  }
+  find(slot) { return this.$s[slot.index] }
+  set(slot, value) {
+    this.$s[slot.index] = value
+    if (slot.dispose !== undefined) trackDisposal(this, slot.name, slot.dispose, value)
+    else if (typeof value === 'object' && value !== null) trackIntrinsic(this, slot.name, value)
+  }
+  has(slot) { return this.$s[slot.index] !== undefined }
+
+  resolve(token) { return this.env.container.resolve(token, this) }
+  resolveAsync(token) { return this.env.container.resolveAsync(token, this) }
+
+  json(body, init) { return jsonReply(body, init) }
+  text(body, init) { return textReply(body, init) }
+  html(body, init) { return htmlReply(body, init) }
+  bytes(body, init) { return bytesReply(body, init) }
+  empty(status) { return emptyReply(status === undefined ? 204 : status) }
+  redirect(to, init) { return redirectReply(to, init, this.env.redirect) }
+  file(path, init) { return fileReply(path, init) }
+  stream(source, init) { return streamReply(source, init) }
+  sse(init) { return createSseChannel(init) }
+  respond(reply) { return reply }
+
+  get res() { return this.$stage !== null ? this.$stage : (this.$stage = new ReplyStage(this)) }
+
+  get tenant() { return this.$s[0] }
+  get requestedAt() { return accessors[1](this) }
+}
+
+// ─── params:GET:/users/:id<int> ────────────────────────────────────────────
+return function buildParams(v) { return { "id": t[0].parse(v[0]) } }
+
+// ─── params:GET:/owned/:id ─────────────────────────────────────────────────
+return function buildParams(v) { return { "id": v[0] } }
+
+// ─── pipeline:GET_/ ────────────────────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  let out = d.handler(ctx)
+  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:GET_/users/:id<int> ──────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+
+  reply = d.attachSerializer(ctx, reply, d.serialize)
+  return reply
+}
+
+function seg1(ctx) {
+  let r
+
+  let out = d.handler(ctx)
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, async function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:POST_/users ──────────────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+
+  reply = d.attachSerializer(ctx, reply, d.serialize)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  await d.intake(ctx)
+
+  { const vr = d.validators[0](ctx); if (vr !== undefined && typeof vr.then === 'function') await vr }
+
+  let out = await d.handler(ctx)
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── coercer:GET_/search#query ─────────────────────────────────────────────
+return function coerce$query(v) {
+  if (typeof v !== 'object' || v === null) return v
+  {
+    let c = v["page"]
+    if (c !== undefined) {
+      v["page"] = (typeof c === 'string' ? $int(c) : c)
+    }
+  }
+  {
+    let c = v["active"]
+    if (c !== undefined) {
+      v["active"] = (typeof c === 'string' ? $bool(c) : c)
+    }
+  }
+  return v
+}
+
+// ─── pipeline:GET_/search ──────────────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  { const vr = d.validators[0](ctx); if (vr !== undefined && typeof vr.then === 'function') await vr }
+
+  let out = d.handler(ctx)
+  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:GET_/export ──────────────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+
+  reply = d.attachNegotiated(ctx, reply, d.serialize)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  let out = d.handler(ctx)
+  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  d.negotiate(ctx)
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:GET_/slow ────────────────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'validate'; if (dl.done) return d.abandoned() } }
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'handler'; if (dl.done) return d.abandoned() } }
+
+  let out = await d.handler(ctx)
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:GET_/owned/:id ───────────────────────────────────────────────
+function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  r = d.steps[3](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  r = await d.steps[4](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  let out = d.handler(ctx)
+  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:POST_/hooked/echo ────────────────────────────────────────────
+async function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+
+  { let p = d.payloadOf(reply)
+    if (p !== d.NO_PAYLOAD) {
+      { let t = d.hooks.onSerialize[0](ctx, p)
+        if (t !== null && typeof t === 'object' && typeof t.then === 'function') t = await t
+        if (t !== undefined) p = t }
+      reply = d.replacePayload(reply, p) } }
+
+  { let sr = d.hooks.onSend[0](ctx, reply)
+    if (sr !== null && typeof sr === 'object' && typeof sr.then === 'function') sr = await sr
+    if (sr !== undefined) reply = sr }
+
+  reply = d.attachSerializer(ctx, reply, d.serialize)
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  r = await d.steps[3](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'intake'; if (dl.done) return d.abandoned() } }
+
+  await d.intake(ctx)
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'validate'; if (dl.done) return d.abandoned() } }
+
+  r = d.hooks.preValidation[0](ctx); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  { const vr = d.validators[0](ctx); if (vr !== undefined && typeof vr.then === 'function') await vr }
+
+  r = d.hooks.postValidation[0](ctx); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'handler'; if (dl.done) return d.abandoned() } }
+
+  r = await d.hooks.preHandler[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  let out = d.handler(ctx)
+  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+
+  r = d.hooks.postHandler[0](ctx, out); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.hooks.onRequest[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  r = d.hooks.onRoute[0](ctx, ctx.route); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0
+
+// ─── pipeline:GET_/hooked/plain ────────────────────────────────────────────
+async function finish(ctx, reply) {
+  reply = d.steps[2](ctx, reply)
+
+  { let p = d.payloadOf(reply)
+    if (p !== d.NO_PAYLOAD) {
+      { let t = d.hooks.onSerialize[0](ctx, p)
+        if (t !== null && typeof t === 'object' && typeof t.then === 'function') t = await t
+        if (t !== undefined) p = t }
+      reply = d.replacePayload(reply, p) } }
+
+  { let sr = d.hooks.onSend[0](ctx, reply)
+    if (sr !== null && typeof sr === 'object' && typeof sr.then === 'function') sr = await sr
+    if (sr !== undefined) reply = sr }
+  return reply
+}
+
+async function seg1(ctx) {
+  let r
+
+  r = await d.steps[3](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'validate'; if (dl.done) return d.abandoned() } }
+
+  r = d.hooks.preValidation[0](ctx); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  r = d.hooks.postValidation[0](ctx); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  { const dl = ctx.$deadline; if (dl !== null) { dl.stage = 'handler'; if (dl.done) return d.abandoned() } }
+
+  r = await d.hooks.preHandler[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  let out = d.handler(ctx)
+  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+
+  r = d.hooks.postHandler[0](ctx, out); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+  let reply = d.finalize(out, false)
+  return finish(ctx, reply)
+}
+
+async function seg0(ctx) {
+  let r
+
+  r = d.hooks.onRequest[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  r = d.hooks.onRoute[0](ctx, ctx.route); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+
+  return d.steps[1](ctx, function () { return seg1(ctx) })
+}
+
+return seg0

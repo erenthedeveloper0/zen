@@ -1,7 +1,9 @@
 import { definePlugin, type Plugin } from '@erenthedeveloper0/zen-core'
 import { assertCorsCorpConsistent } from './consistency.ts'
 import type { CorsExports } from './cors.ts'
-import type { Staging } from './shared.ts'
+import {
+  BOOLEAN, STRING, STRING_RECORD, either, oneOf, optionsSchema, type OptionField, type Staging,
+} from './shared.ts'
 
 /**
  * Security response headers — rfcs/0001 §19.2.
@@ -90,10 +92,48 @@ export interface SecurityHeadersOptions {
 /** One resolved header, so the set is data and the hook is a loop over it. */
 type Pair = readonly [name: string, value: string]
 
+const HSTS: OptionField = {
+  expected: 'false, or { maxAge?: number, includeSubDomains?: boolean, preload?: boolean }',
+  accepts: (v) =>
+    v === false ||
+    (typeof v === 'object' && v !== null && !Array.isArray(v) &&
+      Object.entries(v).every(([key, value]) =>
+        key === 'maxAge' ? typeof value === 'number'
+        : key === 'includeSubDomains' || key === 'preload' ? typeof value === 'boolean'
+        : false)),
+  json: {
+    anyOf: [
+      { const: false },
+      {
+        type: 'object',
+        properties: { maxAge: { type: 'number' }, includeSubDomains: { type: 'boolean' }, preload: { type: 'boolean' } },
+        additionalProperties: false,
+      },
+    ],
+  },
+}
+
+/** §10.5 step 2 — checked at boot, so `securityHeaders({ frameOption: 'DENY' })` is refused by name. */
+const OPTIONS = optionsSchema('securityHeaders', {
+  noSniff: BOOLEAN,
+  frameOptions: oneOf('DENY', 'SAMEORIGIN', false),
+  referrerPolicy: oneOf(
+    'no-referrer', 'no-referrer-when-downgrade', 'origin', 'origin-when-cross-origin', 'same-origin',
+    'strict-origin', 'strict-origin-when-cross-origin', 'unsafe-url', false,
+  ),
+  crossOriginOpener: oneOf('same-origin', 'same-origin-allow-popups', 'unsafe-none', false),
+  crossOriginResource: oneOf('same-origin', 'same-site', 'cross-origin', false),
+  hsts: HSTS,
+  contentSecurityPolicy: either(STRING, oneOf(false)),
+  headers: STRING_RECORD,
+} satisfies Record<keyof SecurityHeadersOptions, OptionField>)
+
 export function securityHeaders(options: SecurityHeadersOptions = {}): Plugin<void, {}> {
   return definePlugin<void, {}>({
     name: 'security-headers',
     version: '0.1.0',
+    options: OPTIONS,
+    boundOptions: options,
     // Before everything that can short-circuit. `cors` answers preflights and
     // `rate-limit` throws 429s; a hook that runs after either is absent from
     // exactly the responses §19.2 most wants these headers on. Hints on

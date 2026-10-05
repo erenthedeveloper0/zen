@@ -3,7 +3,10 @@ import {
   type Duration, type Plugin, type Reply,
 } from '@erenthedeveloper0/zen-core'
 import { MemoryStore, type Store, type Tally } from './store.ts'
-import type { Answering, RawReading, Staging } from './shared.ts'
+import {
+  BOOLEAN, DURATION, FUNCTION, NUMBER, STRING, optionsSchema,
+  type Answering, type OptionField, type RawReading, type Staging,
+} from './shared.ts'
 
 /**
  * Rate limiting — rfcs/0001 §9.2, §19.2, §19.4, Annex B `ZEN_RATE_LIMITED`.
@@ -74,10 +77,25 @@ export interface RateLimitContext {
 
 const DEFAULTS = { limit: 100, window: '1m' } as const
 
+/** A store is anything with `hit` — `store.ts`'s contract, checked by shape. */
+const STORE: OptionField = {
+  expected: 'a store with a hit() method',
+  accepts: (v) => typeof v === 'object' && v !== null && typeof (v as { hit?: unknown }).hit === 'function',
+  json: { type: 'object' },
+}
+
+/** §10.5 step 2 — checked at boot, so `rateLimit({ limt: 100 })` is refused with "did you mean "limit"?". */
+const OPTIONS = optionsSchema('rateLimit', {
+  limit: NUMBER, window: DURATION, key: FUNCTION, store: STORE,
+  legacyHeaders: BOOLEAN, standardHeaders: BOOLEAN, message: STRING,
+} satisfies Record<keyof RateLimitOptions, OptionField>)
+
 export function rateLimit(options: RateLimitOptions = {}): Plugin<void, {}> {
   return definePlugin<void, {}>({
     name: 'rate-limit',
     version: '0.1.0',
+    options: OPTIONS,
+    boundOptions: options,
     config: { namespace: 'rateLimit', defaults: { limit: DEFAULTS.limit, window: DEFAULTS.window } },
 
     setup(app) {

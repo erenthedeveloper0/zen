@@ -13,9 +13,9 @@ export const Codes = {
   ROUTE_UNKNOWN: 'ZEN_ROUTE_UNKNOWN',
   /**
    * Parameters that disagree with a route's path template — §5.2, §5.7.
-   * Produced by `app.url()` when its parameters cannot build a URL the route
-   * answers; the boot-time check of a `params` schema against the template is
-   * reserved under the same code.
+   * Produced at boot when a `params` schema requires a key its path does not
+   * supply, and by `app.url()` when its parameters cannot build a URL the route
+   * answers.
    */
   PARAM_MISMATCH: 'ZEN_PARAM_MISMATCH',
   PARAM_TYPE_UNKNOWN: 'ZEN_PARAM_TYPE_UNKNOWN',
@@ -46,6 +46,14 @@ export const Codes = {
   /** Two statuses on one route offer different media types. `Accept` is matched
    *  once, before the status exists, so the offer list cannot depend on it. */
   NEGOTIATION_INCONSISTENT: 'ZEN_NEGOTIATION_INCONSISTENT',
+  /**
+   * A response schema declares a property `writeOnly: true` — JSON Schema's
+   * "may be sent, never returned" — so the serializer would return it. §13.3,
+   * §16.2: the configuration store already reads the same keyword as a secret.
+   */
+  RESPONSE_WRITE_ONLY: 'ZEN_RESPONSE_WRITE_ONLY',
+  /** A regular expression that can backtrack without bound — §19.3. A warning. */
+  REGEX_UNSAFE: 'ZEN_REGEX_UNSAFE',
   CONFIG_INVALID: 'ZEN_CONFIG_INVALID',
   ENV_INVALID: 'ZEN_ENV_INVALID',
   CAPABILITY_UNAVAILABLE: 'ZEN_CAPABILITY_UNAVAILABLE',
@@ -55,8 +63,13 @@ export const Codes = {
 
   // ── Request-time ──────────────────────────────────────────────────────────
   VALIDATION: 'ZEN_VALIDATION',
+  /** A malformed request that is not a body problem — an invalid `Host`, say. */
+  BAD_REQUEST: 'ZEN_BAD_REQUEST',
   BODY_TOO_LARGE: 'ZEN_BODY_TOO_LARGE',
+  /** The body did not parse as its content type, or nests past the limit. */
   BODY_INVALID: 'ZEN_BODY_INVALID',
+  /** Well-formed, and refused on its meaning — `UnprocessableEntity`. */
+  UNPROCESSABLE_ENTITY: 'ZEN_UNPROCESSABLE_ENTITY',
   UNSUPPORTED_MEDIA_TYPE: 'ZEN_UNSUPPORTED_MEDIA_TYPE',
   NOT_ACCEPTABLE: 'ZEN_NOT_ACCEPTABLE',
   METHOD_NOT_ALLOWED: 'ZEN_METHOD_NOT_ALLOWED',
@@ -76,9 +89,16 @@ export const Codes = {
   /** `ctx.redirect()` would have sent the client off this origin, to an origin
    *  `redirect.allowExternal` does not name — the open redirect, refused. §19.5. */
   REDIRECT_EXTERNAL: 'ZEN_REDIRECT_EXTERNAL',
+  /** `ctx.res` was written after the reply had gone to egress — §7.3. */
   REPLY_SENT: 'ZEN_REPLY_SENT',
   CONTEXT_ESCAPED: 'ZEN_CONTEXT_ESCAPED',
   HANDLER_NO_RETURN: 'ZEN_HANDLER_NO_RETURN',
+  /**
+   * The service cannot answer now — `ServiceUnavailable`, or an upstream call
+   * that gave up on its own timeout (`AbortSignal.timeout`). Not `ZEN_INTERNAL`:
+   * a 503 somebody threw on purpose is not an unclassified error.
+   */
+  SERVICE_UNAVAILABLE: 'ZEN_SERVICE_UNAVAILABLE',
   INTERNAL: 'ZEN_INTERNAL',
 } as const
 
