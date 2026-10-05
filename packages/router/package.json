@@ -1,6 +1,6 @@
 {
   "name": "@erenthedeveloper0/zen-router",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "Zen router: compiled and interpreted radix routers, typed path parameters and boot-time conflict analysis.",
   "keywords": [
     "router",
@@ -52,7 +52,7 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@erenthedeveloper0/zen-core": "0.1.0-alpha.3"
+    "@erenthedeveloper0/zen-core": "0.1.0-alpha.4"
   },
   "peerDependencies": {
     "typescript": ">=5.0"
