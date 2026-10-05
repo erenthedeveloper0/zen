@@ -28,7 +28,7 @@
     "typecheck": "tsc -b tsconfig.json && npm run typecheck:examples",
     "typecheck:examples": "tsc --noEmit -p examples/hello-world && tsc --noEmit -p examples/rest-api && tsc --noEmit -p examples/openapi && tsc --noEmit -p examples/observability && tsc --noEmit -p examples/deadlines && tsc --noEmit -p examples/health && tsc --noEmit -p examples/coercion && tsc --noEmit -p examples/config && tsc --noEmit -p examples/middleware && tsc --noEmit -p examples/negotiation",
     "typecheck:watch": "tsc -b tsconfig.json --watch",
-    "test": "node --test --test-reporter=spec \"packages/**/test/**/*.test.ts\" \"examples/**/test/**/*.test.ts\" \"examples/**/src/**/*.test.ts\"",
+    "test": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/test-annotations.ts --test-reporter-destination=stdout \"packages/**/test/**/*.test.ts\" \"examples/**/test/**/*.test.ts\" \"examples/**/src/**/*.test.ts\"",
     "test:watch": "node --test --watch \"packages/**/test/**/*.test.ts\"",
     "example": "node examples/hello-world/src/main.ts",
     "example:rest": "node examples/rest-api/src/main.ts",
