@@ -49,14 +49,6 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<Uint8Array | st
 }
 
 /**
- * Serialise the body to bytes and set content headers.
- *
- * When a route declares a response schema the compiled serializer is attached
- * to the payload at boot (`body.serialize`), which is 2-5x faster than
- * JSON.stringify *and* structurally prevents emitting undeclared fields —
- * §13.3. Speed is the bonus; not leaking `passwordHash` is the point.
- */
-/**
  * Bind the route's compiled serializer to a JSON reply — rfcs/0001 §13.3.
  *
  * Runs at the *end* of the pipeline, after `after` middleware, so the contract
@@ -219,6 +211,14 @@ export function effectiveStatus(ctx: StatusCarrier, reply: Reply): number {
   return ctx.$resStatus !== 0 ? ctx.$resStatus : reply.status
 }
 
+/**
+ * Serialise the body to bytes, with the media type it carries.
+ *
+ * A JSON body bound to a route's compiled serializer (`body.serialize`, §13.3)
+ * is written by it — 1.2–2.1× faster than `JSON.stringify` on identical work
+ * (§13.3.2), and structurally unable to emit an undeclared field. Speed is the
+ * bonus; not leaking `passwordHash` is the point.
+ */
 export function encodeBody(reply: Reply): { bytes: Uint8Array | null; media: string | null } {
   const body = reply.body
   switch (body.kind) {

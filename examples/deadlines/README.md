@@ -132,11 +132,11 @@ that timeouts are supposed to prevent, caused by the timeout.
 ## Propagation from the caller
 
 ```bash
-curl -i localhost:3000/quotes -H 'x-request-timeout: 150'     # honoured
+curl -i localhost:3000/quotes -H 'x-request-timeout: 120'     # honoured
 curl -i localhost:3000/quotes -H 'x-request-timeout: 60000'   # ignored
 ```
 
-The clamp is one-way. A caller with 150 ms left telling us so is cooperative —
+The clamp is one-way. A caller with 120 ms left telling us so is cooperative —
 we stop work that was going to be discarded, and we pass a truthful budget
 further down. A caller asking for an hour is either confused or hostile, and in
 both cases the answer is the route's own number. That is why it is a `min` and

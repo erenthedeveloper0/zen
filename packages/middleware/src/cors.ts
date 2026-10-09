@@ -367,11 +367,16 @@ function compile(
         ? ((only) => (o) => o === only)(list[0] as string)
         : ((set) => (o) => set.has(o))(new Set(list))
     : origin instanceof RegExp
-      // A fresh test each call: a global regex carries `lastIndex` between
-      // calls and would match every other request. §19.3 forbids unbounded
-      // backtracking in framework source; a user's own pattern is their
-      // choice, and it is named in `explainRoute` as `cors`.
-      ? ((re) => (o) => new RegExp(re.source, re.flags.replace('g', '')).test(o))(origin)
+      // Compiled once, here, without the `g` flag — I1 keeps regex compilation
+      // off the request path, and this hook runs on every request with an
+      // `Origin`. A global regex carries `lastIndex` between calls and would
+      // match every other request; so does a sticky one, whose anchoring is
+      // the point of writing `y`, so `lastIndex` is put back to 0 before each
+      // test rather than the flag being dropped. The copy is ours, so the
+      // application's own RegExp object is never touched. §19.3 forbids
+      // unbounded backtracking in framework source; a user's own pattern is
+      // their choice, and it is named in `explainRoute` as `cors`.
+      ? ((re) => (o: string) => { re.lastIndex = 0; return re.test(o) })(new RegExp(origin.source, origin.flags.replace('g', '')))
       : (origin as (o: string) => boolean)
 
   return {

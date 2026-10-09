@@ -368,7 +368,7 @@ ASCII is percent-encoded for you.
 
 ## ZEN_HTML_UNSAFE
 
-**500.** HTML the framework could not vouch for (§19.5), for one of three reasons:
+**500.** HTML the framework could not vouch for (§19.5), for one of these reasons:
 
 - `ctx.html()` was given something other than `SafeHtml` — a string, say.
   Build the page with the `html` template tag, which escapes what it

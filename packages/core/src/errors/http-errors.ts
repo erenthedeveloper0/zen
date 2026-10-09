@@ -66,8 +66,9 @@ export interface Issue {
 
 /**
  * Normalised across schema libraries (§11.2) — a Zod app and a Valibot app
- * produce byte-identical error envelopes, so clients and generated SDKs can
- * rely on `issues[].code` across the whole ecosystem.
+ * produce envelopes of the same shape. The `code` of each issue is inferred
+ * from the library's message text for now, so it is not yet the same across
+ * libraries, and a client should not switch on it across them (§28.8).
  */
 export class ValidationError extends HttpError {
   readonly issues: readonly Issue[]

@@ -918,8 +918,8 @@ Building it read route names as keys for the first time, and the reader found
 two things the RFC described that did not exist: a collection's `name` was
 supposed to prefix its routes' names, and a `params` schema was supposed to be
 checked against its path at boot. Neither was built; the first is now decided
-against — every application already namespaces by hand — and the second is
-recorded as a gap rather than as a feature.
+against — every application already namespaces by hand — and the second was
+built in `0.1.0-alpha.4`.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-06.png">
@@ -932,9 +932,9 @@ recorded as a gap rather than as a feature.
 git clone https://github.com/erenthedeveloper0/zen.git && cd zen
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 1,248 tests
+npm test                           # 1,253 tests
 node scripts/smoke.ts              # 80 checks over a real socket
-node scripts/negative-controls.ts  # break 126 things on purpose; every suite must notice
+node scripts/negative-controls.ts  # break 129 things on purpose; every suite must notice
 node scripts/claims.ts             # every "Working today" bullet, probed against the build
 node scripts/check-strata.ts       # no import in core points up a stratum
 node scripts/check-regex.ts        # no regex in framework source can backtrack without bound
@@ -1011,10 +1011,11 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `error-docs.test.ts` | Every error code any package can produce has its entry in [docs/errors.md](./docs/errors.md) — the page every problem document links to |
 | `scripts/claims.ts` | That the docs are true: each "Working today" bullet above and each "Status: built" block in the architecture names a probe, run against the built packages; and each gap the docs admit names one that asserts it is still a gap, so the day it closes the build fails until the docs say so |
 | `logger.test.ts` | The default logger never throws — a cycle or a `bigint` in an error's metadata still produces the log line *and* the error response — and metadata cannot overwrite a line's `code` or `status` |
+| `id.test.ts` | The request id every request carries: ULID-shaped, its first ten characters the millisecond it was made in, and counting up by exactly one within a millisecond across every carry — the property a generator that re-encodes only what changed could break |
 | `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge, and the templates HTML and SVG would read differently refused. Then property suites judged by the WHATWG URL parser, a grammar for escaped text, and **parse5** — a spec-conformant HTML parser that parses 2,000 random pages, fragments nested in fragments, and reports where every value landed. None shares code with the tag |
 | `redirect.test.ts` | Paths, queries and fragments sent; every spelling that has slipped past a regex refused (`//`, `/\`, a tab, a leading space, `https:host`, userinfo); the allowlist's look-alikes refused; a malformed allowlist entry a boot error with the spelling that would match — and a real differential: the reference scanner against the WHATWG URL parser over 2,000 random targets, with its coverage asserted |
 | `url.test.ts` | A value encoded as one segment whatever it holds; a number, a bigint and a `Date` written the way their routes read them back; `.`, `..`, empty values, objects and lone surrogates refused; each way one route outranks another — a static segment, a typed parameter, anything over a wildcard — refused with the winner named; the query written in the route's own list style; reachable from a collection and a plugin. Then a property suite: 2,000 links from hostile values over a table of shadowing traps, put through the WHATWG URL parser the way a browser treats an `href` and sent to the app, which must answer on the named route with the values given — coverage asserted per kind of refusal |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. A hundred and twenty-six known defects patched in one at a time; each must make its named suite — or, for the strata, regex and claims checks, its script — **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. A hundred and twenty-nine known defects patched in one at a time; each must make its named suite — or, for the strata, regex and claims checks, its script — **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">

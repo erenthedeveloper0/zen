@@ -16,9 +16,10 @@ import { config } from './config/deadlines.config.ts'
  *
  * And the propagation, which is the part a plain timeout cannot do:
  *
- *   curl -i localhost:3000/quotes -H 'x-request-timeout: 150'
+ *   curl -i localhost:3000/quotes -H 'x-request-timeout: 120'
  *
- * 150 ms is shorter than our 2 s, so it wins and `steady` misses too. Try 60000
+ * 120 ms is shorter than our 2 s, so it wins: after the 60 ms reserve the
+ * providers get 60 ms, and `steady`'s 90 ms misses too. Try 60000
  * — it is longer, so it is ignored: a caller may hurry us, never delay us.
  *
  *   curl -i localhost:3000/quotes -H 'x-request-timeout: 60000'

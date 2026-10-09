@@ -89,15 +89,31 @@ describe('lifetimes', () => {
 
 describe('graph analysis', () => {
   test('a missing provider is reported with a suggestion', () => {
+    // Fixed names, not `uniqueName`: its counter suffix is part of the name,
+    // and two counters a digit apart would put a typo past `closest`'s reach.
     const c = new ZenContainer()
-    const Service = t<string>('service')
-    const DbToken = t<string>('dbtoken')
+    const Service = token<string>('di-suggest.service')
+    const DbToken = token<string>('di-suggest.dbtoken')
     c.provide(DbToken, () => 'db')
-    c.provide(Service, { deps: [t<string>('dbtokn')] as never, factory: (() => 'x') as never })
+    c.provide(Service, { deps: [token<string>('di-suggest.dbtokn')] as never, factory: (() => 'x') as never })
 
     const issues = c.analyze()
     assert.equal(issues.length, 1)
     assert.equal(issues[0]?.code, 'ZEN_DI_MISSING')
+    assert.equal(issues[0]?.hint, 'Did you mean "di-suggest.dbtoken"?')
+  })
+
+  test('a missing provider nothing is close to gets no suggestion rather than a guess', () => {
+    const c = new ZenContainer()
+    c.provide(token<string>('di-suggest.cache-warmer'), () => 'warm')
+    c.provide(token<string>('di-suggest.consumer'), {
+      deps: [token<string>('di-suggest.mailer')] as never,
+      factory: (() => 'x') as never,
+    })
+
+    const issues = c.analyze()
+    assert.equal(issues[0]?.code, 'ZEN_DI_MISSING')
+    assert.equal(issues[0]?.hint, undefined)
   })
 
   test('cycles are detected with the full path', () => {

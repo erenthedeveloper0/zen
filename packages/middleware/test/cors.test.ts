@@ -291,6 +291,23 @@ describe('matching', () => {
     }
   })
 
+  test('a sticky RegExp keeps its anchoring and still matches every request', async () => {
+    // The regex is compiled once, at boot, so `lastIndex` survives between
+    // requests: on a `/y` regex it is where the next match must start, and
+    // after one success it points past the end. Dropping `y` would cure that
+    // and unanchor the pattern — `evil.example?https://tenant.example` would
+    // match — so the matcher resets `lastIndex` instead.
+    const user = /https:\/\/[a-z]+\.example$/y
+    const a = app({ origin: user })
+    for (let i = 0; i < 4; i++) {
+      const res = await a.inject('GET', '/things', { headers: { origin: 'https://tenant.example' } })
+      assert.equal(res.header('access-control-allow-origin'), 'https://tenant.example', `request ${i + 1}`)
+    }
+    const res = await a.inject('GET', '/things', { headers: { origin: 'https://evil.example?https://tenant.example' } })
+    assert.equal(res.header('access-control-allow-origin'), undefined, 'sticky means anchored at the start')
+    assert.equal(user.lastIndex, 0, "the application's own RegExp is never used, so never moved")
+  })
+
   test('a predicate decides, and is asked once per request', async () => {
     const seen: string[] = []
     const a = app({ origin: (o) => { seen.push(o); return o.endsWith('.trusted.example') } })

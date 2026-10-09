@@ -57,7 +57,7 @@ app.get('/posts/:id<objectId>', (ctx) => posts.find(ctx.params.id))
 Matching is decided left to right per segment — static, then typed parameter,
 then parameter, then wildcard — never by registration order, so splitting routes
 across files cannot change behaviour. At boot, duplicate routes and genuinely
-ambiguous pairs (`/:a/b` against `/a/:b`) are refused with both origins named.
+ambiguous pairs (`/:a/b` against `/a/:b`) are refused with both routes named.
 A wrong method on a matched path is a 405 with a correct `Allow` header.
 
 ## Documentation

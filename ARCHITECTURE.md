@@ -439,7 +439,7 @@ Stages 5–8 are not distinct runtime steps; they are *regions of one generated 
 
 ### 4.2 Stage-by-stage
 
-**0 — Accept.** Owned entirely by the platform. Zen configures `server.maxRequestsPerSocket`, `keepAliveTimeout`, `headersTimeout`, and `requestTimeout` from `config.http` (§16) with hardened defaults (§19.3). No Zen code runs.
+**0 — Accept.** Owned entirely by the platform. The Node adapter sets `keepAliveTimeout`, `headersTimeout`, `requestTimeout` and `maxHeadersCount` from its own options, with hardened defaults (65 s, 20 s, 30 s, 64; §19.2). Reading them from `config.http` (§16), and `server.maxRequestsPerSocket`, are designed and not built. No Zen code runs.
 
 **1 — Parse.** `llhttp` produces `IncomingMessage`. Zen does not read `req.headers` here — accessing that getter forces Node to materialise the full lowercase header object. Deferring it is worth ~400ns and one object per request for handlers that only read two headers.
 
@@ -705,7 +705,7 @@ For the third consumer to actually get it, the registry is published on the buil
 
 Path templates are also *typed at the type level*: `ExtractParams<'/users/:id<int>/posts/:slug'>` resolves to `{ id: number; slug: string }` via template literal types, so `ctx.params` is typed **even with no schema at all**. Adding a `params` schema refines it further, and it is checked against the path at boot (since `0.1.0-alpha.4`): declaring `params: z.object({ userId: ... })` on `/users/:id` is the boot error `ZEN_PARAM_MISMATCH`, with *did you mean to name it "id"?* — before it, that route booted and answered every request 400. A required key only an optional segment supplies is an error too, and so is a path parameter a closed schema (`additionalProperties: false`) would refuse; one an open schema would drop is a warning, and an `integer` schema on an untyped segment is reported once, as information, because `:id<int>` makes `/users/abc` a 404 at the matcher where the schema makes it a 400 after validation. A schema that cannot be described is left to `@erenthedeveloper0/zen-openapi`, which already reports it. <!-- claim: params-mismatch -->
 
-> **Designed, not built** — and until `0.1.0-alpha.3` this paragraph said it was. Today such a route boots and answers every request 400, because the schema requires a key the router never supplies. The code exists and has a producer now, from the other direction: `app.url()` raises it for parameters its route's template cannot carry (§5.7). The boot-time check is §28.8's.
+> **Built in `0.1.0-alpha.4`** — and described in the present tense for two releases before that, while such a route booted and answered every request 400, because the schema required a key the router never supplies. `0.1.0-alpha.3` recorded it as a gap, and gave `ZEN_PARAM_MISMATCH` its first producer from the other direction: `app.url()` raises it for parameters its route's template cannot carry (§5.7).
 
 ### 5.3 Registration surface
 
@@ -743,7 +743,7 @@ Zen classifies every pair of routes at boot:
 
 | Class | Example | Behaviour |
 | --- | --- | --- |
-| **Duplicate** | `GET /users/:id` twice | **Boot error** `ZEN_ROUTE_DUPLICATE`, both origins reported |
+| **Duplicate** | `GET /users/:id` twice | **Boot error** `ZEN_ROUTE_DUPLICATE`, both routes reported — and both origins, once §5.1's are captured |
 | **Shadowed** | `GET /users/:id` then `GET /users/new` | **Not an error.** Static beats dynamic by priority (§5.6); the intent is unambiguous |
 | **Ambiguous** | `GET /:a/b` vs `GET /a/:b` for `/a/b` | **Boot error** `ZEN_ROUTE_AMBIGUOUS` — no priority rule makes this obviously right, so we refuse to guess |
 | **Unreachable** | `GET /*path` then `GET /files/x` | Static still wins; no error, but `zen doctor` warns |
@@ -1127,7 +1127,7 @@ Why this beats the alternatives:
 | `Map<string, unknown>` on ctx | Allocation per request, string hashing per access, `unknown` casts |
 | `ctx.state.user` with declaration merging (Koa) | Types are global and unscoped; two libraries claiming `state.user` silently conflict |
 
-`ctx.state` still exists, but as a **typed façade generated over declared slots**, so `ctx.state.user` and `ctx.get(CurrentUser)` are the same cell — familiar syntax, none of the looseness.
+`ctx.state` was designed as a **typed façade generated over declared slots**, so that `ctx.state.user` and `ctx.get(CurrentUser)` would be the same cell — familiar syntax, none of the looseness. It is not built, and it is proposed for removal (§7.2, Annex D question 1): a second spelling of what slots and decorations already do.
 
 ### 7.5 Plugin decorations
 
@@ -2253,7 +2253,7 @@ Handler return values are normalised at the entry to stage 9:
 | `SafeHtml` (`` html`…` ``) | `text/html; charset=utf-8` — recognised in the async-iterable branch, so an object return pays nothing for it (§19.5.1) |
 | `Uint8Array`/`Buffer` | `application/octet-stream` |
 | `ReadableStream`/`Readable` | `stream` |
-| `Response` (WHATWG) | **a 500 today**, `ZEN_SERIALIZATION` — designed as pass-through, adapter-native, and not built (§28.8) <!-- gap: whatwg-response --> |
+| `Response` (WHATWG) | **a 500 today**, `ZEN_INTERNAL` — designed as pass-through, adapter-native, and not built (§28.8) <!-- gap: whatwg-response --> |
 | anything else | `json` |
 
 ### 13.3 The compiled JSON serializer
@@ -3150,7 +3150,7 @@ If any target is missed at v1.0, the number is published anyway. A benchmark pag
 
 | # | Technique | Saves |
 | --- | --- | --- |
-| C1 | Router → generated matcher with `charCodeAt` scanning | Regex/segment-split allocation |
+| C1 | Router → generated matcher with `charCodeAt` scanning — designed, not built: matching walks the trie (§28.8) | Regex/segment-split allocation |
 | C2 | Pipeline → unrolled function | Array iteration, dynamic dispatch, closure chain |
 | C3 | Validators → Ajv/TypeCompiler where convertible | 3–10× on validation |
 | C4 | Response schema → specialised `stringify` | 2–5× on serialization |
@@ -3519,7 +3519,7 @@ Beyond correctness, three properties are asserted directly because they are arch
 
    Shutdown ordering belongs in this list too, and it lives in `scripts/smoke.ts` rather than here, because "readiness went red before the socket stopped accepting" needs a real socket to be open while the process is shutting down. It was unfalsifiable before §31.4 existed, and it was wrong for exactly that long.
 
-6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. A hundred and twenty-six controls, one per defect this design would be silently wrong about — and a control's suite may be a script, so the strata check, the regex check and the claims ledger are held to the same standard as the tests; a control that *passes* means the assertion it points at is not doing the work its name claims.
+6. **That the tests are load-bearing.** `scripts/negative-controls.ts` patches a named defect into one source file, rebuilds, runs one suite, and requires a **failure**. A hundred and twenty-nine controls, one per defect this design would be silently wrong about — and a control's suite may be a script, so the strata check, the regex check and the claims ledger are held to the same standard as the tests; a control that *passes* means the assertion it points at is not doing the work its name claims.
 
    This is a different property from every other entry in this list, and it is the one nothing else in the repo checks. Correctness tests answer "is the code right"; this answers "would we find out if it stopped being right", and the two come apart constantly and invisibly. Every pass of this codebase had run some version of it by hand and written down that it was worth automating; §13.4 was the pass that did.
 
@@ -3834,7 +3834,7 @@ const user  = await api.users.show({ params: { id: 1 } })
 //    ^? User  — and the failure union includes NotFound
 ```
 
-An OpenAPI-based generator (`zen client --lang go`) exists for non-TypeScript consumers; TypeScript consumers get the type-only path, which cannot drift.
+An OpenAPI-based generator (`zen client --lang go`) is designed for non-TypeScript consumers, and is not built either (§29.6).
 
 ---
 
@@ -3906,7 +3906,7 @@ interface Router {
 interface CompiledRouter {
   match(method: string, path: string): MatchResult
   readonly stats: { nodes: number; static: number; dynamic: number; bytes: number }
-  readonly source?: string              // present when compiled; enables `zen build` + source maps
+  readonly source?: string              // present when compiled; enables `zen build` + source maps — never produced today: matching walks the trie (§28.8)
 }
 ```
 
@@ -4850,7 +4850,7 @@ The strongest architecture loses to the framework people already know. Nothing i
 | `ctx.log` is not bound to the request | §7.2, §31.1, corrected — designed pre-bound with the request id and route, and the application's logger in fact. A lazy child, made on the first read and re-made if `ctx.id` changes (the request-id plugin adopting an inbound id), would cost nothing on a request that never logs and one allocation on one that does; not built <!-- gap: ctx-log --> |
 | Matching is a trie walk, not generated code | §2.2 step J, §18.3 C1, §22.2, corrected — each described a generated, `charCodeAt`-scanning matcher. The router generates params builders; `match` walks the trie, and `CompiledRouter.source` is not produced. Synthesising the matcher is the next large router change <!-- gap: router-codegen --> |
 | The sync fast path needs `markSync()` | §8.4, corrected — the `maybe` row of its table is not built, so a plain function is emitted on the async path. The README's listing marks every function it shows |
-| A returned WHATWG `Response` is a 500 | §13.2, corrected — the table said pass-through. It is neither an async iterable nor bytes, so it reaches the JSON encoder and fails with `ZEN_SERIALIZATION` |
+| A returned WHATWG `Response` is a 500 | §13.2, corrected — the table said pass-through. It has a `status`, `headers` and a `body`, so `finalize` takes it for a `Reply`, and egress fails writing a status onto its read-only getter: `ZEN_INTERNAL`. An earlier correction said it reached the JSON encoder and failed as `ZEN_SERIALIZATION`, which a probe of the build showed it does not |
 | Issue codes are inferred from message text | I7, §11.2, corrected — the envelope has one shape across libraries, and its `code` is guessed from the English message, so a localised library changes every code |
 | `MiddlewareOptions.when` is not read | §8.7, corrected — declared and documented, and `app.use()` takes `{ name }` alone. A collection's `when` is built (§6.2) |
 | A route cannot override the body limit | §4.2, §19.2, corrected — `body.limit` is app-wide; a route's own is ignored |
@@ -5425,7 +5425,7 @@ Two boot *warnings*, logged rather than refused: `ZEN_ROUTE_SHADOWED_BY_WILDCARD
 
 Genuinely unresolved. Input on these is the main reason this document exists.
 
-1. **Should `ctx.state` exist at all?** It is a typed façade over slots, kept for familiarity. It also gives two ways to do one thing, which violates the philosophy. Argument for removal: one concept. Argument for keeping: `ctx.state.user` is what a million Koa/Express developers will type first.
+1. **Should `ctx.state` exist at all?** It was designed as a typed façade over slots, for familiarity, and is not built (§7.2). It would also give two ways to do one thing, which violates the philosophy. Argument for removal: one concept. Argument for keeping: `ctx.state.user` is what a million Koa/Express developers will type first.
 2. **Should `around` middleware be in v1?** It is the only per-request closure allocation in the design. Alternative: express transactions/timing purely as hook pairs with a shared slot. That is uglier for the user and pushes complexity into every plugin that needs wrapping semantics.
 3. **How far should the type-only client go?** Streaming responses and SSE do not map cleanly to a request/response client type. Options: exclude them from the client surface; model them as `AsyncIterable`; or provide a separate realtime client.
    - Related, and newly concrete: the generator now publishes `OrderLine` and `OrderLineInput` when a named type differs between the request and response directions (§29.3). That is honest, and it is also two names for what a user thinks of as one type. Options: keep it; unify by closing request schemas too (wrong — the validator, not Zen, decides what a request accepts); or emit one component plus a documented convention that generated clients treat `*Input` as the constructor type.

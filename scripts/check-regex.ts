@@ -35,8 +35,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
  * is outside this check.
  */
 const DYNAMIC: Readonly<Record<string, string>> = {
-  'packages/middleware/src/cors.ts:374':
-    "the application's own `origin: RegExp`, re-created without the `g` flag; its pattern is the user's choice (§32.1)",
+  'packages/middleware/src/cors.ts:379':
+    "the application's own `origin: RegExp`, copied once at boot without the `g` flag; its pattern is the user's choice (§32.1)",
 }
 
 interface Found {

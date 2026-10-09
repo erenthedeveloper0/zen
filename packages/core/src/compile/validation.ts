@@ -201,9 +201,11 @@ function isThenable(value: unknown): value is Promise<StandardResult<unknown>> {
 }
 
 /**
- * §11.2 — normalisation is what makes I7 true. A Zod app and a Valibot app
- * emit byte-identical error envelopes, so clients can switch on `issues[].code`
- * across the entire ecosystem rather than per-library.
+ * §11.2 — normalisation is what gives I7 its shape: a Zod app and a Valibot
+ * app emit envelopes with the same fields in the same places. Not yet the same
+ * `code`: that is inferred from the library's message text (`inferCode`), so a
+ * client should not switch on `issues[].code` across libraries until
+ * per-vendor issue mappers exist (§28.8).
  */
 export function normaliseIssues(issues: ReadonlyArray<StandardIssue>, source?: string): Issue[] {
   const out: Issue[] = []

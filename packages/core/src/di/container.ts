@@ -5,6 +5,7 @@ import { ZenError } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { allocateCell } from '../registry/slot-registry.ts'
 import { intrinsicDisposer, trackDisposal, type DisposalCarrier } from '../primitives/disposal.ts'
+import { closest } from '../primitives/nearest.ts'
 
 /**
  * Declare a typed service identifier.
@@ -290,7 +291,6 @@ export class ZenContainer implements Container {
     }
   }
 
-  /** Reverse dependency order — dependents tear down before their dependencies. */
   /**
    * Dispose singletons in reverse creation order — §4.5 step 5.
    *
@@ -319,10 +319,16 @@ export class ZenContainer implements Container {
     }
   }
 
+  /**
+   * §15.4's "the nearest similarly-named registered token" — through
+   * `closest`, the one definition of "close" every other suggestion in the
+   * framework uses. This looked for the name's first four letters anywhere in
+   * another, so a typo in those four (`bdtoken`) was told nothing, and a
+   * missing `cache` was offered whichever token first contained `cach`.
+   */
   #suggest(name: string): string | undefined {
-    const candidates = [...this.#entries.keys()].map((t) => t.name)
-    const close = candidates.find((c) => c.toLowerCase().includes(name.toLowerCase().slice(0, 4)))
-    return close === undefined ? undefined : `Did you mean "${close}"?`
+    const close = closest(name, [...this.#entries.keys()].map((t) => t.name))
+    return close === null ? undefined : `Did you mean "${close}"?`
   }
 }
 

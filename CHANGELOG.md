@@ -4,7 +4,7 @@ All notable changes to Zen. The packages are versioned together; every entry
 applies to all six. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Zen is an alpha: until `1.0`, any prerelease may change the API.
 
-## [0.1.0-alpha.4] — 2026-10-05
+## [0.1.0-alpha.4] — 2026-10-08
 
 Nothing silent. An audit of the alpha.3 build wrote fourteen probes, each a
 sentence the docs said in the present tense, and every one found the code
@@ -17,6 +17,13 @@ every "Status: built" block in the architecture carries an id that
 `scripts/claims.ts` maps to a probe against the built packages, in CI — so a
 sentence cannot claim what the code does not do, and a gap that closes fails
 the build until the docs stop calling it missing.
+
+This version was first tagged on 2026-10-05, and its release run stopped
+before anything was published: on Windows under Node 22, a test in
+`examples/deadlines` lost a race between two timers due in the same
+millisecond (**Repository**, below). Nothing reached npm under that tag. It was
+moved to the commit that keeps those timers 30 ms apart, together with the
+fixes a second look at the release found, below.
 
 ### Added
 
@@ -130,6 +137,14 @@ the build until the docs stop calling it missing.
   nothing. A hook written against the wrong signature is now a type error.
 - `RouteSpec` has `use`, `CollectionOptions` has `when`, and `BaseContext` has
   `ips` and `protocol` — a hand-written context double needs the two getters.
+- **A request id costs ~75 ns, where it cost ~460.** `generateRequestId`, which
+  every request calls, encoded all 26 characters every time; requests that
+  share a millisecond move only the last digit of the count between them, so
+  the other 25 are kept and re-encoded only when the millisecond moves or the
+  count carries. Every id is byte-identical to the one the full encoding
+  writes — checked differentially over 400,000 ids, and held by a test and a
+  control. A minimal served request through `inject()` went from ~1.7 µs to
+  ~1.3 µs, on one machine.
 
 ### Fixed
 
@@ -157,6 +172,17 @@ the build until the docs stop calling it missing.
   itself, which is why no suite had seen it. An in-process request's deadline
   now holds the loop open, as a health probe's does; an adapter's requests are
   unchanged.
+- **`cors()` compiled an `origin: RegExp` again on every request** — a
+  `new RegExp` per call, to drop its `g` flag, in the hook every request with
+  an `Origin` runs, where I1 says no regex is compiled at request time. It is
+  copied once, at boot: the match measures ~25 ns against ~128 ns before
+  (paired arms, one machine), and allocates nothing. A sticky (`y`) pattern
+  keeps its anchoring: `lastIndex` is put back to 0 before each test rather
+  than the flag being dropped.
+- A missing service's "did you mean" (`ZEN_DI_MISSING`) looked for the name's
+  first four letters anywhere in another token's, so a typo in those four got
+  no suggestion and an unrelated token could be offered. It uses `closest()`,
+  the one definition of "close" every other suggestion uses.
 
 ### Documentation
 
@@ -181,6 +207,17 @@ the build until the docs stop calling it missing.
   −8.1% with spreads under 3% — above the noise for the first time — so it is
   not deprecated; §28.2 and Annex D question 5 record both results, and the CI
   matrix decides.
+- A second look before the release found sentences the first pass left: §5.2
+  still called the `params` check unbuilt in the block after the sentence
+  saying it was built; §7.4 said `ctx.state` exists; §13.2 and §28.8 named the
+  wrong code for a returned `Response` — it is `ZEN_INTERNAL`, because it has a
+  `status`, `headers` and `body` and is taken for a `Reply`; §18.3's C1 and
+  §22.2's `source` still described a generated matcher; §21.8 said the OpenAPI
+  client generator exists; §4.2 stage 0 said the Node server reads
+  `config.http` and sets `maxRequestsPerSocket`; §5.5 and the router's README
+  promised both routes' origins; and the published doc comments on
+  `ValidationError` and `normaliseIssues` still promised byte-identical
+  envelopes across schema libraries.
 
 ### Repository
 
@@ -199,8 +236,17 @@ the build until the docs stop calling it missing.
   `when` turned off, a route without `use` beside one with it, and the
   `writeOnly` check emitting nothing — and the costs this release put on the
   request path.
-- Thirty-seven negative controls, 126 in all; one control a refactor had made
+- Forty negative controls, 129 in all; one control a refactor had made
   stale is updated, and the harness runs a script as a control's suite.
+- `npm test` reports a failing test as a GitHub annotation
+  (`scripts/test-annotations.ts`), so a red run names the test on the commit
+  and the run's summary — the job log is readable only with repository access.
+- `examples/deadlines`: the test of an inbound budget sent `x-request-timeout:
+  150`, which left the 90 ms `steady` provider a slice of 90 ms less whatever
+  the request had spent. Its two timers came due in the same millisecond, and
+  which one ran first was decided by the loop clock ticking between them —
+  what failed the first release run. It sends 120 ms, keeping them 30 ms apart,
+  and the provider's granted budget is held to the same window as every other.
 
 ## [0.1.0-alpha.3] — 2026-10-03
 

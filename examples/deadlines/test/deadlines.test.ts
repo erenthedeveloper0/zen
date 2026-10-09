@@ -103,8 +103,9 @@ describe('slicing the budget (§4.4)', () => {
     assert.equal(slow.outcome, 'budget')
     // The provider is told about 340ms — 400 minus the 60ms egress reserve —
     // rather than the full request budget. This is the number that makes the
-    // difference between answering and timing out.
-    assert.ok(slow.grantedMs >= 330 && slow.grantedMs <= 345, `granted ${slow.grantedMs}ms`)
+    // difference between answering and timing out. Rounded, and read off a
+    // live clock like every budget here, so it is held to the same window.
+    assertBudget(slow.grantedMs, 400 - 60)
     assert.ok(slow.elapsedMs < 500, `it ran for ${slow.elapsedMs}ms; it should have been cut off`)
   })
 
@@ -173,18 +174,27 @@ describe('propagation from the caller (§4.4)', () => {
   test('a shorter inbound budget wins', async () => {
     const { app } = fixture()
 
-    // 150ms is under `steady`'s 90ms plus the 60ms reserve, so it drops too.
+    // 120ms inbound leaves `steady` (90ms) a 60ms slice after the 60ms
+    // reserve, so it drops — by 30ms, and `fast` (20ms) answers with 40ms to
+    // spare. This was 150, which left an 89.x ms slice against a 90ms
+    // provider. `callProvider` arms both timers back to back, and Node reads
+    // the loop clock afresh for each, so when the millisecond ticked between
+    // the two calls they came due together and the provider's ran first —
+    // which a loaded runner made likely, and which failed alpha.4's first
+    // release run on Windows. A fixture asserting which side of a line
+    // something lands on has to keep the line away from the edge.
     const body = (await app.inject('GET', '/quotes', {
-      headers: { 'x-request-timeout': '150' },
+      headers: { 'x-request-timeout': '120' },
     })).json<QuoteEnvelope>()
 
     assert.deepEqual([...body.missed].sort(), ['slow', 'steady'])
-    // 150 inbound − 60 reserve = 90, *minus whatever the request has already
+    // 120 inbound − 60 reserve = 60, *minus whatever the request has already
     // spent* — `budgetMs` is derived from `ctx.timeLeft`, which is a live clock
-    // reading and not a constant. Asserting 90 exactly passed on a warm machine
-    // and failed at 89 under load; a fixture meant to land in a window should
-    // say so and pin the arithmetic rather than pretend the clock stopped.
-    assertBudget(body.budgetMs, 150 - 60)
+    // reading and not a constant. Asserting the ideal exactly passed on a warm
+    // machine and failed a millisecond under it under load; a fixture meant to
+    // land in a window should say so and pin the arithmetic rather than
+    // pretend the clock stopped.
+    assertBudget(body.budgetMs, 120 - 60)
   })
 
   test('a longer inbound budget is ignored', async () => {
