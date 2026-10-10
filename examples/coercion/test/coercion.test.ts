@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { explainRoute } from '@erenthedeveloper0/zen'
 import type { ZenApp } from '@erenthedeveloper0/zen'
 import { makeApp, makeLegacyApp } from '../src/app.ts'
+import { z } from '../src/shared/zod.ts'
 import type { CatalogResult, OrderResult } from '../src/features/catalog/index.ts'
 
 /**
@@ -24,7 +25,7 @@ let app: ZenApp | null = null
 
 async function ready(): Promise<ZenApp> {
   if (app === null) {
-    app = makeApp({ quiet: true })
+    app = makeApp({ quiet: true, inspect: true })
     await app.ready()
   }
   return app
@@ -236,5 +237,50 @@ describe('§11.4 is a refactor of what people already write by hand', () => {
     }
 
     await legacy.close()
+  })
+})
+
+describe('issue codes come from Zod\'s own codes, in any language (§11.2)', () => {
+  type Issue = { readonly path: readonly unknown[]; readonly code: string; readonly message: string }
+
+  /** One failure of each kind, against the real Zod schemas this example ships. */
+  async function failures(): Promise<Record<string, Issue | undefined>> {
+    const instance = await ready()
+    const query = async (url: string) => (await instance.inject('GET', url)).json<{ errors: Issue[] }>().errors[0]
+    const order = async (body: unknown) => (await instance.inject('POST', '/catalog/00713/order', {
+      body,
+      headers: { 'content-type': 'application/json' },
+    })).json<{ errors: Issue[] }>().errors[0]
+    return {
+      tooSmall: await query('/catalog?page=0'),
+      tooBig: await query('/catalog?limit=500'),
+      wrongType: await query('/catalog?page=banana'),
+      notInEnum: await query('/catalog?sort=sideways'),
+      missing: await order({ giftWrap: true }),
+      stringlyTyped: await order({ quantity: '2' }),
+    }
+  }
+
+  const codesOf = (found: Record<string, Issue | undefined>) =>
+    Object.fromEntries(Object.entries(found).map(([kind, issue]) => [kind, issue?.code]))
+
+  test('each kind of failure has its code, whatever the message says', async () => {
+    assert.deepEqual(codesOf(await failures()), {
+      tooSmall: 'min', tooBig: 'max', wrongType: 'type', notInEnum: 'invalid', missing: 'required', stringlyTyped: 'type',
+    })
+  })
+
+  test('and the same codes when Zod speaks Turkish — only the messages change', async () => {
+    const english = await failures()
+    z.config(z.locales.tr())
+    try {
+      const turkish = await failures()
+      assert.deepEqual(codesOf(turkish), codesOf(english))
+      for (const kind of Object.keys(english)) {
+        assert.notEqual(turkish[kind]?.message, english[kind]?.message, `${kind}: the message was translated`)
+      }
+    } finally {
+      z.config(z.locales.en())
+    }
   })
 })

@@ -18,11 +18,13 @@ export function silentLogger(): Logger {
   return logger
 }
 
+/** `inspect: true` so the zero-cost checks can read `generatedSource()`. */
 export function makeApp<X = {}>(opts: Partial<ZenOptions> = {}): ZenApp<X> {
   return createApp<X>({
     router: new ZenRouter(),
     pathParser,
     logger: silentLogger(),
+    inspect: true,
     ...opts,
   })
 }

@@ -56,7 +56,7 @@ type App = ReturnType<typeof createApp>
 type Build = (app: App) => void
 
 function build(configure: Build = () => {}): App {
-  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent })
+  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, inspect: true })
   configure(app)
   app.get('/things', () => ({ ok: true, n: 1 }))
   app.post('/things', () => ({ created: true }))

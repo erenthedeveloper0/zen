@@ -7,10 +7,9 @@ import {
  * Request id — rfcs/0001 §19.4, §31.1.
  *
  * Zen already generates one: the dispatcher assigns `ctx.id` before the first
- * hook runs, so the RFC 9457 problem document and the framework's own error log
- * lines already carry a correlation key with no plugin at all. (`ctx.log` does
- * not yet: it is the application's logger, not bound to the request — §31.1,
- * §28.8 — so a handler adds `requestId: ctx.id` itself.) This adds the two
+ * hook runs, so the RFC 9457 problem document, the framework's own error log
+ * lines and every line written through `ctx.log` — bound to the request, §31.1
+ * — already carry a correlation key with no plugin at all. This adds the two
  * halves that need a decision rather than a default.
  *
  * ### Echoing it
@@ -43,11 +42,12 @@ import {
 /**
  * The one field this plugin writes.
  *
- * `ctx.id` is `readonly` on `BaseContext` and is a plain field on both twins,
- * assigned once by the dispatcher. Overwriting it is a same-type store on an
- * existing field, so it changes no hidden class and I2 is untouched (§7.6) —
- * but it is the only place in this package that writes to a context, and
- * naming the type is how that stays deliberate.
+ * `ctx.id` is `readonly` on `BaseContext` and an accessor on both twins,
+ * assigned by the dispatcher. Overwriting it stores the id in a field every
+ * context already has and drops the logger `ctx.log` bound to the old one, so
+ * every line written after it carries the adopted id; no field is added and I2
+ * is untouched (§7.6). It is still the only place in this package that writes
+ * to a context, and naming the type is how that stays deliberate.
  *
  * The alternative was a second id on a slot, and it is worse in the way that
  * matters: two ids means every log line, every problem document and every

@@ -4,7 +4,7 @@ import { CodeGen, type CodeUnit } from './codegen.ts'
 import type { Deadline } from '../runtime/deadline.ts'
 import {
   PlainContext, ReplyStage, UNSET, buildHeaders, slotEmpty, forwardedClient, forwardedChain, forwardedProtocol,
-  requestUrl, type ContextEnv,
+  requestUrl, bindLog, type ContextEnv,
 } from '../runtime/context.ts'
 import { pathnameOf } from '../primitives/path.ts'
 import { parseQuery } from '../runtime/query.ts'
@@ -71,6 +71,7 @@ export function compileContext(opts: CompileContextOptions): ContextClass {
       forwardedChain,
       forwardedProtocol,
       requestUrl,
+      bindLog,
       ReplyStage,
       jsonReply,
       textReply,
@@ -142,14 +143,18 @@ return class Ctx {
     // against the twin's declaration order, so a field added to one and not the
     // other fails CI rather than quietly costing throughput.
     this.$negotiated = null
-    this.id = ''
+    this.$id = ''
     this.startTime = 0
     this.signal = signal
     this.aborted = false
     this.timedOut = false
-    this.log = env.log
+    // §31.1 — bound to the request on first read; see bindLog.
+    this.$log = null
   }
 
+  get id() { return this.$id }
+  set id(value) { this.$id = value; this.$log = null }
+  get log() { const l = this.$log; return l !== null ? l : (this.$log = bindLog(this)) }
   get path() { const v = this.$path; return v !== UNSET ? v : (this.$path = pathnameOf(this.raw.url)) }
   get params() { return this.$params }
   get query() { const v = this.$query; return v !== UNSET ? v : (this.$query = parseQuery(this.raw.url, this.env.maxQueryParams)) }

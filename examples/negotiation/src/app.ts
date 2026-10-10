@@ -30,6 +30,8 @@ import { SalesService, reportRoutes } from './features/reports/index.ts'
 
 export interface AppOptions {
   readonly quiet?: boolean
+  /** Keep the compiled source after boot, for `generatedSource()` — `inspect.ts` and the tests read it. */
+  readonly inspect?: boolean
 }
 
 export function makeApp(options: AppOptions = {}) {
@@ -37,6 +39,7 @@ export function makeApp(options: AppOptions = {}) {
 
   const app = zen({
     ...(options.quiet === true ? { logger: quiet() } : {}),
+    inspect: options.inspect === true,
     // §19.2 — a public service should bound its requests. Unrelated to
     // negotiation, and here because an example that would be unsafe to copy is
     // worse than no example.

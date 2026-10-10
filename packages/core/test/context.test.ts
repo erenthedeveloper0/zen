@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import {
   compileContext, CodeGen, DEFAULT_CAPABILITIES, PlainContext, ZenContainer, SmallHeaderBag,
   parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply,
-  type RawRequest, type ContextEnv,
+  type RawRequest, type ContextEnv, type Logger,
 } from '@erenthedeveloper0/zen-core'
 import { makeApp, silentLogger, uniqueName } from './helpers.ts'
 
@@ -584,5 +584,84 @@ describe('a slot value that releases itself is released (§15.3)', () => {
     })
     await app.inject('GET', '/')
     assert.deepEqual(calls, ['explicit'])
+  })
+})
+
+describe('ctx.log is bound to the request (§7.2, §31.1)', () => {
+  /** A logger that records every child it makes, with the bindings it was made with. */
+  function recordingLogger() {
+    const children: Array<Record<string, unknown>> = []
+    const lines: Array<Record<string, unknown>> = []
+    const make = (bindings: Record<string, unknown>): Logger => {
+      const write = (obj: object | string) => { lines.push({ ...bindings, ...(typeof obj === 'string' ? { msg: obj } : obj) }) }
+      return {
+        level: 'trace',
+        trace: write, debug: write, info: write, warn: write, error: write, fatal: write,
+        child(more) {
+          const merged = { ...bindings, ...more }
+          children.push(more)
+          return make(merged)
+        },
+      } as Logger
+    }
+    return { logger: make({}), children, lines }
+  }
+
+  const twins = (() => {
+    const options = (evaluate: boolean) => ({
+      decorations: [],
+      slotCount: SLOT_COUNT,
+      codegen: new CodeGen({ caps: { ...DEFAULT_CAPABILITIES, eval: evaluate } }),
+    })
+    return [['compiled', compileContext(options(true))], ['interpreted', compileContext(options(false))]] as const
+  })()
+
+  const route = { id: 'GET /users/:id', name: undefined, method: 'GET', path: '/users/:id', meta: new Map() } as never
+
+  test('is a child carrying the request id and the route template, in both twins', () => {
+    for (const [name, Klass] of twins) {
+      const { logger, children, lines } = recordingLogger()
+      const ctx = new Klass(rawRequest('/users/7'), route, { id: '7' }, { ...makeEnv(), log: logger }, new AbortController().signal)
+      ;(ctx as { id: string }).id = 'req-1'
+      ctx.log.info({ event: 'loaded' })
+      assert.deepEqual(children, [{ requestId: 'req-1', route: '/users/:id' }], name)
+      assert.deepEqual(lines, [{ requestId: 'req-1', route: '/users/:id', event: 'loaded' }], name)
+    }
+  })
+
+  test('is made on the first read and kept, and not made at all for a request that never logs', () => {
+    for (const [name, Klass] of twins) {
+      const { logger, children } = recordingLogger()
+      const quiet = new Klass(rawRequest('/'), null, {}, { ...makeEnv(), log: logger }, new AbortController().signal)
+      void quiet.path
+      assert.equal(children.length, 0, `${name}: nothing logged, nothing made`)
+      const busy = new Klass(rawRequest('/'), null, {}, { ...makeEnv(), log: logger }, new AbortController().signal)
+      assert.equal(busy.log, busy.log, name)
+      assert.deepEqual(children, [{ requestId: '', route: null }], `${name}: one child, for the request with no route`)
+    }
+  })
+
+  test('is made again when ctx.id changes, so later lines carry the id that was adopted', () => {
+    for (const [name, Klass] of twins) {
+      const { logger, children } = recordingLogger()
+      const ctx = new Klass(rawRequest('/'), null, {}, { ...makeEnv(), log: logger }, new AbortController().signal)
+      ;(ctx as { id: string }).id = 'generated'
+      const first = ctx.log
+      ;(ctx as { id: string }).id = 'inbound-trace-id'
+      assert.notEqual(ctx.log, first, name)
+      assert.equal(ctx.id, 'inbound-trace-id', name)
+      assert.deepEqual(children.map((c) => c['requestId']), ['generated', 'inbound-trace-id'], name)
+    }
+  })
+
+  test('carries the id the dispatcher assigned, on a served request', async () => {
+    const { logger, lines } = recordingLogger()
+    const app = makeApp({ logger })
+    let id = ''
+    app.get('/users/:id', (ctx) => { id = ctx.id; ctx.log.info({ event: 'handled' }); return 'ok' })
+    await app.inject('GET', '/users/7')
+    const handled = lines.find((line) => line['event'] === 'handled')
+    assert.ok(id.length > 0)
+    assert.deepEqual(handled, { requestId: id, route: '/users/:id', event: 'handled' })
   })
 })

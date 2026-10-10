@@ -92,7 +92,7 @@ function pipeline(deadline: boolean, id: string): (ctx: unknown) => Reply | Prom
 }
 
 function sourceOf(spec: PipelineSpec): string {
-  const probe = new CodeGen({ caps: DEFAULT_CAPABILITIES })
+  const probe = new CodeGen({ caps: DEFAULT_CAPABILITIES, retain: true })
   compilePipeline(spec, probe)
   return probe.units[probe.units.length - 1]?.source ?? ''
 }
@@ -157,8 +157,8 @@ type Build = (app: ReturnType<typeof createApp>) => void
 function buildApp(configure: Build, timeout?: string) {
   const app = createApp(
     timeout === undefined
-      ? { router: new ZenRouter(), pathParser, logger: silent }
-      : { router: new ZenRouter(), pathParser, logger: silent, timeout },
+      ? { router: new ZenRouter(), pathParser, logger: silent, inspect: true }
+      : { router: new ZenRouter(), pathParser, logger: silent, timeout, inspect: true },
   )
   configure(app)
   return app

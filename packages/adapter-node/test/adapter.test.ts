@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { request } from 'node:http'
+import { connect } from 'node:net'
 import type { SseChannel } from '@erenthedeveloper0/zen-core'
 import { BootError, createApp, definePlugin, NoopLogger } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
@@ -657,5 +658,106 @@ describe('capabilities (§14.1, §14.2)', () => {
       assert.equal(error.diagnostics[0]?.code, 'ZEN_CAPABILITY_UNAVAILABLE')
       return true
     })
+  })
+})
+
+// ── §4.2 stage 2, §19.2: ingress guards ──────────────────────────────────────
+
+/** One request over a bare socket, so no client adds headers the test did not write. Resolves with the raw reply. */
+function exchange(url: string, text: string): Promise<string> {
+  const { port } = new URL(url)
+  return new Promise((resolve) => {
+    let reply = ''
+    const socket = connect(Number(port), '127.0.0.1', () => { socket.write(text) })
+    socket.on('data', (chunk) => { reply += chunk.toString('latin1') })
+    socket.on('error', () => resolve(reply))
+    socket.on('close', () => resolve(reply))
+    setTimeout(() => { socket.destroy(); resolve(reply) }, 2000)
+  })
+}
+
+const statusOf = (reply: string): string => reply.slice(0, reply.indexOf('\r\n'))
+const bodyOf = (reply: string): string => reply.slice(reply.indexOf('\r\n\r\n') + 4)
+const get = (target: string, headers = ''): string => `GET ${target} HTTP/1.1\r\nHost: x\r\n${headers}Connection: close\r\n\r\n`
+
+describe('ingress guards (§4.2 stage 2, §19.2)', () => {
+  it('answers a target past maxUrlLength with 414 before dispatch, and serves one at the limit', async () => {
+    let dispatched = 0
+    const server = await serve((app) => {
+      app.hook('onRequest', () => { dispatched++ })
+      app.get('/*rest', () => 'served')
+    }, { adapter: { maxUrlLength: 100 } })
+    try {
+      const atLimit = await exchange(server.url, get(`/${'a'.repeat(99)}`))
+      assert.equal(statusOf(atLimit), 'HTTP/1.1 200 OK')
+      assert.equal(dispatched, 1)
+
+      const over = await exchange(server.url, get(`/${'a'.repeat(100)}`))
+      assert.equal(statusOf(over), 'HTTP/1.1 414 URI Too Long')
+      assert.match(over, /\r\ncontent-type: application\/problem\+json\r\n/i)
+      assert.match(over, /\r\nconnection: close\r\n/i)
+      assert.deepEqual(JSON.parse(bodyOf(over)), {
+        type: 'https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#zen_uri_too_long',
+        title: 'URI Too Long',
+        status: 414,
+        code: 'ZEN_URI_TOO_LONG',
+      })
+      assert.equal(dispatched, 1, 'no hook ran for the refused request: nothing of the application did')
+
+      const head = await exchange(server.url, `HEAD /${'a'.repeat(100)} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`)
+      assert.equal(statusOf(head), 'HTTP/1.1 414 URI Too Long')
+      assert.equal(bodyOf(head), '', 'HEAD carries no body')
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('caps the request line and headers at 8 KB by default, as Node\'s 431 — and maxHeaderSize raises it', async () => {
+    const strict = await serve((app) => { app.get('/*rest', () => 'served') })
+    const roomy = await serve((app) => { app.get('/*rest', () => 'served') }, { adapter: { maxHeaderSize: 16_384 } })
+    try {
+      const cookie = `Cookie: session=${'c'.repeat(8300)}\r\n`
+      assert.equal(statusOf(await exchange(strict.url, get('/x', cookie))), 'HTTP/1.1 431 Request Header Fields Too Large')
+      assert.equal(statusOf(await exchange(roomy.url, get('/x', cookie))), 'HTTP/1.1 200 OK')
+      assert.equal(statusOf(await exchange(strict.url, get('/x', `Cookie: session=${'c'.repeat(7000)}\r\n`))), 'HTTP/1.1 200 OK')
+
+      // The target is part of what maxHeaderSize counts, so with both
+      // defaults a target past 8 KB is Node's 431 before it can be a 414…
+      assert.equal(statusOf(await exchange(strict.url, get(`/${'a'.repeat(9000)}`))), 'HTTP/1.1 431 Request Header Fields Too Large')
+      // …and once the headers are given room, maxUrlLength still holds at 8 KB.
+      assert.equal(statusOf(await exchange(roomy.url, get(`/${'a'.repeat(9000)}`))), 'HTTP/1.1 414 URI Too Long')
+      assert.equal(statusOf(await exchange(roomy.url, get(`/${'a'.repeat(8000)}`))), 'HTTP/1.1 200 OK')
+    } finally {
+      await strict.close()
+      await roomy.close()
+    }
+  })
+
+  it('closes a keep-alive connection after maxRequestsPerSocket requests', async () => {
+    const server = await serve((app) => { app.get('/:n', (ctx) => ctx.params.n) }, { adapter: { maxRequestsPerSocket: 2 } })
+    try {
+      // Pipelined, so all three ride one connection; the last asks to close,
+      // because Node answers it and leaves closing to the client.
+      const one = (n: number, last = false) => `GET /${n} HTTP/1.1\r\nHost: x\r\n${last ? 'Connection: close\r\n' : ''}\r\n`
+      const reply = await exchange(server.url, one(1) + one(2) + one(3, true))
+      const statuses = [...reply.matchAll(/HTTP\/1\.1 (\d{3})[^\r]*\r\n(?:[^\r]+\r\n)*?connection: ([a-z-]+)/gi)]
+        .map((m) => `${m[1]} ${(m[2] as string).toLowerCase()}`)
+      assert.deepEqual(statuses, ['200 keep-alive', '200 close', '503 close'])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('refuses a limit that is not a whole number, when the adapter is made', () => {
+    for (const options of [
+      { maxUrlLength: 0 }, { maxUrlLength: Number.NaN }, { maxUrlLength: 1.5 }, { maxHeaderSize: -1 },
+      { maxRequestsPerSocket: -1 }, { maxRequestsPerSocket: Infinity },
+    ]) {
+      assert.throws(() => nodeAdapter(options), (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'ZEN_CONFIG_INVALID', JSON.stringify(options))
+        return true
+      })
+    }
+    assert.doesNotThrow(() => nodeAdapter({ maxRequestsPerSocket: 0, maxUrlLength: 1, maxHeaderSize: 1024 }))
   })
 })

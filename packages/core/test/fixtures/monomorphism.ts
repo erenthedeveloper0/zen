@@ -55,6 +55,13 @@ void second.res.header('x-test', '1')
 // field would add a store to the constructor, and this file is the only thing
 // in the repo that would notice.
 void (second as unknown as { config: unknown }).config
+// §31.1 — `ctx.log` caches its bound child in `$log`, and assigning `ctx.id`
+// (the request-id plugin adopting an inbound id) stores through the accessor
+// into `$id` and drops that cache. Both are stores into fields every context
+// declares, so neither may change the map.
+void second.log
+;(second as unknown as { id: string }).id = 'adopted'
+void second.log
 
 const third = new Ctx(rawRequest('/c'), null, {}, env, signal)
 

@@ -2,6 +2,8 @@ import type { RouteRecord } from '../contracts/route.ts'
 import type { RequestPhase } from '../contracts/hook.ts'
 import type { ConfigSnapshot } from '../contracts/config.ts'
 import { describeField } from '../compile/coercion-plan.ts'
+import { describeSyncPath, NO_HOOKS } from '../compile/pipeline-compiler.ts'
+import { pipelinePlan } from '../compile/hook-plan.ts'
 
 /**
  * `explainRoute` — rfcs/0001 §8.5.
@@ -33,7 +35,26 @@ export function explainRoute(record: RouteRecord): string {
     lines.push(`  ${step.kind.padEnd(kindWidth)}${step.scope.padEnd(scopeWidth)}${step.name}`)
   }
 
+  // §8.4 — whether a request here can finish without a promise, and if not,
+  // which member makes it wait. Classified by the compiler's own rules from the
+  // same arrays it compiles, so it cannot describe a different pipeline.
+  lines.push('')
+  lines.push(`  ${'sync path'.padEnd(kindWidth)}${syncPath(record)}`)
+
   return lines.join('\n')
+}
+
+/** The inputs the pipeline compiler classifies, read off the record it compiles from. */
+function syncPath(record: RouteRecord): string {
+  const validates = (['params', 'query', 'headers', 'cookies', 'body'] as const).some((source) => record.schema[source] !== undefined)
+  return describeSyncPath({
+    steps: record.middleware.map((middleware) => ({ kind: middleware.kind, name: middleware.name, fn: middleware.fn })),
+    hooks: pipelinePlan(record.hooks, NO_HOOKS) ?? NO_HOOKS,
+    handler: record.handler as Function,
+    intake: record.schema.body !== undefined,
+    // Every source a route validates compiles into one validator call site.
+    validators: validates ? 1 : 0,
+  })
 }
 
 export interface ExplainedStep {

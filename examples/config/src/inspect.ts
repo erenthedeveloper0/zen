@@ -18,7 +18,7 @@ import { makeApp } from './app.ts'
  * producer that no amount of extra feature-writing would have. This one found
  * its own — see the README.
  */
-const app = makeApp({ quiet: true })
+const app = makeApp({ quiet: true, inspect: true })
 await app.ready()
 
 const snapshot = app.graph().config

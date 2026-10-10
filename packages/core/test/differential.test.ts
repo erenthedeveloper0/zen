@@ -2,7 +2,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   compilePipeline, simplePipeline, CodeGen, DEFAULT_CAPABILITIES, PlainContext, markSync,
-  jsonReply, NO_HOOKS, PIPELINE_PHASES,
+  jsonReply, NO_HOOKS, PIPELINE_PHASES, MAX_SPECULATION,
   type HookPlan, type PipelineSpec, type PipelineStep, type Reply, type RawRequest,
 } from '@erenthedeveloper0/zen-core'
 import type { Deadline } from '@erenthedeveloper0/zen-core'
@@ -470,7 +470,7 @@ describe('differential: deadlines in the compiled pipeline ≡ the twin', () => 
     })
 
     const probe = (s: PipelineSpec): string => {
-      const gen = new CodeGen({ caps: DEFAULT_CAPABILITIES })
+      const gen = new CodeGen({ caps: DEFAULT_CAPABILITIES, retain: true })
       compilePipeline(s, gen)
       return gen.units[gen.units.length - 1]?.source ?? ''
     }
@@ -481,11 +481,232 @@ describe('differential: deadlines in the compiled pipeline ≡ the twin', () => 
   })
 })
 
+/**
+ * Speculative sync — rfcs/0001 §8.4's `maybe` row, and §28.3's rule that the
+ * differential suite, not benchmark envy, decides whether it stays.
+ *
+ * A plain function is a speculation point: called synchronously, and waited
+ * for only if it returned a thenable. The members that matter are therefore the
+ * ones that sometimes do and sometimes do not — a cache that answers from
+ * memory or goes to the network, a validator that is synchronous until a
+ * refinement is async. So every member here is *flaky*: a plain function that
+ * returns a value or a promise of it, chosen at random on every call, from a
+ * seed both forms share, in every position a speculation point can stand —
+ * hooks of every phase, phase middleware, validators, the handler, `after`
+ * middleware and both transform phases.
+ */
+describe('differential: speculative sync (§8.4)', () => {
+  interface Flaky {
+    readonly random: () => number
+    promised: number
+    returned: number
+  }
+
+  /** A value now or a promise of it later — decided per call, from the shared seed. */
+  const flaky = <T>(state: Flaky, value: () => T): T | Promise<T> => {
+    if (state.random() < 0.5) {
+      state.returned++
+      return value()
+    }
+    state.promised++
+    return Promise.resolve().then(value)
+  }
+
+  type FlakyStep = 'flaky-pass' | 'flaky-halt' | 'flaky-throw' | 'plain-pass' | 'plain-halt' | 'sync-pass' | 'around' | 'flaky-after'
+  const FLAKY_STEPS: readonly FlakyStep[] = ['flaky-pass', 'flaky-halt', 'flaky-throw', 'plain-pass', 'plain-halt', 'sync-pass', 'around', 'flaky-after']
+
+  function flakyStep(kind: FlakyStep, id: number, log: string[], state: Flaky): PipelineStep {
+    switch (kind) {
+      case 'flaky-pass':
+        return { kind: 'phase', name: `fp${id}`, fn: () => flaky(state, () => { log.push(`fp${id}`) }) }
+      case 'flaky-halt':
+        return { kind: 'phase', name: `fh${id}`, fn: () => flaky(state, () => { log.push(`fh${id}`); return jsonReply({ halted: id }, { status: 418 }) }) }
+      case 'flaky-throw':
+        return {
+          kind: 'phase',
+          name: `ft${id}`,
+          fn: () => flaky(state, () => { log.push(`ft${id}`); if (state.random() < 0.3) throw new Error(`step ${id} exploded`) }),
+        }
+      case 'plain-pass':
+        return { kind: 'phase', name: `pp${id}`, fn: () => { log.push(`pp${id}`) } }
+      case 'plain-halt':
+        return { kind: 'phase', name: `ph${id}`, fn: () => { log.push(`ph${id}`); return jsonReply({ halted: id }, { status: 418 }) } }
+      case 'sync-pass':
+        return { kind: 'phase', name: `s${id}`, fn: markSync(() => { log.push(`s${id}`) }) }
+      case 'around':
+        return {
+          kind: 'around',
+          name: `w${id}`,
+          fn: async (_ctx: unknown, next: () => Promise<Reply>) => {
+            log.push(`w${id}:in`)
+            const reply = await next()
+            log.push(`w${id}:out`)
+            return reply
+          },
+        }
+      case 'flaky-after':
+        return { kind: 'after', name: `fa${id}`, fn: (_ctx: unknown, reply: Reply) => flaky(state, () => { log.push(`fa${id}`); return reply }) }
+    }
+  }
+
+  /** A plan whose every hook is a flaky plain function, in the phases `chosen` names. */
+  function flakyPlan(chosen: ReadonlySet<string>, log: string[], state: Flaky): HookPlan {
+    const plan: Record<string, Function[]> = {}
+    for (const phase of PIPELINE_PHASES) {
+      if (!chosen.has(phase) || phase === 'onParse') {
+        plan[phase] = []
+        continue
+      }
+      const tag = `${phase}#0`
+      plan[phase] = [
+        TRANSFORM_PHASES.has(phase)
+          ? (_ctx: unknown, value: unknown) => flaky(state, () => { log.push(tag); return phase === 'onSend' ? value : { wrapped: value } })
+          : (..._args: unknown[]) => flaky(state, () => { log.push(tag); return state.random() < 0.15 ? jsonReply({ haltedAt: tag }, { status: 418 }) : undefined }),
+      ]
+    }
+    return plan as unknown as HookPlan
+  }
+
+  /** Whether the compiled form finished without returning a promise — the property this exists for. */
+  async function run(pipeline: (ctx: unknown) => Reply | Promise<Reply>, log: string[]): Promise<Observation & { synchronous: boolean }> {
+    let synchronous = false
+    try {
+      const pending = pipeline(fakeContext())
+      synchronous = typeof (pending as { then?: unknown }).then !== 'function'
+      const reply = await pending
+      return { status: reply.status, body: JSON.stringify(reply.body), order: [...log], error: null, stage: null, synchronous }
+    } catch (error) {
+      return { status: -1, body: '', order: [...log], error: error instanceof Error ? error.message : String(error), stage: null, synchronous }
+    }
+  }
+
+  test('400 random chains of plain functions that return a value or a promise, at random, on every call', async () => {
+    let synchronousCompletions = 0
+    let asynchronousCompletions = 0
+    let promised = 0
+    let returned = 0
+    let errors = 0
+
+    for (let seed = 1; seed <= 400; seed++) {
+      const shape = rng(seed * 48_271)
+      const kinds: FlakyStep[] = Array.from({ length: Math.floor(shape() * 5) }, () => FLAKY_STEPS[Math.floor(shape() * FLAKY_STEPS.length)] as FlakyStep)
+      const phases = new Set(PIPELINE_PHASES.filter(() => shape() < 0.3))
+      const validators = Math.floor(shape() * 3)
+      const handlerKind = shape()
+
+      const build = (log: string[], state: Flaky): PipelineSpec => ({
+        routeId: `flaky_${seed}`,
+        steps: kinds.map((k, i) => flakyStep(k, i, log, state)),
+        handler: handlerKind < 0.6
+          ? () => flaky(state, () => { log.push('handler'); return { seed } })
+          : handlerKind < 0.8
+            ? () => { log.push('handler'); return { seed } }
+            : () => flaky(state, () => { log.push('handler'); throw new Error('handler exploded') }),
+        intake: null,
+        validators: Array.from({ length: validators }, (_, i) => ({
+          source: `v${i}`,
+          run: () => flaky(state, () => { log.push(`v${i}`) }) as void | Promise<void>,
+        })),
+        serialize: null,
+        hooks: flakyPlan(phases, log, state),
+      })
+
+      const cState: Flaky = { random: rng(seed), promised: 0, returned: 0 }
+      const sState: Flaky = { random: rng(seed), promised: 0, returned: 0 }
+      const cLog: string[] = []
+      const sLog: string[] = []
+      const compiled = await run(compilePipeline(build(cLog, cState), codegen), cLog)
+      const simple = await run(simplePipeline(build(sLog, sState)), sLog)
+
+      const { synchronous, ...observed } = compiled
+      const { synchronous: _ignored, ...reference } = simple
+      assert.deepEqual(observed, reference, `divergence at seed ${seed}\n  steps: [${kinds.join(', ')}]\n  hooks: [${[...phases].join(', ')}]\n  validators: ${validators}`)
+
+      if (synchronous) synchronousCompletions++
+      else asynchronousCompletions++
+      if (compiled.error !== null) errors++
+      promised += cState.promised
+      returned += cState.returned
+    }
+
+    // Both ways a speculation point can go, often enough to be tested on
+    // purpose — and whole requests that finished synchronously, which is the
+    // reason the form exists. A fuzzer whose plain functions never returned a
+    // promise would compare two implementations on the one path that cannot be
+    // wrong.
+    assert.ok(synchronousCompletions >= 40, `expected requests that finished without a promise; got ${synchronousCompletions}`)
+    assert.ok(asynchronousCompletions >= 100, `expected requests a speculation sent async; got ${asynchronousCompletions}`)
+    assert.ok(promised >= 300 && returned >= 300, `speculation points went async ${promised}× and stayed sync ${returned}×`)
+    assert.ok(errors >= 20, `expected throws, synchronous and from a continuation; got ${errors}`)
+  })
+
+  test('a route of plain functions compiles to source with no async and no await, and allocates no promise', () => {
+    const gen = new CodeGen({ caps: DEFAULT_CAPABILITIES, retain: true })
+    const pipeline = compilePipeline({
+      routeId: 'plain',
+      steps: [
+        { kind: 'phase', name: 'authenticate', fn: () => {} },
+        { kind: 'after', name: 'audit', fn: (_ctx: unknown, reply: Reply) => reply },
+      ],
+      handler: () => ({ ok: true }),
+      intake: null,
+      validators: [{ source: 'query', run: () => {} }],
+      serialize: null,
+      hooks: { ...NO_HOOKS, onRequest: [() => {}], onSend: [() => {}] },
+    }, gen)
+
+    const source = gen.units[gen.units.length - 1]?.source ?? ''
+    assert.doesNotMatch(source, /\basync\b/)
+    assert.doesNotMatch(source, /\bawait\b/)
+    const result = pipeline(fakeContext())
+    assert.equal(typeof (result as { then?: unknown }).then, 'undefined')
+    assert.equal((result as Reply).status, 200)
+  })
+
+  test(`more than ${MAX_SPECULATION} speculation points keep the async form, and ${MAX_SPECULATION} do not`, () => {
+    const source = (points: number): string => {
+      const gen = new CodeGen({ caps: DEFAULT_CAPABILITIES, retain: true })
+      compilePipeline({
+        routeId: `points_${points}`,
+        // the handler is one point; the rest are phase middleware
+        steps: Array.from({ length: points - 1 }, (_, i) => ({ kind: 'phase' as const, name: `m${i}`, fn: () => {} })),
+        handler: () => ({ ok: true }),
+        intake: null,
+        validators: [],
+        serialize: null,
+      }, gen)
+      return gen.units[gen.units.length - 1]?.source ?? ''
+    }
+    assert.doesNotMatch(source(MAX_SPECULATION), /\basync\b/, `${MAX_SPECULATION} points are within the bound`)
+    assert.match(source(MAX_SPECULATION + 1), /\basync function seg0\b/, `${MAX_SPECULATION + 1} points must not deepen the stack further`)
+  })
+
+  test('next() is a promise when the downstream is speculative, and a synchronous throw arrives as a rejection', async () => {
+    let kind = ''
+    const pipeline = compilePipeline({
+      routeId: 'wrapped',
+      steps: [{
+        kind: 'around',
+        name: 'timing',
+        fn: (_ctx: unknown, next: () => Promise<Reply>) => {
+          const pending = next()
+          kind = typeof (pending as { then?: unknown }).then
+          return pending
+        },
+      }],
+      handler: () => { throw new Error('downstream') },
+      intake: null,
+      validators: [],
+      serialize: null,
+    }, codegen)
+    await assert.rejects(Promise.resolve().then(() => pipeline(fakeContext())), /downstream/)
+    assert.equal(kind, 'function')
+  })
+})
+
 describe('sync fast path', () => {
-  // In 0.1 the fast path requires `markSync`. A plain function classifies as
-  // `maybe` (it could still return a thenable), and `maybe` conservatively
-  // forces the async form. Inferring `maybe` into the sync path needs full CPS
-  // emission — deferred, and tracked as a known limitation of §8.4.
+  // `markSync` declares a function synchronous outright; a plain function is a
+  // speculation point (the suite above). An `async` function is neither.
   test('an all-sync chain compiles to a non-async function (§8.4)', () => {
     const pipeline = compilePipeline(
       {

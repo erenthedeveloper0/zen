@@ -41,8 +41,8 @@ export {
 export { CodeGen, CodeGenError, type CodeUnit, type CodeGenOptions } from './compile/codegen.ts'
 export { compileContext, type ContextClass, type Decoration } from './compile/context-compiler.ts'
 export {
-  compilePipeline, simplePipeline, classifySync, markSync, NO_HOOKS,
-  type CompiledPipeline, type PipelineSpec, type PipelineStep, type SyncClass, type ValidatorStep,
+  compilePipeline, simplePipeline, classifySync, markSync, describeSyncPath, NO_HOOKS, MAX_SPECULATION,
+  type CompiledPipeline, type PipelineSpec, type PipelineStep, type SyncClass, type SyncPathInput, type ValidatorStep,
 } from './compile/pipeline-compiler.ts'
 export {
   resolveHooks, routeHookRecords, pipelinePlan, functionsFor, diagnoseUnavailable, diagnoseUnknown,
@@ -54,7 +54,8 @@ export {
   type TimeoutSource, type TimeoutResolution,
 } from './compile/deadline-plan.ts'
 export {
-  compileValidator, combineValidators, normaliseIssues, type ValidationSource,
+  compileValidator, combineValidators, normaliseIssues, registerIssueMapper, issueMapperFor, __resetIssueMappers,
+  type ValidationSource, type IssueCode, type IssueMapper,
 } from './compile/validation.ts'
 
 // ── coercion (§11.4) ────────────────────────────────────────────────────────
@@ -133,7 +134,7 @@ export { ConsoleLogger, NoopLogger } from './runtime/logger.ts'
 export { prepareForWire, stripBodyIfNeeded } from './runtime/egress.ts'
 export {
   PlainContext, ReplyStage, SEALED_STAGE, UNSET, buildHeaders, slotEmpty, CONTEXT_MEMBERS,
-  forwardedClient, forwardedChain, forwardedProtocol, requestUrl,
+  forwardedClient, forwardedChain, forwardedProtocol, requestUrl, bindLog,
   type ContextEnv, type StageTarget,
 } from './runtime/context.ts'
 export {

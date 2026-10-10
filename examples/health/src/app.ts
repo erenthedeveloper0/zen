@@ -30,6 +30,8 @@ import { orderRoutes } from './features/orders/index.ts'
 
 export interface AppOptions {
   readonly quiet?: boolean
+  /** Keep the compiled source after boot, for `generatedSource()` — `inspect.ts` and the tests read it. */
+  readonly inspect?: boolean
   /** Tests set this to 0 so a suite does not sit through a real drain. */
   readonly drainDelay?: number
   readonly ttl?: string
@@ -45,6 +47,7 @@ export function makeApp(options: AppOptions = {}): HealthApp {
 
   const app = zen({
     ...(options.quiet === true ? { logger: quiet() } : {}),
+    inspect: options.inspect === true,
     // §4.5 — the drain delay is the load balancer's window to notice `/readyz`
     // has gone red. `app.close()` flips readiness *before* handing control to
     // the adapter, so this whole delay is spent unready and still answering,

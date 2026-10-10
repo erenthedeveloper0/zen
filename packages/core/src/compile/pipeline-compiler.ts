@@ -94,10 +94,15 @@ export const NO_HOOKS: HookPlan = Object.freeze({
  * no promise is allocated for the entire request.
  *
  * A plain function classifies as `maybe`, not `sync` — it could still return a
- * thenable, and guessing otherwise would be unsound. `maybe` therefore forces
- * the async form in 0.1; opting a genuinely synchronous middleware in is one
- * call to `markSync()`. Inferring `maybe` into the sync path needs full CPS
- * emission and is deferred.
+ * thenable, and guessing otherwise would be unsound. A `maybe` call site is a
+ * *speculation point*: the call is made synchronously, and only if it returns
+ * a thenable does the rest of the request wait for it (see {@link Chain}). So a
+ * route of plain functions that return values runs synchronously end to end,
+ * and one that returns a promise somewhere pays for that promise there. An
+ * `async` function always returns a promise, so a route holding one keeps the
+ * `async` form, as does a route with a body, whose intake is a read.
+ * `markSync()` still declares a function synchronous outright, which saves the
+ * thenable check at its call site.
  */
 export function classifySync(fn: Function): SyncClass {
   if ((fn as unknown as Record<symbol, unknown>)[SYNC_MARKER] === true) return 'sync'
@@ -108,6 +113,183 @@ export function classifySync(fn: Function): SyncClass {
 export function markSync<F extends Function>(fn: F): F {
   Object.defineProperty(fn, SYNC_MARKER, { value: true, enumerable: false })
   return fn
+}
+
+/**
+ * The most speculation points one chain of generated functions may hold —
+ * §8.4's bound on the synchronous stack.
+ *
+ * A request that passes a speculation point synchronously goes one call deeper,
+ * because the rest of the chain is the next function. Past this many, a chain
+ * keeps the `async` form, where each `await` returns to the event loop instead.
+ * Real chains hold a handful; the bound is for the pathological ones.
+ */
+export const MAX_SPECULATION = 32
+
+/** What a run of call sites compiles to: a plain function, a chain of continuations, or an `async` function. */
+type Shape = 'sync' | 'speculative' | 'async'
+
+function shapeOf(classes: readonly SyncClass[], alwaysAsync: boolean): Shape {
+  if (alwaysAsync || classes.includes('async')) return 'async'
+  let maybe = 0
+  for (const cls of classes) if (cls === 'maybe') maybe++
+  if (maybe === 0) return 'sync'
+  return maybe > MAX_SPECULATION ? 'async' : 'speculative'
+}
+
+/** What decides a route's sync path — the inputs the compiler classifies, and nothing else. */
+export interface SyncPathInput {
+  readonly steps: readonly PipelineStep[]
+  readonly hooks: HookPlan
+  readonly handler: Function
+  /** The route declares a body: intake is a read, so the request always waits once. */
+  readonly intake: boolean
+  /** Validator call sites — plain functions the compiler built, one per route that validates anything. */
+  readonly validators: number
+}
+
+/**
+ * Whether a request on this route can finish without a promise, and if not,
+ * what makes it wait — the line `explainRoute` prints (§8.4, the sync-path
+ * advisor).
+ *
+ * Classified by the rules {@link compilePipeline} emits from, over the same
+ * inputs, so the line cannot describe a pipeline other than the one that runs.
+ * It describes the compiled pipeline: `pipeline: 'simple'` and `caps.eval ===
+ * false` run the interpreted twin, which is always asynchronous.
+ */
+export function describeSyncPath(input: SyncPathInput): string {
+  const afters = input.steps.filter((s) => s.kind === 'after')
+  const flow = input.steps.filter((s) => s.kind !== 'after')
+  const waits: string[] = []
+  let synchronous = 0
+  // The bound applies per chain, as the compiler applies it: the epilogue is
+  // one chain and the segment the handler runs in is another.
+  const maybes = { epilogue: 0, segment: 0 }
+  const count = (cls: SyncClass, label: string, chain: 'epilogue' | 'segment'): void => {
+    if (cls === 'async') waits.push(`${label} (async function)`)
+    else if (cls === 'maybe') maybes[chain]++
+    else synchronous++
+  }
+
+  for (const step of afters) count(classifySync(step.fn), `after ${step.name}`, 'epilogue')
+  input.hooks.onSerialize.forEach((hook, i) => count(classifySync(hook), `onSerialize[${i}]`, 'epilogue'))
+  input.hooks.onSend.forEach((hook, i) => count(classifySync(hook), `onSend[${i}]`, 'epilogue'))
+
+  for (const phase of ['onRequest', 'onRoute', 'preValidation', 'postValidation', 'preHandler', 'postHandler'] as const) {
+    input.hooks[phase].forEach((hook, i) => count(classifySync(hook), `${phase}[${i}]`, 'segment'))
+  }
+  const arounds = flow.filter((s) => s.kind === 'around').map((s) => `around ${s.name}`)
+  for (const step of flow) if (step.kind !== 'around') count(classifySync(step.fn), step.name, 'segment')
+  maybes.segment += input.validators
+  count(classifySync(input.handler), 'the handler', 'segment')
+
+  if (input.intake) waits.unshift('the body is read')
+  // `next()` is a promise: a route that wraps never finishes without one.
+  waits.push(...arounds)
+  for (const chain of ['segment', 'epilogue'] as const) {
+    if (maybes[chain] > MAX_SPECULATION) {
+      waits.push(`${maybes[chain]} plain functions in the ${chain === 'segment' ? 'request' : 'epilogue'}, past the ${MAX_SPECULATION} one synchronous chain may hold`)
+    }
+  }
+
+  if (waits.length > 0) return `always async — ${waits.join(', ')}`
+  const speculative = maybes.segment + maybes.epilogue
+  if (speculative === 0) return 'synchronous — every call is marked synchronous; no promise is allocated'
+  return `no promise unless a call returns one — ${speculative} ${speculative === 1 ? 'call' : 'calls'} speculated` +
+    (synchronous > 0 ? `, ${synchronous} marked synchronous` : '')
+}
+
+/** The thenable test the compiler has always emitted for a value a call returned. */
+const thenable = (name: string): string =>
+  `${name} !== null && typeof ${name} === 'object' && typeof ${name}.then === 'function'`
+
+/**
+ * Generated functions that continue one another — the speculative form of
+ * rfcs/0001 §8.4, whose table specifies it as `r = mw(ctx); if (isThenable(r))
+ * return r.then(k)`.
+ *
+ * A speculation point ends the function it is in. If the call returned a
+ * thenable, the rest runs once it settles — adopted through `Promise.resolve`,
+ * exactly as `await` adopts it, so a foreign thenable is treated the way it
+ * always was. Any other value is handed to the rest directly. The rest is the
+ * next function, written once, so the code grows with the number of call sites
+ * rather than doubling at each one — and a request whose calls all return
+ * values runs synchronously from start to finish without allocating a promise.
+ *
+ * Three things hold by construction, and the differential suite holds them
+ * against `simplePipeline`:
+ *
+ *   - **A throw stays where it was.** A synchronous throw propagates
+ *     synchronously, and the dispatcher already calls the pipeline inside its
+ *     `try`; a rejection propagates through the returned promise.
+ *   - **Nothing moves.** Stage marks, deadline checks and the epilogue sit
+ *     exactly where the `async` form puts them; a continuation begins where an
+ *     `await` would have resumed.
+ *   - **The stack is bounded**, by {@link MAX_SPECULATION}.
+ */
+class Chain {
+  readonly #out: string[]
+  readonly #counter: { n: number }
+  readonly #prelude: string
+  #head: string
+  #lines: string[] = []
+
+  /**
+   * `out` receives each finished function; `counter` numbers continuations
+   * across the whole unit, so their names cannot collide; `prelude` opens every
+   * function of the chain (`let r`, for the code that assigns it).
+   */
+  constructor(out: string[], counter: { n: number }, head: string, prelude: string) {
+    this.#out = out
+    this.#counter = counter
+    this.#head = head
+    this.#prelude = prelude
+  }
+
+  /** One line of the current function. `note()` text is '' outside readable mode, and ends in a newline inside it. */
+  line(text: string): void {
+    if (text === '') return
+    this.#lines.push(text.endsWith('\n') ? text.slice(0, -1) : text)
+  }
+
+  /** The name of a continuation that has not been started yet — for a jump forward. */
+  label(): string {
+    return `k${++this.#counter.n}`
+  }
+
+  /**
+   * A speculation point: evaluate `call` into `name`, and continue in a new
+   * function whose parameters are `ctx`, then `carry` — what the rest still
+   * reads — then, unless `result` is `null`, the value under the name `result`.
+   */
+  speculate(call: string, name: string, test: string, carry: readonly string[], result: string | null): void {
+    const next = this.label()
+    const passed = result === null ? [] : [name]
+    this.#lines.push(`  const ${name} = ${call}`)
+    this.#lines.push(
+      `  if (${test}) return Promise.resolve(${name}).then((${result === null ? '' : 'v'}) => ` +
+      `${next}(${['ctx', ...carry, ...(result === null ? [] : ['v'])].join(', ')}))`,
+    )
+    this.#lines.push(`  return ${next}(${['ctx', ...carry, ...passed].join(', ')})`)
+    this.#begin(`${next}(${['ctx', ...carry, ...(result === null ? [] : [result])].join(', ')})`)
+  }
+
+  /** Continue, unconditionally, in the function `label` names — a jump forward over a block. */
+  goto(label: string, carry: readonly string[]): void {
+    this.#lines.push(`  return ${label}(${['ctx', ...carry].join(', ')})`)
+    this.#begin(`${label}(${['ctx', ...carry].join(', ')})`)
+  }
+
+  end(): void {
+    this.#out.push(`function ${this.#head} {\n${this.#prelude}${this.#lines.join('\n')}\n}`)
+  }
+
+  #begin(head: string): void {
+    this.end()
+    this.#head = head
+    this.#lines = []
+  }
 }
 
 interface Deps {
@@ -287,9 +469,26 @@ function generate(spec: PipelineSpec, readable: boolean): string {
     hooks.onSerialize.length > 0 ||
     hooks.onSend.length > 0
 
+  // Continuations are numbered across the whole unit: every function in it
+  // shares one scope.
+  const counter = { n: 0 }
+
+  // §8.4 — a speculative epilogue is a chain of continuations, and returns a
+  // promise only when one of its members did; any other epilogue is emitted in
+  // the form it always had. `epilogueAsync` means "`finish` is an `async`
+  // function", which every segment then inherits, as it always did.
+  const epilogueShape = shapeOf([
+    ...afters.map(({ step }) => classifySync(step.fn)),
+    ...hooks.onSerialize.map((hook) => classifySync(hook)),
+    ...hooks.onSend.map((hook) => classifySync(hook)),
+  ], false)
+
   let epilogueAsync = afters.some(({ step }) => classifySync(step.fn) !== 'sync')
 
-  if (hasEpilogue) {
+  if (hasEpilogue && epilogueShape === 'speculative') {
+    epilogueAsync = false
+    emitSpeculativeEpilogue()
+  } else if (hasEpilogue) {
     const lines: string[] = []
 
     for (const { step, index } of afters) {
@@ -362,6 +561,8 @@ function generate(spec: PipelineSpec, readable: boolean): string {
 
   /** Emit the segment starting at `from`; returns its name and whether it is async. */
   function emitSegment(from: number): { name: string; isAsync: boolean } {
+    if (tailShape(from) === 'speculative') return emitSpeculativeSegment(from)
+
     const name = `seg${segmentCount++}`
     const lines: string[] = []
     let needsAsync = epilogueAsync
@@ -487,6 +688,179 @@ function generate(spec: PipelineSpec, readable: boolean): string {
 
     decls.push(buildFn(name, `  let r\n${lines.join('\n')}`, needsAsync))
     return { name, isAsync: needsAsync }
+  }
+
+  /**
+   * §8.4 — what the segment starting at `from` compiles to, when it is the one
+   * the handler runs in. `null` when an `around` comes first: that segment is
+   * `async` whatever it holds, as it always has been, because `next()` is a
+   * promise and the wrapping already allocates one per request.
+   */
+  function tailShape(from: number): Shape | null {
+    const classes: SyncClass[] = []
+    if (from === 0) {
+      for (const hook of hooks.onRequest) classes.push(classifySync(hook))
+      for (const hook of hooks.onRoute) classes.push(classifySync(hook))
+    }
+    for (let f = from; f < flow.length; f++) {
+      const { step } = flow[f] as { step: PipelineStep; index: number }
+      if (step.kind === 'around') return null
+      classes.push(classifySync(step.fn))
+    }
+    for (const phase of ['preValidation', 'postValidation', 'preHandler', 'postHandler'] as const) {
+      for (const hook of hooks[phase]) classes.push(classifySync(hook))
+    }
+    for (const validator of spec.validators) classes.push(classifySync(validator.run))
+    classes.push(classifySync(spec.handler))
+    // A body is a read, and an `async` epilogue is `await`ed by every segment:
+    // either one means the request waits, so the segment keeps its `async` form.
+    return shapeOf(classes, spec.intake !== null || epilogueAsync)
+  }
+
+  /**
+   * The segment the handler runs in, as a chain of continuations — §8.4.
+   *
+   * The same stages as `emitSegment`, in the same order, with every `maybe`
+   * call site a speculation point. It is reached only when nothing in the
+   * segment is certain to wait — no `async` member, no body to read, no `async`
+   * epilogue — so a request whose plain functions all return values runs it
+   * from end to end without allocating a promise.
+   */
+  function emitSpeculativeSegment(from: number): { name: string; isAsync: boolean } {
+    const name = `seg${segmentCount++}`
+    const fns: string[] = []
+    const chain = new Chain(fns, counter, `${name}(ctx)`, '  let r\n')
+    const emitted = (emit: (out: string[]) => void): void => {
+      const out: string[] = []
+      emit(out)
+      for (const line of out) chain.line(line)
+    }
+
+    /** A guard hook or a phase step: a value that is not `undefined` answers the request here. */
+    const guard = (call: string, cls: SyncClass, label: string, carry: readonly string[]): void => {
+      chain.line(note(`${label} [${cls}]`))
+      if (cls === 'sync') {
+        chain.line(`  r = ${call}; if (r !== undefined) ${finishWith('d.finalize(r, true)')}`)
+        return
+      }
+      const value = `s${counter.n + 1}`
+      chain.speculate(call, value, thenable(value), carry, value)
+      chain.line(`  if (${value} !== undefined) ${finishWith(`d.finalize(${value}, true)`)}`)
+    }
+    const guards = (phase: PipelinePhase, args: string, carry: readonly string[]): void => {
+      hooks[phase].forEach((hook, i) => guard(`d.hooks.${phase}[${i}](ctx${args})`, classifySync(hook), `${phase}[${i}]`, carry))
+    }
+
+    if (from === 0) {
+      guards('onRequest', '', [])
+      guards('onRoute', ', ctx.route', [])
+      if (negotiates) {
+        chain.line(note('negotiate: Accept → representation, or 406'))
+        chain.line('  d.negotiate(ctx)')
+      }
+    }
+
+    for (let f = from; f < flow.length; f++) {
+      const { step, index } = flow[f] as { step: PipelineStep; index: number }
+      guard(`d.steps[${index}](ctx)`, classifySync(step.fn), `phase: ${step.name}`, [])
+    }
+
+    emitted((out) => emitBoundary('validate', out))
+    guards('preValidation', '', [])
+    spec.validators.forEach((validator, v) => {
+      const cls = classifySync(validator.run)
+      chain.line(note(`validate: ${validator.source} [${cls}]`))
+      if (cls === 'sync') {
+        chain.line(`  d.validators[${v}](ctx)`)
+        return
+      }
+      const value = `s${counter.n + 1}`
+      chain.speculate(`d.validators[${v}](ctx)`, value, `${value} !== undefined && typeof ${value}.then === 'function'`, [], null)
+    })
+    guards('postValidation', '', [])
+
+    emitted((out) => emitBoundary('handler', out))
+    guards('preHandler', '', [])
+    const handlerClass = classifySync(spec.handler)
+    chain.line(note(`handler [${handlerClass}]`))
+    if (handlerClass === 'sync') chain.line('  let out = d.handler(ctx)')
+    else chain.speculate('d.handler(ctx)', 'out', thenable('out'), [], 'out')
+
+    guards('postHandler', ', out', ['out'])
+
+    chain.line('  let reply = d.finalize(out, false)')
+    chain.line(`  ${finishWith('reply')}`)
+    chain.end()
+    decls.push(...fns)
+    return { name, isAsync: false }
+  }
+
+  /**
+   * The epilogue as a chain of continuations — §8.4, for an epilogue whose
+   * `after` middleware and transform hooks are plain functions. `finish` then
+   * returns a promise only when one of them returned one.
+   */
+  function emitSpeculativeEpilogue(): void {
+    const fns: string[] = []
+    const chain = new Chain(fns, counter, 'finish(ctx, reply)', '')
+
+    for (const { step, index } of afters) {
+      const cls = classifySync(step.fn)
+      const call = `d.steps[${index}](ctx, reply)`
+      chain.line(note(`after: ${step.name} [${cls}]`))
+      if (cls === 'sync') {
+        chain.line(`  reply = ${call}`)
+        continue
+      }
+      const value = `s${counter.n + 1}`
+      chain.speculate(call, value, thenable(value), [], 'reply')
+    }
+
+    if (hooks.onSerialize.length > 0) {
+      chain.line(note('onSerialize: payload transform (json/text bodies only)'))
+      // A stream, a file or a 204 has no payload to hand a hook, so the hooks
+      // are skipped — by a jump over them, since a continuation cannot re-enter
+      // the middle of a block.
+      const skip = chain.label()
+      chain.line('  let p = d.payloadOf(reply)')
+      chain.line(`  if (p === d.NO_PAYLOAD) return ${skip}(ctx, reply)`)
+      hooks.onSerialize.forEach((hook, i) => {
+        const call = `d.hooks.onSerialize[${i}](ctx, p)`
+        if (classifySync(hook) === 'sync') {
+          chain.line(`  { const t = ${call}; if (t !== undefined) p = t }`)
+          return
+        }
+        const value = `s${counter.n + 1}`
+        chain.speculate(call, value, thenable(value), ['reply', 'p'], value)
+        chain.line(`  if (${value} !== undefined) p = ${value}`)
+      })
+      chain.line('  reply = d.replacePayload(reply, p)')
+      chain.goto(skip, ['reply'])
+    }
+
+    hooks.onSend.forEach((hook, i) => {
+      const cls = classifySync(hook)
+      const call = `d.hooks.onSend[${i}](ctx, reply)`
+      chain.line(note(`onSend[${i}] [${cls}]`))
+      if (cls === 'sync') {
+        chain.line(`  { const sr = ${call}; if (sr !== undefined) reply = sr }`)
+        return
+      }
+      const value = `s${counter.n + 1}`
+      chain.speculate(call, value, thenable(value), ['reply'], value)
+      chain.line(`  if (${value} !== undefined) reply = ${value}`)
+    })
+
+    if (negotiates) {
+      chain.line(note('serialize: the negotiated representation, then the plain contracts'))
+      chain.line('  reply = d.attachNegotiated(ctx, reply, d.serialize)')
+    } else if (spec.serialize !== null) {
+      chain.line(note('serialize: compiled from the route response schema'))
+      chain.line('  reply = d.attachSerializer(ctx, reply, d.serialize)')
+    }
+    chain.line('  return reply')
+    chain.end()
+    decls.push(...fns)
   }
 
   const entry = emitSegment(0)

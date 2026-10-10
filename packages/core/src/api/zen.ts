@@ -87,6 +87,13 @@ export interface ZenOptions<C = unknown> {
   readonly pathParser: PathParser
   readonly adapter?: RuntimeAdapter | undefined
   readonly dev?: boolean | undefined
+  /**
+   * Keep the generated source of every compiled unit after boot, for
+   * `generatedSource()` — §3.4. On with `dev`. Off otherwise since
+   * `0.1.0-alpha.5`: every unit used to be held for the life of the process,
+   * which at 10,000 routes is megabytes of strings nothing reads after boot.
+   */
+  readonly inspect?: boolean | undefined
   readonly logger?: Logger | undefined
   readonly caps?: Capabilities | undefined
   /**
@@ -422,7 +429,11 @@ export class ZenApp<X = {}> {
     // the one thing §14.2 promises it will not. An explicit `caps` still wins,
     // for tests.
     this.#caps = opts.caps ?? opts.adapter?.caps ?? DEFAULT_CAPABILITIES
-    this.#codegen = new CodeGen({ caps: this.#caps, readable: opts.dev === true })
+    this.#codegen = new CodeGen({
+      caps: this.#caps,
+      readable: opts.dev === true,
+      retain: opts.dev === true || opts.inspect === true,
+    })
     this.#bodyOptions = { ...BODY_DEFAULTS, ...opts.body }
     this.#parsers = opts.parsers ?? DEFAULT_PARSERS
     const timeout = timeoutOptions(opts.timeout)
@@ -2375,8 +2386,28 @@ export class ZenApp<X = {}> {
     return this.#compiled.urls.build(name, params, query)
   }
 
-  /** Generated source for `zen inspect` / `zen build`. */
+  /**
+   * Generated source for `zen inspect` / `zen build` — kept only by an app
+   * built with `inspect: true` or `dev: true`.
+   *
+   * An app that kept none is refused rather than answered with an empty list,
+   * because an empty list is also what "nothing was compiled for this" looks
+   * like, and the checks that read this one — a stage that must emit no code,
+   * a route that must compile byte-identically — would pass by reading nothing.
+   */
   generatedSource(): readonly { name: string; source: string }[] {
+    if (!this.#codegen.retains) {
+      throw new ZenError(
+        Codes.INSPECT_DISABLED,
+        'generatedSource() was called on an app that keeps no generated source.',
+        {
+          status: 500,
+          expose: false,
+          hint: 'Build the app with zen({ inspect: true }) — or dev: true — where the source is wanted.',
+          consequence: 'Production apps keep none since 0.1.0-alpha.5: holding every unit for the life of the process was megabytes of strings at 10,000 routes.',
+        },
+      )
+    }
     return this.#codegen.units.map((u) => ({ name: u.name, source: u.source }))
   }
 }

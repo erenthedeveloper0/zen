@@ -24,10 +24,12 @@ export interface AppOptions {
   /** Simulated per-query cost, so the `handler` stage is not always 0.000 ms. */
   readonly workUnits?: number
   readonly quiet?: boolean
+  /** Keep the compiled source after boot, for `generatedSource()` — `inspect.ts` and the tests read it. */
+  readonly inspect?: boolean
 }
 
 export function makeApp(options: AppOptions = {}): ZenApp {
-  const app = zen(options.quiet === true ? { logger: quiet() } : {})
+  const app = zen({ ...(options.quiet === true ? { logger: quiet() } : {}), inspect: options.inspect === true })
 
   // ── global scope: everything, including 404s ───────────────────────────
   app.use(observability, {

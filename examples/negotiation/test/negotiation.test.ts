@@ -23,7 +23,7 @@ import { CSV, V1, V2 } from '../src/features/reports/index.ts'
 let app: ZenApp
 
 before(async () => {
-  app = makeApp({ quiet: true }).app
+  app = makeApp({ quiet: true, inspect: true }).app
   await app.ready()
 })
 

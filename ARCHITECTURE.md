@@ -387,6 +387,8 @@ Centralising this buys four things that scattered `new Function` calls cannot:
 3. **`zen build` gets one integration point.** Emitting artefacts ahead of time is a matter of calling `emit` instead of `materialise`.
 4. **Differential testing is systematic.** Every `materialise` call site has a `fallback`, so the fuzzer can run both and assert equivalence (§20.5).
 
+> **Status: `materialise` and the eval-free fallback are built; `unit()`, `emit`, source maps and `zen build` are not (§17).** Since `0.1.0-alpha.5` the units it compiled are kept after boot only where asked — `inspect: true`, or `dev: true` — for `app.generatedSource()`, which refuses with `ZEN_INSPECT_DISABLED` on an app that kept none rather than answer with an empty list a zero-cost check would read as success. Until then every unit's source and externals were held for the life of the process: measured on Node 24 at 10,000 routes with a validator, a middleware and a hook each, 54 MB of heap after boot with the units and 37 MB without. <!-- claim: unit-retention -->
+
 ### 3.5 Extension points inventory
 
 Per I6 and deliverable §20, every subsystem exposes a replacement seam. The complete list, so that "everything is extensible" is a checkable claim rather than a vibe:
@@ -439,7 +441,7 @@ Stages 5–8 are not distinct runtime steps; they are *regions of one generated 
 
 ### 4.2 Stage-by-stage
 
-**0 — Accept.** Owned entirely by the platform. The Node adapter sets `keepAliveTimeout`, `headersTimeout`, `requestTimeout` and `maxHeadersCount` from its own options, with hardened defaults (65 s, 20 s, 30 s, 64; §19.2). Reading them from `config.http` (§16), and `server.maxRequestsPerSocket`, are designed and not built. No Zen code runs.
+**0 — Accept.** Owned entirely by the platform. The Node adapter sets `keepAliveTimeout`, `headersTimeout`, `requestTimeout`, `maxHeadersCount`, `maxHeaderSize` and `maxRequestsPerSocket` from its own options, with hardened defaults (65 s, 20 s, 30 s, 64, 8 KB, and no per-socket limit; §19.2). Reading them from `config.http` (§16) is designed and not built. No Zen code runs.
 
 **1 — Parse.** `llhttp` produces `IncomingMessage`. Zen does not read `req.headers` here — accessing that getter forces Node to materialise the full lowercase header object. Deferring it is worth ~400ns and one object per request for handlers that only read two headers.
 
@@ -458,6 +460,8 @@ interface RawRequest {
 ```
 
 Ingress guards run here because they must run before any allocation proportional to attacker input: header count cap, header size cap, URL length cap, and the `requestTimeout` arm. A request rejected at ingress never allocates a `Ctx`.
+
+> **Status: built in the Node adapter, `0.1.0-alpha.5`.** The header caps are Node's own parser limits, which the adapter sets (`maxHeadersCount`, and `maxHeaderSize` at 8 KB): a request past them is answered 431 by Node, before any of Zen runs. The URL cap is one length comparison at the top of the adapter's request listener (`maxUrlLength`, 8 KB), answered 414 `ZEN_URI_TOO_LONG` with a fixed problem document and `Connection: close` — before dispatch, so no hook runs and no context exists. The request target counts toward `maxHeaderSize`, so with both defaults a target that long is a 431 first; `maxUrlLength` is the limit that still holds when the header allowance is raised for large cookies. <!-- claim: ingress-guards -->
 
 **3 — Match.** The compiled matcher is called with `(method, path)` where `path` is the URL up to the first `?`, found with `indexOf` rather than `new URL()` (the WHATWG URL constructor is ~2µs and allocates; we need a `slice`). A request target in the absolute form — `GET http://host/path`, which RFC 9112 §3.2.2 requires a server to accept and a client behind a forward proxy sends — is reduced to its path first; the origin form pays one character comparison for that (`benchmarks/request-path`).
 
@@ -1040,7 +1044,7 @@ interface Context<S extends RouteSchema = {}, X extends ContextExtensions = {}> 
   readonly id:        RequestId              // ULID or inherited trace id
   readonly startTime: number                 // monotonic
   readonly route:     RouteInfo | null       // id, name, path template, meta
-  readonly log:       Logger                 // designed pre-bound with request id + route — today the app's logger (§31.1)
+  readonly log:       Logger                 // bound to the request id + route template, on first read (§31.1)
 
   // ── Typed mutable channel ───────────────────────────────────────────────
   get<T>(slot: Slot<T>): T                   // throws ZEN_SLOT_EMPTY if unset & no default
@@ -1331,7 +1335,9 @@ Properties of the generated form:
 
 ### 8.4 The sync fast path
 
-> **Status: reachable through `markSync()` only.** The classifier and the `sync` and `async` rows below are built; the `maybe` row is not. A function that is neither `async` nor marked is emitted on the async path, so an ordinary handler never reaches the fully synchronous pipeline — which is why the listing in the README's "The idea" marks every function it shows. Emitting the `maybe` row speculatively, so plain functions reach the fast path, is designed and not built (§28.8). <!-- claim: sync-fast-path -->
+> **Status: built — all three rows, since `0.1.0-alpha.5`.** Until then the path was reachable through `markSync()` only: a function neither `async` nor marked classified `maybe`, every `maybe` call site was emitted on the async path, and so an ordinary handler never reached the synchronous pipeline. Each `maybe` call site is now a speculation point emitted as the table's row says — the call, a thenable test, and the rest of the segment as a continuation, run at once on a value and through `.then` on a promise. A route whose members are plain or marked, that reads no body and wraps nothing in `around`, compiles to a pipeline with no `async` and no `await`, which allocates no promise unless one of its calls returns one. A segment holding an `async` member is emitted as it was, byte for byte. `explainRoute()` prints which path a route got and what keeps it off the synchronous one (§8.5). <!-- claim: sync-fast-path -->
+>
+> What this does not reach is the dispatcher around the pipeline, which is an `async` function and awaits what the pipeline returns: a request still costs that promise and its tick. The measured effect is in `benchmarks/competitors`, before and after.
 
 Most phase middleware are synchronous (a header check, a flag read). Marking them `async` forces a promise allocation and a microtask tick per hop; `await`ing a non-promise costs an extra tick even in modern V8.
 
@@ -1361,7 +1367,7 @@ A pipeline whose members are *all* `sync` and whose handler is `sync` compiles t
 2. A differential fuzzer (§20.5) generates random pipelines (mixing sync/async/throwing/short-circuiting middleware) and asserts identical observable behaviour, including error ordering and hook invocation counts.
 3. A `pipeline: 'simple'` config switch lets any user opt out in one line if they ever suspect it.
 
-The `maybe` classification is also trampolined: a chain of ≥32 consecutive sync hops yields to avoid unbounded stack growth on pathological middleware counts.
+The `maybe` classification is also trampolined: a chain of ≥32 consecutive sync hops yields to avoid unbounded stack growth on pathological middleware counts. *Corrected as built:* the bound is applied at compile time instead. A speculative chain nests — each continuation is called by the one before it — so a chain holding more than 32 speculation points (`MAX_SPECULATION`) is emitted on the async path, whose calls follow one another in one function and cannot deepen the stack. A trampoline would have put a counter and a branch on every hop of every route, to serve routes with more than 32 plain functions in one chain.
 
 One interaction with `around` has to be stated, because it was a defect first. `Next` is typed `() => Promise<Reply>`, and the segment `next()` calls may be one this section compiled fully synchronous — which returns a bare `Reply`, and throws rather than rejecting. `next().then(…)` failed on exactly the optimised routes. So a synchronous segment is reached through an `async` wrapper: one promise, on a path that already allocates a closure, and nothing extra where the segment is async already. `benchmarks/request-path` asserts both halves against the emitted source.
 
@@ -1857,7 +1863,39 @@ interface Issue {                     // normalised, library-independent
 }
 ```
 
-The `Issue` normalisation is what gives I7 its shape: a Zod app and a Valibot app produce envelopes with the same fields, in the same places. It does not yet give them the same `code`. That is inferred from the message text — Zod 4's `"Too small: expected number to be >=1"` contains "expected" and reads as `type`, not `min` — so a localised library changes every code, and a client should not switch on `issues[].code` across libraries until per-vendor issue mappers exist (§28.8). <!-- gap: issue-codes -->
+The `Issue` normalisation is what gives I7 its shape: a Zod app and a Valibot app produce envelopes with the same fields, in the same places — and, since `0.1.0-alpha.5`, the same `code`, decided in this order: <!-- claim: issue-codes -->
+
+1. **`required`** when the request has nothing at the issue's path. Zen decides this from the input it validated, not from the library: Zod reports a missing key as `invalid_type`, and its Standard Schema result omits the input that would tell the two apart.
+2. **The vendor's mapper**, `registerIssueMapper(vendor, issue => code | undefined)` — the seam `registerSchemaConverter` is for schemas, and for the same reason: core imports no library, so the lines that know Zod's `too_small` live in the application. A Standard Schema issue *is* the library's own object, so a mapper reads its documented fields, which no locale rewrites.
+3. **The message**, for a vendor with no mapper — a guess from English text, which is all there was before: Zod 4's `"Too small: expected number to be >=1"` contains "expected" and reads as `type`. A client can switch on `issues[].code` across libraries where a mapper is registered, and not elsewhere.
+
+The three mappers, as an application writes them — each the length of a converter registration, beside it:
+
+```ts
+// Zod 4 — examples/*/src/shared/zod.ts, and run in CI, in English and in Turkish (examples/coercion)
+const ZOD_CODES = new Map<unknown, IssueCode>([
+  ['invalid_type', 'type'], ['too_small', 'min'], ['too_big', 'max'], ['invalid_format', 'format'], ['custom', 'custom'],
+])
+registerIssueMapper('zod', (issue) => ZOD_CODES.get(issue['code']) ?? 'invalid')
+
+// Valibot 1 — a schema issue is a wrong type unless the schema was a choice of values
+const VALIBOT = new Map<unknown, IssueCode>([
+  ['min_value', 'min'], ['min_length', 'min'], ['max_value', 'max'], ['max_length', 'max'],
+  ['email', 'format'], ['url', 'format'], ['uuid', 'format'], ['regex', 'format'], ['check', 'custom'],
+])
+const CHOICES = new Set<unknown>(['picklist', 'literal', 'enum', 'union', 'variant'])
+registerIssueMapper('valibot', (issue) =>
+  issue['kind'] === 'schema' && !CHOICES.has(issue['type']) ? 'type' : VALIBOT.get(issue['type']) ?? 'invalid')
+
+// ArkType 2
+const ARKTYPE = new Map<unknown, IssueCode>([
+  ['domain', 'type'], ['proto', 'type'], ['min', 'min'], ['minLength', 'min'], ['after', 'min'],
+  ['max', 'max'], ['maxLength', 'max'], ['before', 'max'], ['pattern', 'format'], ['predicate', 'custom'],
+])
+registerIssueMapper('arktype', (issue) => ARKTYPE.get(issue['code']) ?? 'invalid')
+```
+
+The Valibot and ArkType mappers were checked by hand against Valibot 1.5.0 and ArkType 2.2.7, through a Zen app, on one failure of each kind; the repository installs neither, so CI does not hold them. Anything a mapper does not name is `invalid`, never a guess from the message — that fallback is for a vendor with no mapper at all.
 
 ### 11.3 Strategy selection
 
@@ -3120,6 +3158,8 @@ And against Express, the numbers that matter to the audience being asked to swit
 
 If any target is missed at v1.0, the number is published anyway. A benchmark page that only shows wins is marketing; the project's credibility depends on it being an engineering document.
 
+> **Measured in `0.1.0-alpha.5`, and every runtime target is missed.** Against Fastify 5 on one laptop — Node 24, five 10-second runs after a 3-second warm-up, the load generator on the same machine, so not this section's protocol — Zen serves 0.80× on static JSON, 0.82× with a response schema (Fastify's cell re-run alone; the full run's outlier put it at 1.00×), 0.77× with five params, 0.82× on the Zod POST and 0.80× through ten middleware; 0.97× on Annex C's realistic chain. Against Express 5 it is 1.18–1.37× without I/O and 1.02× on the realistic chain — not 3–5×. The TypeBox POST, cold boot, memory, p99 and allocations are not measured yet. [`benchmarks/results/competitors.md`](./benchmarks/results/competitors.md) has every cell, and the run after each of this release's three request-path fixes: only JSON intake moved the number.
+
 ### 18.3 Optimisation catalogue
 
 **Structural (do less):**
@@ -3214,8 +3254,8 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 | Control | Default | Why not looser |
 | --- | --- | --- |
 | Body size limit | 1 MB, app-wide (`body.limit`). Per-route overrides are designed and not built — a route's own limit is ignored today (§28.8) <!-- gap: per-route-body-limit --> | Unbounded bodies are trivial memory exhaustion |
-| Header count / size | 64 headers (the Node adapter's `maxHeadersCount`) / Node's default of 16 KB — an 8 KB size limit is designed and not built | Slowloris and hash-flood surface |
-| URL length | Node's default; an 8 KB limit is designed and not built | |
+| Header count / size | 64 headers (`maxHeadersCount`) / 8 KB for the request line and headers together (`maxHeaderSize`, built in `0.1.0-alpha.5`; Node's own default is 16 KB). Past either, Node answers 431 | Slowloris and hash-flood surface |
+| URL length | 8 KB (`maxUrlLength`, built in `0.1.0-alpha.5`), answered 414 `ZEN_URI_TOO_LONG` before dispatch. The URL also counts toward the 8 KB header limit, so on the defaults a long one is a 431 first | Bounds what one request makes the server parse and log before any route is chosen |
 | Param count in query | 100 | Hash flooding, `qs` complexity |
 | JSON depth | 32 | Stack exhaustion in parsers |
 | JSON `__proto__`/`constructor`/`prototype` keys | **stripped** | Prototype pollution; there is no legitimate use in request data |
@@ -4847,11 +4887,11 @@ The strongest architecture loses to the framework people already know. Nothing i
 | `url()` returns a path, never an absolute URL | §5.7 — an absolute URL needs an origin, and the only one on a request is the `Host` header the client wrote (§19.5.2). An application that needs one (an email) prefixes the origin it configured |
 | A collection's `name` does not namespace its routes' names | §6.3, corrected — the merge table said "dot-join", and it was never built; by the time names were read as keys, applications namespaced them by hand, and composing them now would rename every such route |
 | ~~A `params` schema is not checked against its path template at boot~~ | **Built in `0.1.0-alpha.4`** (§5.2). `params: z.object({ userId })` on `/users/:id` is `ZEN_PARAM_MISMATCH` at boot, with the name that was probably meant, instead of a 400 on every request |
-| `ctx.log` is not bound to the request | §7.2, §31.1, corrected — designed pre-bound with the request id and route, and the application's logger in fact. A lazy child, made on the first read and re-made if `ctx.id` changes (the request-id plugin adopting an inbound id), would cost nothing on a request that never logs and one allocation on one that does; not built <!-- gap: ctx-log --> |
+| ~~`ctx.log` is not bound to the request~~ | **Built in `0.1.0-alpha.5`** (§7.2, §31.1). A lazy child of the application's logger, bound to `requestId` and the route template on the first read and made again when `ctx.id` changes, so a line written after the request-id plugin adopts an inbound id carries that id. A request that never logs makes no child; one that does pays one `child()` call — 40–60 ns with the default logger on Node 22–26 (`benchmarks/request-path`) <!-- claim: ctx-log --> |
 | Matching is a trie walk, not generated code | §2.2 step J, §18.3 C1, §22.2, corrected — each described a generated, `charCodeAt`-scanning matcher. The router generates params builders; `match` walks the trie, and `CompiledRouter.source` is not produced. Synthesising the matcher is the next large router change <!-- gap: router-codegen --> |
-| The sync fast path needs `markSync()` | §8.4, corrected — the `maybe` row of its table is not built, so a plain function is emitted on the async path. The README's listing marks every function it shows |
+| ~~The sync fast path needs `markSync()`~~ | **Built in `0.1.0-alpha.5`** (§8.4). A plain function is a speculation point, and a route of plain functions compiles with no `async` and no `await`. The dispatcher around the pipeline is still `async` |
 | A returned WHATWG `Response` is a 500 | §13.2, corrected — the table said pass-through. It has a `status`, `headers` and a `body`, so `finalize` takes it for a `Reply`, and egress fails writing a status onto its read-only getter: `ZEN_INTERNAL`. An earlier correction said it reached the JSON encoder and failed as `ZEN_SERIALIZATION`, which a probe of the build showed it does not |
-| Issue codes are inferred from message text | I7, §11.2, corrected — the envelope has one shape across libraries, and its `code` is guessed from the English message, so a localised library changes every code |
+| ~~Issue codes are inferred from message text~~ | **Built in `0.1.0-alpha.5`** (§11.2). A value missing from the request is `required` whatever the library calls it, and `registerIssueMapper(vendor, map)` reads the rest from the library's own issue fields. A vendor with no mapper still has its codes guessed from English text |
 | `MiddlewareOptions.when` is not read | §8.7, corrected — declared and documented, and `app.use()` takes `{ name }` alone. A collection's `when` is built (§6.2) |
 | A route cannot override the body limit | §4.2, §19.2, corrected — `body.limit` is app-wide; a route's own is ignored |
 | `RouteRecord.origin` is always `undefined` | §5.1, corrected — designed as "not optional and not debug-only". Diagnostics name the route instead of the file and line that registered it |
@@ -4859,7 +4899,7 @@ The strongest architecture loses to the framework people already know. Nothing i
 | The development error page is a `debug` object | §12.6, corrected — stack, cause, route and `meta`; no code frame, chain, suggestions or hyperlinks |
 | Dev mode neither seals the context nor freezes request data | §7.3, corrected — the type-level half of the immutability model is built, the runtime half is not |
 | Cookie signing, ETag and compression in egress, pre-encoded bodies, frozen replies | §13.6, §13.7, corrected — designed, not built; ETag and 304 exist for file responses |
-| Request header size and URL length are Node's limits | §19.2, corrected — the header count is capped at 64 by the adapter; the 8 KB size and URL limits are designed |
+| ~~Request header size and URL length are Node's limits~~ | **Built in `0.1.0-alpha.5`** (§4.2 stage 2, §19.2). `maxHeaderSize` and `maxUrlLength`, 8 KB each, and `maxRequestsPerSocket`. The URL counts toward the header limit, so on the defaults a long URL is Node's 431 before it is Zen's 414 |
 | No SBOM and no continuous fuzzing | §19.8, §20.6, corrected — releases carry npm provenance; the property suites run on every build |
 | The API diff compares the branches of a multi-branch union by type only | §29.7 — a nullable union is compared as its one non-null branch, fields and all; a union of several object shapes is compared by the types it admits, because which branch corresponds to which across two documents is not knowable in general. A field removed inside one of them is not reported |
 
@@ -5076,7 +5116,7 @@ Leadership election (so one replica runs a cron, not all twelve) is delegated to
 
 `pino`-shaped by default, behind a `Logger` interface so it can be replaced. `ctx.log` is designed to be pre-bound with request id, route name, and any fields plugins contribute. Request logging is a hook, not a middleware, so it observes real timing including serialization.
 
-> **Not built, and this paragraph read as though it were.** `ctx.log` is the application's logger, unbound: a handler's line carries no request id unless the handler adds one (`ctx.log.child({ requestId: ctx.id })`). The framework's own error lines carry it, and so does every problem document, which is where the correlation key reaches the client. §28.8 records the gap.
+> **Built in `0.1.0-alpha.5` — the request id and the route; plugin fields are not.** `ctx.log` is a child of the application's logger bound to `requestId` and `route` — the route's path template, which every route has, where the paragraph above says its name, which is optional — made on the first read and made again when `ctx.id` changes, so the request-id plugin adopting an inbound id rebinds every later line. A request that never logs makes no child. Until then it was the application's logger, unbound, and this paragraph read as though it were not. Fields a plugin contributes to the binding are designed and not built. <!-- claim: ctx-log -->
 
 Redaction is configured by path (`req.headers.authorization`, `*.password`, `*.token`) and applied by the serializer, plus automatic redaction of anything branded `secret` in config (§16.2). The default request log line contains method, route *template* (never the raw URL — cardinality), status, duration, request id, and length.
 
@@ -5357,6 +5397,7 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_REGEX_UNSAFE` | Development only, a warning: a regex in a param type's `test` can backtrack without bound (§19.3) |
 | `ZEN_APP_FROZEN` | Registration attempted after boot |
 | `ZEN_APP_NOT_READY` | `dispatch` or `graph()` used before `ready()` |
+| `ZEN_INSPECT_DISABLED` | `generatedSource()` on an app built without `inspect` or `dev`, which keeps no generated source after boot (§3.4) |
 | `ZEN_BOOT_FAILED` | The aggregate: a `BootError` carrying every diagnostic above that applies, rendered with `fix:` and `also:` lines (§12.7) |
 | `ZEN_HOOK_PHASE_UNKNOWN` | A hook registered for a phase that does not exist (`onReqest`), or an application phase declared on a route or collection, where it could never fire — with the phase that was probably meant (§9.7) |
 
@@ -5366,6 +5407,7 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | --- | --- | --- |
 | `ZEN_VALIDATION` | 400/422 | Request failed schema validation |
 | `ZEN_BODY_TOO_LARGE` | 413 | Body exceeded the limit |
+| `ZEN_URI_TOO_LONG` | 414 | The request target is longer than the Node adapter's `maxUrlLength`; answered before dispatch, so no hook sees it (§4.2 stage 2) |
 | `ZEN_UNSUPPORTED_MEDIA_TYPE` | 415 | No parser for the content type |
 | `ZEN_NOT_ACCEPTABLE` | 406 | No representation matches `Accept` (§13.4). `errors.available` lists what the route *can* produce, which is the part RFC 9110 asks for and the part that makes the refusal actionable — a client told only "not acceptable" guesses, and what it usually guesses is that the server is broken. Thrown at stage 5, so `onError` hooks see it and no body was read |
 | `ZEN_METHOD_NOT_ALLOWED` | 405 | Path matched, method did not |

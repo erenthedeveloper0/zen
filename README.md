@@ -89,21 +89,34 @@ You can read what it emits:
 $ node scripts/show-generated.ts
 
 function finish(ctx, reply) {
-  reply = d.steps[3](ctx, reply)                 // after: auditLog
+  const s1 = d.steps[3](ctx, reply)              // after: auditLog
+  if (s1 !== null && typeof s1 === 'object' && typeof s1.then === 'function') return Promise.resolve(s1).then((v) => k1(ctx, v))
+  return k1(ctx, s1)                             // ← not a promise: carry on, now
+}
+
+function k1(ctx, reply) {
   return reply
 }
 
 function seg1(ctx) {
   let r
-  let out = d.handler(ctx)                       // ← sync: no promise allocated
+  const out = d.handler(ctx)
+  if (out !== null && typeof out === 'object' && typeof out.then === 'function') return Promise.resolve(out).then((v) => k2(ctx, v))
+  return k2(ctx, out)
+}
+
+function k2(ctx, out) {
+  let r
   let reply = d.finalize(out, false)
   return finish(ctx, reply)
 }
 
 async function seg0(ctx) {
   let r
-  r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
-  r = d.steps[1](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
+  r = d.steps[0](ctx); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
+  r = d.steps[1](ctx); if (r !== null && typeof r === 'object' && typeof r.then === 'function') r = await r
+  if (r !== undefined) return finish(ctx, d.finalize(r, true))
   return d.steps[2](ctx, async function () { return seg1(ctx) })   // ← around: the only closure
 }
 ```
@@ -111,10 +124,12 @@ async function seg0(ctx) {
 No array iteration. No dynamic dispatch. Stages the route doesn't use are not
 emitted at all — not skipped by a runtime `if`, *absent from the source*.
 
-One caveat about that listing: `scripts/show-generated.ts` wraps every function in
-`markSync()`, and that is what puts `seg1` on the synchronous path. A plain function —
-`async` or not — is emitted on the async path today; reaching the synchronous one without
-the marker is designed ([§8.4](./ARCHITECTURE.md#84-the-sync-fast-path)) and not built.
+Every function in that app is a plain one — no `async`, no marker. Each call is a
+*speculation point*: when what it returned is not a promise, the rest runs at once, so
+a request on which nothing returns one allocates no promise in the pipeline
+([§8.4](./ARCHITECTURE.md#84-the-sync-fast-path)). `seg0` keeps the `async` form because
+it holds the `around`, whose `next()` is a promise by contract. A route of plain functions
+with no `around` and no body to read has no `async` and no `await` in it at all.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">
@@ -179,7 +194,9 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 
 ### Working today
 
-- Compiled context class — `ctx.ips` and `ctx.protocol` included, as getters, so its shape never changes — per-route compiled pipelines, generated params builders <!-- claim: compiled-units, ctx-ips -->
+- Compiled context class — `ctx.ips` and `ctx.protocol` included, as getters, so its shape never changes — per-route compiled pipelines, generated params builders; the generated source is kept after boot only with `inspect: true` or `dev: true` <!-- claim: compiled-units, ctx-ips, unit-retention -->
+- **The sync fast path, for plain functions**: every call that is not `async` is a speculation point, so a route of plain functions compiles with no `async` and no `await`, and `explainRoute()` says which path a route got <!-- claim: sync-fast-path -->
+- **`ctx.log` bound to the request** — a child carrying the request id and route template, made on its first read and remade when `ctx.id` changes, so a request that never logs pays nothing <!-- claim: ctx-log -->
 - Backtracking radix router: static/typed/wildcard/optional params, `app.paramType()` (its `test` checked for backtracking regexes in development), correct 405 with a complete `Allow`, `HEAD`→`GET`; matching is case-sensitive and a trailing slash is normalised <!-- claim: router, router-options, regex-unsafe -->
 - Boot-time conflict analysis with aggregated, rendered diagnostics — duplicate paths *and* names, ambiguous routes, and parameter types that can match the same value; registration order never decides which route answers <!-- claim: boot-conflicts -->
 - `app.get/post/…/all(path, [spec,] handler)` and `app.listen(port)` — the Express spellings — alongside the spec and options forms <!-- claim: express-spellings -->
@@ -189,7 +206,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 - **Health and readiness**: two endpoints answering two different questions, per-check budgets and cancellation, stampede-safe caching, and a `draining` state that goes red before the server stops accepting <!-- claim: health -->
 - **Plugins**: manifests, semver dependency resolution, topological ordering, cycle/conflict/capability detection — checked against what the adapter says it can do — context decorations with type accumulation, and options validated at boot before any plugin runs, so `rateLimit({ limt: 100 })` fails with *did you mean "limit"?* <!-- claim: plugins, plugin-options, adapter-caps -->
 - **DI**: typed tokens, three lifetimes, request-scoped services stored in the slot array and disposed at the end of the request, boot-time cycle and captive-dependency analysis; a service or slot value implementing `Symbol.dispose` or `Symbol.asyncDispose` is released through it, with no second declaration <!-- claim: di, intrinsic-dispose -->
-- Standard Schema validation with normalised issues, and a `params` schema checked against its path at boot; RFC 9457 error envelopes, every error class with a code of its own, and an abort classified by whose it was — the request's own, an upstream that timed out (503), or the application's (500) <!-- claim: validation-envelopes, params-mismatch, 503-code, abort-classification -->
+- Standard Schema validation with normalised issues — a missing value is `required` whatever the library calls it, and `registerIssueMapper()` reads the rest from the library's own issue codes, not its (translatable) messages — and a `params` schema checked against its path at boot; RFC 9457 error envelopes, every error class with a code of its own, and an abort classified by whose it was — the request's own, an upstream that timed out (503), or the application's (500) <!-- claim: issue-codes, validation-envelopes, params-mismatch, 503-code, abort-classification -->
 - **Coercion profiles**: `?page=2` is a `number` because the schema says `number` — schema-guided, so `?sku=00713` stays a string, and a source with nothing to convert emits no code <!-- claim: coercion -->
 - **Configuration**: layered resolution that keeps the *provenance* of every value, a schema-validated environment checked before any plugin's `setup` runs, typed `app.config` / `ctx.config`, and secrets that redact themselves when serialised <!-- claim: config -->
 - **First-party middleware**: `cors`, `securityHeaders`, `requestId`, `rateLimit` — each a global hook rather than middleware, so a preflight to a path with no route is answered and a 404 flood counts against the limit; each *staging* its headers, so they are on the 404 and the 429 as well as the 200; and each with an options schema, so a misspelt option fails at boot <!-- claim: middleware-pack -->
@@ -199,7 +216,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 - **URL generation**: `app.url(name, params, query)` returns a path its route answers, with the values given — encoded, typed and checked against the router — or refuses; reachable from a collection and from a plugin, and always on the application's origin <!-- claim: url-generation -->
 - **OpenAPI 3.1**: `AppGraph → document` as a pure function, `$ref` deduplication, a dependency-free reference viewer, breaking-change detection, the security schemes plugins declare with `app.meta`, and no `writeOnly` field documented as returned <!-- claim: openapi, plugin-meta -->
 - Body intake emitted **only** when a route declares a body; prototype-pollution stripping <!-- claim: body-intake -->
-- Node adapter with lazy `RawRequest` (no WHATWG `Request` construction), client disconnects wired to `ctx.signal`, and shutdown that drains and then closes keep-alive connections rather than waiting on them <!-- claim: node-adapter -->
+- Node adapter with lazy `RawRequest` (no WHATWG `Request` construction), client disconnects wired to `ctx.signal`, shutdown that drains and then closes keep-alive connections rather than waiting on them, and ingress limits that refuse before any of Zen runs: 8 KB of headers (431, from Node) and an 8 KB URL (414 `ZEN_URI_TOO_LONG`) by default, plus a per-socket request cap <!-- claim: node-adapter, ingress-guards -->
 - **Server-sent events** — `ctx.sse()`, with heartbeats, backpressure, a bound on what a slow client can hold, and a final `shutdown` event on drain <!-- claim: sse -->
 - **File responses** — `ctx.file(path, { root })` with root confinement, `ETag`/`Last-Modified`, 304 revalidation and single-range 206 <!-- claim: files -->
 - **Process lifecycle** — `SIGTERM`/`SIGINT` run the graceful shutdown; an uncaught exception is logged and shuts down with exit code 1; `listen({ signal })` aborts into the same sequence <!-- claim: process-lifecycle -->
@@ -213,13 +230,37 @@ until the docs say so.
 
 ### Designed, not yet built
 
-CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · route and middleware origins in diagnostics · conditional middleware (`use(fn, { when })`) · per-route body limits · a generated matcher (matching walks the trie; params builders are generated) · `ctx.log` bound to the request · a returned WHATWG `Response` passing through · issue codes that do not depend on the library's message text · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
+CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · route and middleware origins in diagnostics · conditional middleware (`use(fn, { when })`) · per-route body limits · a generated matcher (matching walks the trie; params builders are generated) · a returned WHATWG `Response` passing through · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
 
 ## In depth
 
 Each subsystem below was built against a claim in [the RFC](./ARCHITECTURE.md), and
 each claim is either measured by a benchmark or asserted by a CI gate — usually
 both. Where a measurement came out worse than the claim, the claim was corrected.
+
+### Against `node:http`, Fastify, Hono and Express — behind, and measured
+
+§1.4 makes a falsifiable prediction: Zen's per-request work should be within noise of a
+hand-written `http.createServer` handler doing the same job, *"and if that is not true in
+benchmarks, the thesis has failed and we should say so."* So: it is not true yet. On Annex C's
+first six workloads (`benchmarks/competitors`), Zen serves about 0.8× of the hand-written
+baseline wherever no I/O hides the difference, where Fastify serves about 1.0×:
+
+| Workload — fraction of `node:http` | Zen, alpha.4 | **Zen** | Fastify | Hono | Express |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1. Static JSON, no schema | 0.81× | **0.82×** | 1.02× | 0.97× | 0.60× |
+| 2. JSON with a response schema | 0.83× | **0.82×** | 0.82× | 0.92× | 0.60× |
+| 3. A route with 5 path params | 0.82× | **0.79×** | 1.03× | 0.96× | 0.60× |
+| 4. POST + body validation (Zod), ~1 KB | 0.49× | **0.79×** | 0.96× | 0.93× | 0.67× |
+| 5. 10 middleware | 0.80× | **0.80×** | 0.99× | 0.83× | 0.58× |
+| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 0.94× | **0.98×** | 1.01× | 1.05× | 0.95× |
+
+The POST workload was 0.49× until this release stopped running a reviver over every JSON body;
+the same ~20% everywhere else suggests a cost every request pays rather than any one feature.
+[`benchmarks/results/competitors.md`](./benchmarks/results/competitors.md) has every cell, the
+run after each fix, and what the method is not — one laptop, 10-second runs, the load
+generator on the same machine. (Fastify's 0.82× on workload 2 is that run's outlier; re-run
+alone it measured 1.02×, and the page shows both.)
 
 ### The M2 type-performance gate — passed
 
@@ -980,10 +1021,10 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `hooks.test.ts` | All nine pipeline phases in lifecycle order, three-scope resolution and the mirror, short-circuits, the error path, phase availability, and that a hookless route generates no hook code |
 | `timeouts.test.ts` | Budget resolution across the scope chain, `timeout: false`, the arm answering on time, 408-vs-504, `onTimeout` and its stage, the pipeline stopping at the boundary, one-way header propagation, that an unbounded route generates no deadline code — and, in a child process with nothing else alive, that an `inject()` only its deadline can answer is answered before the process exits |
 | `health.test.ts` | That liveness runs no dependency probes and readiness runs no liveness ones, the `starting → live → draining → stopped` transitions, per-check budgets and cancellation, single-flight under 200 concurrent probes, `critical: false`, withheld error text, a missing required check refused at boot, and that `close()` reports `draining` **before** the server stops accepting |
-| `differential.test.ts` | Compiled pipeline ≡ interpreted pipeline over every step pair + 300 random chains; compiled hooks ≡ the twin over 200 random hook plans; and deadlines ≡ the twin over 200 chains where the client leaves at a random position — agreeing on *which* boundary abandoned it, not just that one did. All three assert their own coverage, so an agreement that ran nothing cannot pass |
+| `differential.test.ts` | Compiled pipeline ≡ interpreted pipeline over every step pair + 300 random chains; compiled hooks ≡ the twin over 200 random hook plans; and deadlines ≡ the twin over 200 chains where the client leaves at a random position — agreeing on *which* boundary abandoned it, not just that one did. All three assert their own coverage, so an agreement that ran nothing cannot pass — and the speculative sync path ≡ the twin over 400 random chains of plain functions that return a value on one call and a promise on the next, including that a route of plain functions emits no `async` and no `await`, and that 33 speculation points fall back to the async form |
 | `serializer-differential.test.ts` | Compiled ≡ walking serializer over 2 500 generated schema/value pairs, plus "no undeclared key reached the wire" |
-| `context.test.ts` | Compiled context ≡ `PlainContext`; **monomorphism** (`%HaveSameMap`); headers, query, cookies, egress; `ctx.ips` and `ctx.protocol` under every `trustProxy` setting, as getters; `ZEN_REPLY_SENT` from a builder kept past egress and from `ctx.res` re-read after it; `inject()` from a given peer; and slot values released through their own disposal protocol |
-| `router.test.ts` | Path syntax, param types, conflict classes — every overlapping pair of builtin param types refused and every disjoint pair left alone — typed params tried in the same order whatever the registration order, compiled ≡ interpreted router |
+| `context.test.ts` | Compiled context ≡ `PlainContext`; **monomorphism** (`%HaveSameMap`); headers, query, cookies, egress; `ctx.ips` and `ctx.protocol` under every `trustProxy` setting, as getters; `ZEN_REPLY_SENT` from a builder kept past egress and from `ctx.res` re-read after it; `inject()` from a given peer; slot values released through their own disposal protocol; and `ctx.log` bound to the request id and route on both twins, made on the first read, remade when `ctx.id` changes, and never made for a request that does not log |
+| `router.test.ts` | Path syntax, param types, conflict classes — every overlapping pair of builtin param types refused and every disjoint pair left alone — typed params tried in the same order whatever the registration order, compiled ≡ interpreted router; and that a match leaves nothing for the next — no captures, no `Allow` — even when a parameter type matches a path from inside one |
 | `types.test.ts` | Type-level inference incl. negative `@ts-expect-error` cases; the M2 budget |
 | `openapi.test.ts` | Path/param/schema mapping, `$ref` dedup, **documented fields ≡ fields the compiled serializer emits**, and the diff classifier — which compares what a schema says rather than how its converter spelled it: zod 4.4's `anyOf` and 4.6's type list are one schema, a field removed inside a nullable union is breaking, and a recursive component is compared to where it repeats instead of overflowing the stack; security schemes a plugin declares with `app.meta`, and a `writeOnly` field withheld from every response schema |
 | `examples/openapi` | The same drift check over real requests, plus the API compatibility gate |
@@ -992,7 +1033,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `examples/health` | That a dead dependency takes the pod out of the load balancer and not out of the fleet, that a non-critical one only warns, that a **hanging** one cannot hold the endpoint or hide a healthy sibling, that 100 simultaneous polls cost one round trip, and that readiness goes red while the service is still answering |
 | `config.test.ts` + `config-properties.test.ts` | Layer precedence and per-value provenance, environment validation running before any plugin's `setup`, aggregated per-key diagnostics with the constraint read off the schema, secrets absent from every projection, the deep freeze, and that `ctx.config` changes no generated byte. The property suite fuzzes 2 000 random layer stacks for six invariants — it is not a differential suite, because configuration compiles nothing, and it caught a collision rule the hand-written test passed against |
 | `examples/config` | The same claims against **real Zod**: `.meta({ format: 'password' })` marking a secret, `expected: integer, between 1 and 100` read back off `z.toJSONSchema`, `.env` line numbers in the error, a plugin's namespace merging field by field, and — checked by `tsc`, not by an assertion — that `ctx.config.pagination.pageSize` is a `number` |
-| `examples/coercion` | That the same service written with §11.4 and written with `z.coerce` answers **identically** — so adopting it is a refactor and not a behaviour change — plus that a zero-padded SKU survives, that a single `?tags=a` is still an array, and that a bigint-shaped id is refused rather than silently rounded |
+| `examples/coercion` | That the same service written with §11.4 and written with `z.coerce` answers **identically** — so adopting it is a refactor and not a behaviour change — plus that a zero-padded SKU survives, that a single `?tags=a` is still an array, that a bigint-shaped id is refused rather than silently rounded — and that real Zod's issues get the same `issues[].code` in English and in Turkish |
 | `cors` · `security` · `request-id` · `rate-limit`.`test.ts` | That a preflight to a path with **no route** is answered, that a disallowed origin is refused without the response saying so, that `Vary: Origin` is present even on a request that had none, that the headers reach the 404 / 422 / 401 / 429 / 500, that an inbound request id is validated before it is trusted, and that a rate limiter sees the requests a router does not |
 | `pack.test.ts` | The claim the design rests on, as a count rather than a description: a `.use()` middleware ran **1 of 3** requests and a global hook ran **3 of 3**. Plus that the pack reorders itself when registered backwards, that a 429 still carries CORS headers, and that an app which does not register it compiles a byte-identical pipeline; and the four options schemas — each factory naming its own misspelt key, a wrong type refused by option name, and no value ever quoted |
 | `rate-limit-differential.test.ts` | The evicting store ≡ a never-evicting reference over 2 000 random request streams, with coverage assertions on boundaries crossed and keys reused across one — and the single clock-step case where they legitimately differ, pinned in its own test with its direction (it can only undercount) |
@@ -1000,12 +1041,14 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `negotiation.test.ts` | The matcher against RFC 9110 §12.5.1 — specificity beating quality, ties going to the server, `q=0` never served — plus `Vary: Accept` on the 406 and on a request that sent none, a plain-form 404 keeping `application/problem+json`, a 406 refusing *before* body intake, and that a route with one representation emits no negotiation code; and a `writeOnly` field refused at boot in every representation and every encoder — through arrays, records, unions and recursion — while a `format: 'password'` warning keeps the route negotiating |
 | `negotiation-properties.test.ts` | Six invariants over 2 000 random offer sets × `Accept` headers, the load-bearing one being that a refused representation is never chosen; and a real differential — the cached negotiator against the uncached matcher over 2 000 random *streams*, because the bugs a cache introduces are order-dependent |
 | `examples/negotiation` | Three representations of one resource against **real Zod**: a client pinned to `v1` staying pinned, CSV columns taken from the same schema the JSON fields come from, a field the database has and neither format contains, a spreadsheet-formula cell neutralised, and — checked by `tsc` — that `ctx.negotiated` is `string \| null` |
-| `adapter.test.ts` (adapter-node) | Over **real sockets**, because `inject()` could not see any of it: a request body does not abort `ctx.signal`, a POST under a deadline is answered rather than abandoned, a client leaving mid-stream neither crashes the process nor logs a failure, a missing file is a 404 rather than a dropped connection, a path cannot escape its root (symlinks included), 304/206/416 and `HEAD` for files, SSE framing, heartbeats and disconnects, and that shutdown neither waits on idle keep-alive connections nor severs event streams |
+| `adapter.test.ts` (adapter-node) | Over **real sockets**, because `inject()` could not see any of it: a request body does not abort `ctx.signal`, a POST under a deadline is answered rather than abandoned, a client leaving mid-stream neither crashes the process nor logs a failure, a missing file is a 404 rather than a dropped connection, a path cannot escape its root (symlinks included), 304/206/416 and `HEAD` for files, SSE framing, heartbeats and disconnects, that shutdown neither waits on idle keep-alive connections nor severs event streams, and the ingress limits over a bare socket — a 414 at one byte past `maxUrlLength` with nothing dispatched, Node's 431 past 8 KB of headers, `maxRequestsPerSocket`'s `Connection: close` and 503 |
 | `sse.test.ts` | The event-stream framing, including a line break in `event` or `id` refused rather than forging a field; graceful `close()`; the `maxBuffered` bound; heartbeats that start only when something reads; and `ctx.sse()` on **both** context twins |
+| `json-intake.test.ts` | That parsing a body without a reviver is exactly as strict as parsing it with one: 2 000 hand-written texts — forbidden keys spelled with `\u` escapes, the words inside values, near misses, truncated JSON — each parsed to what the reviver produces or refused by both, with coverage asserted on every branch; the depth limit refusing exactly what the per-value walk refused over 3 000 nestings; and a clean body never handed a reviver |
+| `issue-codes.test.ts` | A vendor's issue mapper deciding `issues[].code` from the issue's own fields whatever the message's language — on async validators and combined sources too, looked up when a request fails so a late registration still applies — and a missing value `required` before any mapper is asked, an inherited key not counted as present |
 | `validation.test.ts` | A bad query and a bad body are reported in **one** response, each issue tagged with its source; 422 only when the body alone failed; async validators collected too; and a one-source route compiles exactly as before |
 | `registration.test.ts` | Registrations that could never take effect are boot errors: a typo'd hook phase (with the phase you meant), an application phase on a route, a decoration that would shadow `ctx.json`, two routes sharing a name, a `params` schema its path cannot satisfy — one test per case of §5.2's table — and a collection `when` that answers with something other than a boolean; a subtree `when` turned off absent from router, graph and hooks; route-scoped `use` in the right place in the chain; `app.paramType()`; one boot per application however many callers race for it, and a failed boot that stays failed; and a shutdown that completes when an `onClose` hook throws |
 | `leaks.test.ts` | §20.7's first two properties, which no other suite checked: a real port served — SSE, a deadline kept and one blown, a file, a health probe — and closed with nothing left holding the process open, and 500 interleaved requests that each read back only the slot values, hook state and scoped instance they wrote |
-| `generated-source.test.ts` | Everything the compilers emit for one fixture application — context class, params builders, pipelines with every hook phase, coercer, serializers — against a committed snapshot, so a compiler change is a reviewable diff of code |
+| `generated-source.test.ts` | Everything the compilers emit for one fixture application — context class, params builders, pipelines with every hook phase, coercer, serializers — against a committed snapshot, so a compiler change is a reviewable diff of code; and that an app keeps none of it after boot unless built with `inspect` or `dev`, and says so instead of answering with an empty list |
 | `regex-safety.test.ts` | The analyser behind §19.3's lint, against the shapes that backtrack (`(a+)+`, `(a\|aa)+`, `(-?[a-z]+)*`) and the idioms that must not be refused (`[a-z0-9]+(?:-[a-z0-9]+)*`); and `app.paramType()` warning about a test that can backtrack, in development only |
 | `lifecycle.test.ts` (meta-package) | A real child process: `SIGTERM` drains and exits 0, an uncaught exception or unhandled rejection drains and exits 1, and nothing is installed on the process until `listen()` |
 | `error-docs.test.ts` | Every error code any package can produce has its entry in [docs/errors.md](./docs/errors.md) — the page every problem document links to |

@@ -6,7 +6,7 @@ import type {
   BodySource, Capabilities, Connection, Dispatch, ListenOptions, RawRequest,
   RemoteInfo, Reply, RuntimeAdapter, ServerHandle, LowercaseName, SseChannel,
 } from '@erenthedeveloper0/zen-core'
-import { PayloadTooLarge } from '@erenthedeveloper0/zen-core'
+import { Codes, PayloadTooLarge, ZenError, docsUrl } from '@erenthedeveloper0/zen-core'
 import { planFile } from './file.ts'
 
 export { mediaTypeFor } from './file.ts'
@@ -17,6 +17,31 @@ export interface NodeAdapterOptions {
   readonly requestTimeout?: number | undefined
   readonly keepAliveTimeout?: number | undefined
   readonly maxHeadersCount?: number | undefined
+  /**
+   * The most bytes the request line and headers may take together — §19.2.
+   * 8 KB, where Node's own default is 16 KB. Node counts them while parsing, so
+   * a request past it never reaches Zen: Node answers 431 and closes the
+   * connection. Raise it for clients that send large cookies.
+   */
+  readonly maxHeaderSize?: number | undefined
+  /**
+   * The longest request target accepted — §4.2 stage 2. 8 KB. Past it the
+   * adapter answers 414 `ZEN_URI_TOO_LONG` before dispatch and closes the
+   * connection: no context is built, no hook runs, nothing is logged.
+   *
+   * The target is part of what `maxHeaderSize` counts, so with both defaults a
+   * target this long is refused as 431 first. This is the limit that still
+   * holds when `maxHeaderSize` is raised for cookies, which is no reason to
+   * take a longer URL.
+   */
+  readonly maxUrlLength?: number | undefined
+  /**
+   * Requests one keep-alive connection may carry. The last one is answered with
+   * `Connection: close`, so the client opens a new connection — which a load
+   * balancer can send to another instance — and a request pipelined past it is
+   * answered 503 by Node. `0`, the default, sets no limit.
+   */
+  readonly maxRequestsPerSocket?: number | undefined
   /**
    * §4.5 step 1's window, in milliseconds: how long `close()` keeps accepting
    * after readiness has gone red, so the load balancer can stop routing here
@@ -456,7 +481,46 @@ function guarded<T>(
   }
 }
 
+/**
+ * The answer to a request target longer than `maxUrlLength` — §4.2 stage 2.
+ *
+ * Written by the adapter, before dispatch, because an ingress guard exists to
+ * refuse a request before anything is allocated in proportion to it. So it is
+ * the part of the error contract that needs no request: the code and its link
+ * (I7). No `instance`, which would echo the target being refused, and no
+ * `requestId`, because no request was made of it.
+ */
+const URI_TOO_LONG = JSON.stringify({
+  type: docsUrl(Codes.URI_TOO_LONG),
+  title: 'URI Too Long',
+  status: 414,
+  code: Codes.URI_TOO_LONG,
+})
+
+/**
+ * A size option, checked when the adapter is made rather than discovered under
+ * load: `url.length > NaN` is never true, so a limit that is not a number would
+ * be no limit, silently.
+ */
+function sizeOption(name: string, value: number | undefined, fallback: number, least: number): number {
+  if (value === undefined) return fallback
+  if (Number.isInteger(value) && value >= least) return value
+  throw new ZenError(
+    Codes.CONFIG_INVALID,
+    `nodeAdapter: ${name} must be a whole number of at least ${least}; got ${JSON.stringify(value)}.`,
+    {
+      status: 500,
+      expose: false,
+      hint: `Pass nodeAdapter({ ${name}: ${fallback === 0 ? 100 : fallback} }), or leave it out for the default (${fallback}).`,
+    },
+  )
+}
+
 export function nodeAdapter(options: NodeAdapterOptions = {}): RuntimeAdapter {
+  const maxHeaderSize = sizeOption('maxHeaderSize', options.maxHeaderSize, 8192, 1)
+  const maxUrlLength = sizeOption('maxUrlLength', options.maxUrlLength, 8192, 1)
+  const maxRequestsPerSocket = sizeOption('maxRequestsPerSocket', options.maxRequestsPerSocket, 0, 0)
+
   return {
     name: 'node',
     caps: NODE_CAPABILITIES,
@@ -464,7 +528,18 @@ export function nodeAdapter(options: NodeAdapterOptions = {}): RuntimeAdapter {
     async listen(dispatch: Dispatch, listenOptions: ListenOptions): Promise<ServerHandle> {
       const state: ServerState = { closing: false, streams: new Set() }
 
-      const server: Server = createServer((request, response) => {
+      const server: Server = createServer({ maxHeaderSize }, (request, response) => {
+        // One length compare, then nothing: no context, no hooks, no log line.
+        // `request.url` is the target as sent, one character per byte.
+        if ((request.url ?? '/').length > maxUrlLength) {
+          response.writeHead(414, {
+            'content-type': 'application/problem+json',
+            'content-length': URI_TOO_LONG.length,
+            connection: 'close',
+          })
+          response.end(URI_TOO_LONG)
+          return
+        }
         const conn = new NodeConnection(response, request, state)
         const raw = new NodeRawRequest(request, () => conn.clientGone())
         void Promise.resolve(dispatch(raw, conn)).catch((error: unknown) => {
@@ -492,6 +567,7 @@ export function nodeAdapter(options: NodeAdapterOptions = {}): RuntimeAdapter {
       server.requestTimeout = options.requestTimeout ?? 30_000
       server.keepAliveTimeout = options.keepAliveTimeout ?? 65_000
       server.maxHeadersCount = options.maxHeadersCount ?? 64
+      server.maxRequestsPerSocket = maxRequestsPerSocket
 
       const port = listenOptions.port ?? 3000
       const host = listenOptions.host ?? '127.0.0.1'

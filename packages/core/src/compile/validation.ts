@@ -50,18 +50,19 @@ export function compileValidator(
   source: ValidationSource,
   coerce: Coercer | null = null,
 ): ValidatorStep {
-  const validate = schema['~standard'].validate
+  const { validate, vendor } = schema['~standard']
   const read = READERS[source]
   const assign = ASSIGNERS[source]
 
   if (coerce === null) {
     const run = (raw: unknown): void | Promise<void> => {
       const ctx = raw as PlainContext
-      const result = validate(read(ctx))
+      const input = read(ctx)
+      const result = validate(input)
       if (isThenable(result)) {
-        return result.then((settled) => { apply(ctx, settled, source, assign) })
+        return result.then((settled) => { apply(ctx, settled, source, assign, vendor, input) })
       }
-      apply(ctx, result, source, assign)
+      apply(ctx, result, source, assign, vendor, input)
     }
     return { source, run }
   }
@@ -73,11 +74,12 @@ export function compileValidator(
 
   const run = (raw: unknown): void | Promise<void> => {
     const ctx = raw as PlainContext
-    const result = validate(prepare(ctx, read(ctx)))
+    const input = prepare(ctx, read(ctx))
+    const result = validate(input)
     if (isThenable(result)) {
-      return result.then((settled) => { apply(ctx, settled, source, assign) })
+      return result.then((settled) => { apply(ctx, settled, source, assign, vendor, input) })
     }
-    apply(ctx, result, source, assign)
+    apply(ctx, result, source, assign, vendor, input)
   }
 
   return { source, run }
@@ -125,9 +127,15 @@ function apply(
   result: StandardResult<unknown>,
   source: ValidationSource,
   assign: Assigner,
+  vendor: string,
+  input: unknown,
 ): void {
   if (result.issues !== undefined) {
-    throw new ValidationError(source, normaliseIssues(result.issues, source), source === 'body' ? 422 : 400)
+    // The mapper is looked up here, on the failure path, rather than when the
+    // route compiled: one map read per refused request, and a mapper registered
+    // after `ready()` is not silently ignored on the routes that booted first.
+    const issues = normaliseIssues(result.issues, source, mappers.get(vendor), { input })
+    throw new ValidationError(source, issues, source === 'body' ? 422 : 400)
   }
   assign(ctx, result.value)
 }
@@ -201,13 +209,84 @@ function isThenable(value: unknown): value is Promise<StandardResult<unknown>> {
 }
 
 /**
- * §11.2 — normalisation is what gives I7 its shape: a Zod app and a Valibot
- * app emit envelopes with the same fields in the same places. Not yet the same
- * `code`: that is inferred from the library's message text (`inferCode`), so a
- * client should not switch on `issues[].code` across libraries until
- * per-vendor issue mappers exist (§28.8).
+ * `issues[].code` — §11.2's vocabulary: one word for one kind of failure,
+ * whichever library found it and in whatever language it said so (I7).
+ *
+ * - `required` — no value where the schema needs one
+ * - `type` — a value of the wrong type
+ * - `format` — a string that is not in its format: an email, a URL, a pattern
+ * - `min` / `max` — past a bound: a number's, a string's length, an array's size
+ * - `custom` — a refinement the application wrote
+ * - `invalid` — anything else: a value outside an enum, a union nothing matched
  */
-export function normaliseIssues(issues: ReadonlyArray<StandardIssue>, source?: string): Issue[] {
+export type IssueCode = 'required' | 'type' | 'format' | 'min' | 'max' | 'custom' | 'invalid'
+
+/**
+ * Names the {@link IssueCode} of one library's issue — §11.2.
+ *
+ * A Standard Schema issue is the library's own object, so a mapper reads the
+ * fields that library documents (Zod's `code`, Valibot's `type`, ArkType's
+ * `code`) instead of its message, which a locale rewrites. `undefined` leaves
+ * the issue to the message. It is never asked about a missing value: that is
+ * `required` whatever the library calls it — see {@link normaliseIssues}.
+ */
+export type IssueMapper = (issue: StandardIssue & Readonly<Record<string, unknown>>) => IssueCode | undefined
+
+const mappers = new Map<string, IssueMapper>()
+
+/**
+ * Teach Zen one vendor's issue codes — the seam `registerSchemaConverter` is
+ * for its schemas, and for the same reason: core imports no library, so the
+ * four lines that know Zod live in the application.
+ *
+ * ```ts
+ * const ZOD = new Map<unknown, IssueCode>([
+ *   ['invalid_type', 'type'], ['too_small', 'min'], ['too_big', 'max'],
+ *   ['invalid_format', 'format'], ['custom', 'custom'],
+ * ])
+ * registerIssueMapper('zod', (issue) => ZOD.get(issue['code']) ?? 'invalid')
+ * ```
+ *
+ * The vendor string is `schema['~standard'].vendor`, which the spec requires.
+ */
+export function registerIssueMapper(vendor: string, map: IssueMapper): void {
+  mappers.set(vendor, map)
+}
+
+export function issueMapperFor(vendor: string): IssueMapper | undefined {
+  return mappers.get(vendor)
+}
+
+/** Test-only. Registrations are process-global, like schema converters. */
+export function __resetIssueMappers(): void {
+  mappers.clear()
+}
+
+/**
+ * §11.2 — normalisation is what gives I7 its shape: a Zod app and a Valibot
+ * app emit envelopes with the same fields in the same places, and with the
+ * same `code` wherever the vendor has a mapper.
+ *
+ * Each code is decided in this order:
+ *
+ * 1. **`required`, when what the schema was given has nothing at the issue's
+ *    path.** Decided here rather than by any mapper, because a library cannot
+ *    always say so: Zod reports a missing key as `invalid_type`, and its
+ *    Standard Schema result leaves out the input that would tell the two
+ *    apart. The message did, until a locale translated it. Only with `given`:
+ *    a caller that has no input (`plugin-options`) gets steps 2 and 3. An
+ *    object, so that `{ input: undefined }` — a body that was never sent — is
+ *    something a caller can say.
+ * 2. **The vendor's mapper**, reading the issue's own fields.
+ * 3. **The message**, for a vendor with no mapper — English only, and a guess:
+ *    Zod 4's `"Too small: expected number to be >=1"` reads as `type`.
+ */
+export function normaliseIssues(
+  issues: ReadonlyArray<StandardIssue>,
+  source?: string,
+  mapper?: IssueMapper,
+  given?: { readonly input: unknown },
+): Issue[] {
   const out: Issue[] = []
   for (const raw of issues) {
     const path: (string | number)[] = []
@@ -218,17 +297,34 @@ export function normaliseIssues(issues: ReadonlyArray<StandardIssue>, source?: s
         else path.push(String(key))
       }
     }
+    const code = given !== undefined && valueAt(given.input, path) === undefined ? 'required'
+      : (mapper === undefined ? undefined : mapper(raw as StandardIssue & Readonly<Record<string, unknown>>)) ??
+        inferCode(raw.message)
     out.push(source === undefined
-      ? { path, code: inferCode(raw.message), message: raw.message }
-      : { source, path, code: inferCode(raw.message), message: raw.message })
+      ? { path, code, message: raw.message }
+      : { source, path, code, message: raw.message })
   }
   return out
 }
 
 /**
- * Best-effort mapping until per-vendor issue adapters land in M2. The vendor's
- * own code is richer; this keeps the *shape* stable in the meantime rather than
- * leaking a different structure per library.
+ * What the request held at an issue's path, or `undefined` for nothing there.
+ * Own properties only: a path is the schema's, but a key such as `constructor`
+ * must not find something on a prototype and call a missing value present.
+ */
+function valueAt(input: unknown, path: readonly (string | number)[]): unknown {
+  let at = input
+  for (const key of path) {
+    if (typeof at !== 'object' || at === null || !Object.hasOwn(at, key)) return undefined
+    at = (at as Record<string | number, unknown>)[key]
+  }
+  return at
+}
+
+/**
+ * The fallback for a vendor with no mapper: a guess from English message text.
+ * It keeps the envelope's *shape* stable, and its codes are what a client
+ * cannot rely on across libraries — or across locales of one.
  */
 function inferCode(message: string): string {
   const m = message.toLowerCase()

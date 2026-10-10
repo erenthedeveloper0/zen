@@ -34,6 +34,11 @@ const app = zen({
 - **The fast path.** The request is wrapped, not converted: no WHATWG `Request`
   is constructed, headers are not materialised until something reads them, and
   the body is not touched unless the route declares one.
+- **Ingress limits, before any of Zen runs.** Headers past 8 KB are refused by
+  Node itself (431); a request target past 8 KB is answered 414
+  `ZEN_URI_TOO_LONG` by the adapter, before dispatch — no hook runs and no
+  context is built. Both are options below, as is a cap on requests per
+  keep-alive connection.
 - **Disconnects reach `ctx.signal`.** When a client goes away — before the
   response, or in the middle of a streamed one — the request's `AbortSignal`
   aborts, so the database query or upstream `fetch` you passed it to stops too.
@@ -64,6 +69,12 @@ const app = zen({
 | `requestTimeout` | `30000` | |
 | `keepAliveTimeout` | `65000` | Longer than common load balancer idle timeouts. |
 | `maxHeadersCount` | `64` | |
+| `maxHeaderSize` | `8192` | Bytes of request line and headers together. Node's own default is 16 KB; past this one Node answers 431 before Zen runs. Raise it for clients with large cookies. |
+| `maxUrlLength` | `8192` | Longest request target. Past it the adapter answers 414 `ZEN_URI_TOO_LONG` before dispatch, with `Connection: close`. The target also counts toward `maxHeaderSize`, so on the defaults a long one is a 431 first. |
+| `maxRequestsPerSocket` | `0` | Requests per keep-alive connection; the last is answered `Connection: close`. `0` is no limit. |
+
+The three limits are checked when the adapter is made: a value that is not a whole number is
+`ZEN_CONFIG_INVALID` there, rather than a limit that silently never applies.
 
 ## Documentation
 

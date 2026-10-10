@@ -149,7 +149,7 @@ const ITERATIONS = 30_000
 const REPS = 7
 
 function buildApp(configure: (app: ZenApp) => void, dev = false): ZenApp {
-  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, dev })
+  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, dev , inspect: true })
   configure(app)
   return app
 }

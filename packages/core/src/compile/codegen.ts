@@ -1,4 +1,6 @@
 import type { Capabilities } from '../contracts/capabilities.ts'
+import { Codes } from '../errors/codes.ts'
+import { ZenError } from '../errors/zen-error.ts'
 
 /**
  * The CodeGen facility — rfcs/0001 §3.4.
@@ -25,18 +27,28 @@ export interface CodeGenOptions {
   readonly caps: Capabilities
   /** Dev emits formatted, commented source so `zen inspect pipeline` is readable. */
   readonly readable?: boolean | undefined
+  /**
+   * Keep every unit after it is compiled, for {@link CodeGen.units}. Off by
+   * default: a unit is its source and its externals, held for the life of the
+   * process, and nothing reads them after boot unless something asked to
+   * inspect them — at 10,000 routes that is megabytes of strings. `onEmit`
+   * is handed every unit either way.
+   */
+  readonly retain?: boolean | undefined
   readonly onEmit?: ((unit: CodeUnit) => void) | undefined
 }
 
 export class CodeGen {
   readonly enabled: boolean
   #readable: boolean
+  #retain: boolean
   #onEmit: ((unit: CodeUnit) => void) | undefined
   #units: CodeUnit[] = []
 
   constructor(opts: CodeGenOptions) {
     this.enabled = opts.caps.eval && detectEvalSupport()
     this.#readable = opts.readable ?? false
+    this.#retain = opts.retain ?? false
     this.#onEmit = opts.onEmit
   }
 
@@ -44,8 +56,24 @@ export class CodeGen {
     return this.#readable
   }
 
-  /** Every emitted unit, for `zen build` and `zen inspect`. */
+  /** Whether {@link units} holds what was compiled — see `CodeGenOptions.retain`. */
+  get retains(): boolean {
+    return this.#retain
+  }
+
+  /**
+   * Every emitted unit, for `zen build` and `zen inspect`. Refused unless
+   * `retain` was set: an empty list would read as "nothing was emitted", and a
+   * check that some stage emits no code would pass by reading nothing.
+   */
   get units(): readonly CodeUnit[] {
+    if (!this.#retain) {
+      throw new ZenError(Codes.INSPECT_DISABLED, 'CodeGen.units was read from a CodeGen that keeps no units.', {
+        status: 500,
+        expose: false,
+        hint: 'Construct it with new CodeGen({ caps, retain: true }) where the units are wanted.',
+      })
+    }
     return this.#units
   }
 
@@ -54,7 +82,7 @@ export class CodeGen {
    * The fallback is not optional — see reason 4 above.
    */
   materialise<T>(unit: CodeUnit, fallback: () => T): T {
-    this.#units.push(unit)
+    if (this.#retain) this.#units.push(unit)
     this.#onEmit?.(unit)
 
     if (!this.enabled) return fallback()

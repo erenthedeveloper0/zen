@@ -13,7 +13,7 @@ import { makeApp } from './app.ts'
  * check is a component whose failure your readiness endpoint will report as
  * healthy.
  */
-const { app, deps } = makeApp({ quiet: true })
+const { app, deps } = makeApp({ quiet: true, inspect: true })
 await app.ready()
 
 const graph = app.graph()

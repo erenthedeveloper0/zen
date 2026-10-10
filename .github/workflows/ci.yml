@@ -237,6 +237,13 @@ jobs:
       # byte-identical beside one with it, `next()` gains its promise only where
       # the downstream compiled synchronous, an absolute-form target routes like
       # the origin form, and a request with nothing to release queues nothing.
+      #
+      # And 0.1.0-alpha.5's hot path: a plain-arrow handler compiles with no
+      # `async` and no `await` (§8.4), a clean JSON body is parsed with no
+      # reviver and a served match builds no `Set` — structural, all three —
+      # and the one timing gate in this job: clean JSON intake against
+      # 0.1.0-alpha.4's parser, at most 1.5× a bare decode-and-parse everywhere
+      # and 5× faster wherever the runtime's reviver makes 5× reachable.
       - name: Request path cost
         run: node benchmarks/request-path/run.ts
 
@@ -263,7 +270,7 @@ jobs:
         run: node benchmarks/url/run.ts
 
       # CONTRIBUTING.md convention 3 — "a test that passes against the bug is not a
-      # test". A hundred and twenty-nine known defects are patched into the
+      # test". A hundred and forty-four known defects are patched into the
       # source one at a time; each must make its named suite fail — or, for
       # the strata, regex and claims checks, its script. A control that *passes*
       # means the assertion it points at is not load-bearing, and the job fails.
@@ -279,6 +286,32 @@ jobs:
       # and the probe agreed and the test passed against the defect.
       - name: Negative controls
         run: node scripts/negative-controls.ts
+
+  competitors:
+    name: competitor benchmark harness (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            benchmarks/competitors/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
+      # §1.4's falsifiable prediction is tested against node:http, Fastify, Hono
+      # and Express by `benchmarks/competitors`, which is its own npm project
+      # with its own lockfile — not a workspace, so the frameworks it compares
+      # against never enter the install the release job publishes from. Shared
+      # runners are too noisy to time it; this proves the harness still works:
+      # every server answers every workload correctly, and a one-second run of
+      # each completes with no error and no non-2xx response.
+      - run: npm ci --prefix benchmarks/competitors --ignore-scripts
+      - name: Competitor harness smoke
+        run: node benchmarks/competitors/run.ts --smoke
 
   packaging:
     name: packages install and run from their tarballs

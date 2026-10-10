@@ -24,11 +24,14 @@ import { catalogRoutes } from './features/catalog/index.ts'
 
 export interface AppOptions {
   readonly quiet?: boolean
+  /** Keep the compiled source after boot, for `generatedSource()` — `inspect.ts` and the tests read it. */
+  readonly inspect?: boolean
 }
 
 export function makeApp(options: AppOptions = {}): ZenApp {
   const app = zen({
     ...(options.quiet === true ? { logger: quiet() } : {}),
+    inspect: options.inspect === true,
     // Explicit, and identical to the defaults — see the note in the config.
     coercion: config.coercion as never,
   })
@@ -75,6 +78,7 @@ export function makeApp(options: AppOptions = {}): ZenApp {
 export function makeLegacyApp(options: AppOptions = {}): ZenApp {
   const app = zen({
     ...(options.quiet === true ? { logger: quiet() } : {}),
+    inspect: options.inspect === true,
     coercion: false,
   })
 

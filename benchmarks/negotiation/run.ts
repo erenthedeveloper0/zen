@@ -80,13 +80,13 @@ const PAYLOAD = [
 type App = ReturnType<typeof createApp>
 
 function plainApp(): App {
-  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent })
+  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, inspect: true })
   app.get('/rows', { response: { 200: Rows } }, () => PAYLOAD as never)
   return app
 }
 
 function negotiatedApp(): App {
-  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent })
+  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, inspect: true })
   app.get('/rows', {
     response: { 200: { 'application/json': Rows, 'text/csv': Rows } },
   }, () => PAYLOAD as never)
@@ -181,7 +181,7 @@ console.log('  1. A route that declares one representation\n')
 
   // A negotiated route in the same process: the module is loaded, an encoder is
   // registered, a negotiator is built. None of it may reach the plain route.
-  const alongside = createApp({ router: new ZenRouter(), pathParser, logger: silent })
+  const alongside = createApp({ router: new ZenRouter(), pathParser, logger: silent, inspect: true })
   alongside.get('/rows', { response: { 200: Rows } }, () => PAYLOAD as never)
   alongside.get('/negotiated', {
     response: { 200: { 'application/json': Rows, 'text/csv': Rows } },

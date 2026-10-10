@@ -23,7 +23,7 @@ import { CSV, V1, V2 } from './features/reports/index.ts'
  *   5. **What did the route that declares one representation pay?** Nothing,
  *      and here are the bytes.
  */
-const { app } = makeApp({ quiet: true })
+const { app } = makeApp({ quiet: true, inspect: true })
 await app.ready()
 
 const graph = app.graph()

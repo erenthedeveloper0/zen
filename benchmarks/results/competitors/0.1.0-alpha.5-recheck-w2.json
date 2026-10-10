@@ -1,0 +1,116 @@
+{
+  "environment": {
+    "label": "recheck-w2",
+    "date": "2026-10-10T01:30:14.549Z",
+    "node": "v24.21.0",
+    "os": "darwin 25.5.0 arm64",
+    "cpu": "Apple M5",
+    "cores": 10,
+    "memoryGb": 16,
+    "zen": "0.1.0-alpha.4",
+    "commit": "5483903 (with uncommitted changes)",
+    "fastify": "5.12.5",
+    "hono": "4.13.12",
+    "honoNodeServer": "2.1.3",
+    "express": "5.2.1",
+    "zod": "4.6.5",
+    "autocannon": "8.0.0",
+    "method": {
+      "runs": 5,
+      "durationS": 10,
+      "warmupS": 3,
+      "connections": 128,
+      "workers": 2,
+      "pipelining": 1
+    }
+  },
+  "cells": [
+    {
+      "server": "node-http",
+      "workload": 2,
+      "ok": true,
+      "problem": null,
+      "rps": [
+        78315.64,
+        78501.82,
+        79549.1,
+        79013.82,
+        78827.64
+      ],
+      "p50": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "p99": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "bootMs": 107.5,
+      "rssKb": 134656
+    },
+    {
+      "server": "fastify",
+      "workload": 2,
+      "ok": true,
+      "problem": null,
+      "rps": [
+        79153.46,
+        80352,
+        79787.64,
+        81420.8,
+        80136.73
+      ],
+      "p50": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "p99": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "bootMs": 196.6,
+      "rssKb": 170736
+    },
+    {
+      "server": "zen",
+      "workload": 2,
+      "ok": true,
+      "problem": null,
+      "rps": [
+        64760.73,
+        65470.4,
+        65405.1,
+        65554.91,
+        65403.64
+      ],
+      "p50": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "p99": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "bootMs": 157.2,
+      "rssKb": 174512
+    }
+  ]
+}

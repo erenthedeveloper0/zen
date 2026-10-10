@@ -30,6 +30,8 @@ import { config } from './config/deadlines.config.ts'
 export interface AppOptions {
   readonly onTimeout?: ((report: DeadlineReport) => void) | undefined
   readonly quiet?: boolean
+  /** Keep the compiled source after boot, for `generatedSource()` — `inspect.ts` and the tests read it. */
+  readonly inspect?: boolean
   /** Overridden by the tests so a suite does not wait real seconds. */
   readonly requestTimeout?: Duration
 }
@@ -37,6 +39,7 @@ export interface AppOptions {
 export function makeApp(options: AppOptions = {}): ZenApp {
   const app = zen({
     ...(options.quiet === true ? { logger: quiet() } : {}),
+    inspect: options.inspect === true,
     // One default for the whole service, and an inbound header that may
     // *shorten* it. The clamp is one-way: an upstream telling us it has 300 ms
     // left is cooperative, and a client asking for an hour is not (§4.4).

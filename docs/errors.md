@@ -246,6 +246,16 @@ is registered first; the request path is compiled once.
 
 `dispatch` or `graph()` was used before `ready()`.
 
+## ZEN_INSPECT_DISABLED
+
+`app.generatedSource()` was called on an app that keeps no generated source.
+Build it with `inspect: true`, or `dev: true`, where the source is wanted — a
+test, a benchmark, a script that prints it. Since `0.1.0-alpha.5` an app keeps
+its compiled units only when asked: they used to be held for the life of the
+process, which at 10,000 routes is megabytes of strings nothing reads after
+boot. Refused rather than answered with an empty list, because an empty list is
+also what "nothing was compiled for this" looks like.
+
 ## ZEN_BOOT_FAILED
 
 The aggregate: `ready()` found one or more problems and did not start. The
@@ -274,6 +284,19 @@ invalid); 400 when anything in the URL or headers did.
 **413.** The body exceeded the route's limit (1 MB by default), or a form body had
 more fields than `body.maxFields` (1000). Enforced while reading, not after
 buffering.
+
+## ZEN_URI_TOO_LONG
+
+**414.** The request target is longer than the Node adapter's `maxUrlLength`
+(8 KB by default). Answered by the adapter before dispatch, so no hook runs and
+nothing is logged, and the connection is closed. The document carries `type`,
+`title`, `status` and `code` only: no `instance`, which would repeat the target
+being refused, and no `requestId`, because no request was ever made of it.
+
+The target also counts toward `maxHeaderSize` (8 KB), and a request past that is
+refused by Node itself, with 431 and no body. So with both defaults a target
+long enough for this is a 431 first; this is the limit that still holds once
+`maxHeaderSize` is raised for large cookies.
 
 ## ZEN_BODY_INVALID
 

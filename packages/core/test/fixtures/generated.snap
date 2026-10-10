@@ -149,14 +149,18 @@ return class Ctx {
     // against the twin's declaration order, so a field added to one and not the
     // other fails CI rather than quietly costing throughput.
     this.$negotiated = null
-    this.id = ''
+    this.$id = ''
     this.startTime = 0
     this.signal = signal
     this.aborted = false
     this.timedOut = false
-    this.log = env.log
+    // §31.1 — bound to the request on first read; see bindLog.
+    this.$log = null
   }
 
+  get id() { return this.$id }
+  set id(value) { this.$id = value; this.$log = null }
+  get log() { const l = this.$log; return l !== null ? l : (this.$log = bindLog(this)) }
   get path() { const v = this.$path; return v !== UNSET ? v : (this.$path = pathnameOf(this.raw.url)) }
   get params() { return this.$params }
   get query() { const v = this.$query; return v !== UNSET ? v : (this.$query = parseQuery(this.raw.url, this.env.maxQueryParams)) }
@@ -235,11 +239,15 @@ function finish(ctx, reply) {
   return reply
 }
 
-async function seg1(ctx) {
+function seg1(ctx) {
   let r
+  const out = d.handler(ctx)
+  if (out !== null && typeof out === 'object' && typeof out.then === 'function') return Promise.resolve(out).then((v) => k1(ctx, v))
+  return k1(ctx, out)
+}
 
-  let out = d.handler(ctx)
-  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+function k1(ctx, out) {
+  let r
   let reply = d.finalize(out, false)
   return finish(ctx, reply)
 }
@@ -249,7 +257,7 @@ async function seg0(ctx) {
 
   r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
 
-  return d.steps[1](ctx, function () { return seg1(ctx) })
+  return d.steps[1](ctx, async function () { return seg1(ctx) })
 }
 
 return seg0
@@ -334,13 +342,22 @@ function finish(ctx, reply) {
   return reply
 }
 
-async function seg1(ctx) {
+function seg1(ctx) {
   let r
+  const s1 = d.validators[0](ctx)
+  if (s1 !== undefined && typeof s1.then === 'function') return Promise.resolve(s1).then(() => k1(ctx))
+  return k1(ctx)
+}
 
-  { const vr = d.validators[0](ctx); if (vr !== undefined && typeof vr.then === 'function') await vr }
+function k1(ctx) {
+  let r
+  const out = d.handler(ctx)
+  if (out !== null && typeof out === 'object' && typeof out.then === 'function') return Promise.resolve(out).then((v) => k2(ctx, v))
+  return k2(ctx, out)
+}
 
-  let out = d.handler(ctx)
-  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+function k2(ctx, out) {
+  let r
   let reply = d.finalize(out, false)
   return finish(ctx, reply)
 }
@@ -350,7 +367,7 @@ async function seg0(ctx) {
 
   r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
 
-  return d.steps[1](ctx, function () { return seg1(ctx) })
+  return d.steps[1](ctx, async function () { return seg1(ctx) })
 }
 
 return seg0
@@ -363,11 +380,15 @@ function finish(ctx, reply) {
   return reply
 }
 
-async function seg1(ctx) {
+function seg1(ctx) {
   let r
+  const out = d.handler(ctx)
+  if (out !== null && typeof out === 'object' && typeof out.then === 'function') return Promise.resolve(out).then((v) => k1(ctx, v))
+  return k1(ctx, out)
+}
 
-  let out = d.handler(ctx)
-  if (out !== null && typeof out === "object" && typeof out.then === "function") out = await out
+function k1(ctx, out) {
+  let r
   let reply = d.finalize(out, false)
   return finish(ctx, reply)
 }
@@ -379,7 +400,7 @@ async function seg0(ctx) {
 
   r = d.steps[0](ctx); if (r !== undefined) return finish(ctx, d.finalize(r, true))
 
-  return d.steps[1](ctx, function () { return seg1(ctx) })
+  return d.steps[1](ctx, async function () { return seg1(ctx) })
 }
 
 return seg0
@@ -442,20 +463,29 @@ async function seg0(ctx) {
 return seg0
 
 // ─── pipeline:POST_/hooked/echo ────────────────────────────────────────────
-async function finish(ctx, reply) {
+function finish(ctx, reply) {
   reply = d.steps[2](ctx, reply)
+  let p = d.payloadOf(reply)
+  if (p === d.NO_PAYLOAD) return k1(ctx, reply)
+  const s2 = d.hooks.onSerialize[0](ctx, p)
+  if (s2 !== null && typeof s2 === 'object' && typeof s2.then === 'function') return Promise.resolve(s2).then((v) => k2(ctx, reply, p, v))
+  return k2(ctx, reply, p, s2)
+}
 
-  { let p = d.payloadOf(reply)
-    if (p !== d.NO_PAYLOAD) {
-      { let t = d.hooks.onSerialize[0](ctx, p)
-        if (t !== null && typeof t === 'object' && typeof t.then === 'function') t = await t
-        if (t !== undefined) p = t }
-      reply = d.replacePayload(reply, p) } }
+function k2(ctx, reply, p, s2) {
+  if (s2 !== undefined) p = s2
+  reply = d.replacePayload(reply, p)
+  return k1(ctx, reply)
+}
 
-  { let sr = d.hooks.onSend[0](ctx, reply)
-    if (sr !== null && typeof sr === 'object' && typeof sr.then === 'function') sr = await sr
-    if (sr !== undefined) reply = sr }
+function k1(ctx, reply) {
+  const s3 = d.hooks.onSend[0](ctx, reply)
+  if (s3 !== null && typeof s3 === 'object' && typeof s3.then === 'function') return Promise.resolve(s3).then((v) => k3(ctx, reply, v))
+  return k3(ctx, reply, s3)
+}
 
+function k3(ctx, reply, s3) {
+  if (s3 !== undefined) reply = s3
   reply = d.attachSerializer(ctx, reply, d.serialize)
   return reply
 }
@@ -508,19 +538,29 @@ async function seg0(ctx) {
 return seg0
 
 // ─── pipeline:GET_/hooked/plain ────────────────────────────────────────────
-async function finish(ctx, reply) {
+function finish(ctx, reply) {
   reply = d.steps[2](ctx, reply)
+  let p = d.payloadOf(reply)
+  if (p === d.NO_PAYLOAD) return k1(ctx, reply)
+  const s2 = d.hooks.onSerialize[0](ctx, p)
+  if (s2 !== null && typeof s2 === 'object' && typeof s2.then === 'function') return Promise.resolve(s2).then((v) => k2(ctx, reply, p, v))
+  return k2(ctx, reply, p, s2)
+}
 
-  { let p = d.payloadOf(reply)
-    if (p !== d.NO_PAYLOAD) {
-      { let t = d.hooks.onSerialize[0](ctx, p)
-        if (t !== null && typeof t === 'object' && typeof t.then === 'function') t = await t
-        if (t !== undefined) p = t }
-      reply = d.replacePayload(reply, p) } }
+function k2(ctx, reply, p, s2) {
+  if (s2 !== undefined) p = s2
+  reply = d.replacePayload(reply, p)
+  return k1(ctx, reply)
+}
 
-  { let sr = d.hooks.onSend[0](ctx, reply)
-    if (sr !== null && typeof sr === 'object' && typeof sr.then === 'function') sr = await sr
-    if (sr !== undefined) reply = sr }
+function k1(ctx, reply) {
+  const s3 = d.hooks.onSend[0](ctx, reply)
+  if (s3 !== null && typeof s3 === 'object' && typeof s3.then === 'function') return Promise.resolve(s3).then((v) => k3(ctx, reply, v))
+  return k3(ctx, reply, s3)
+}
+
+function k3(ctx, reply, s3) {
+  if (s3 !== undefined) reply = s3
   return reply
 }
 

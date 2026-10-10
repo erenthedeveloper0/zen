@@ -23,6 +23,8 @@ import { orderRoutes } from './features/orders/index.ts'
 
 export interface AppOptions {
   readonly quiet?: boolean
+  /** Keep the compiled source after boot, for `generatedSource()` — `inspect.ts` and the tests read it. */
+  readonly inspect?: boolean
   /** Layer 8. A test states the environment instead of inheriting the machine's. */
   readonly env?: readonly EnvSource[]
   readonly overrides?: Readonly<Record<string, unknown>>
@@ -31,6 +33,7 @@ export interface AppOptions {
 export function makeApp(options: AppOptions = {}) {
   const app = zen({
     ...(options.quiet === true ? { logger: quiet() } : {}),
+    inspect: options.inspect === true,
     config,
     env: options.env ?? envSources(),
     ...(options.overrides === undefined ? {} : { overrides: options.overrides }),

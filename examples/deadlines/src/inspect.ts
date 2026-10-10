@@ -13,7 +13,7 @@ import { makeApp } from './app.ts'
  * arrays and the same `timeout` record the pipeline compiler consumed, so it
  * cannot describe a budget the dispatcher does not use.
  */
-const app = makeApp({ quiet: true })
+const app = makeApp({ quiet: true, inspect: true })
 await app.ready()
 
 const graph = app.graph()

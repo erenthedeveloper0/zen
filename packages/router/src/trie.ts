@@ -155,18 +155,36 @@ export function matchTrie(root: TrieNode, method: string, path: string): MatchRe
   const segments = splitAndDecode(path)
   if (segments === null) return null
 
-  const captures: string[] = []
-  const allowed = new Set<HttpMethod>()
+  // A capture list held between calls rather than allocated by each — `match`
+  // finishes before it returns, so one is enough. Taken while in use: a
+  // parameter type's `test` is the application's code, and one that matched a
+  // path itself would otherwise overwrite this call's captures.
+  let captures = spareCaptures
+  if (captures === null) captures = []
+  else spareCaptures = null
 
-  const entry = walk(root, segments, 0, captures, method as HttpMethod, allowed)
-  if (entry !== null) {
-    return { route: entry.route, params: entry.build(captures) }
-  }
-  if (allowed.size > 0) {
-    return { route: null, allowed: [...allowed] }
-  }
-  return null
+  // `Allow` is gathered only where a method actually missed — on a 405, or on a
+  // branch the walk backed out of — so a request that is served allocates no
+  // set for a refusal that is not happening.
+  const outer = mismatched
+  mismatched = null
+  const entry = walk(root, segments, 0, captures, method as HttpMethod)
+  const allowed = mismatched as Set<HttpMethod> | null
+  mismatched = outer
+
+  const result: MatchResult = entry !== null
+    ? { route: entry.route, params: entry.build(captures) }
+    : allowed !== null && allowed.size > 0 ? { route: null, allowed: [...allowed] } : null
+  captures.length = 0
+  spareCaptures = captures
+  return result
 }
+
+/** The capture list `matchTrie` reuses, or `null` while a call holds it. */
+let spareCaptures: string[] | null = []
+
+/** The methods a missed path does serve, for the current call's `Allow` — created on the first miss. */
+let mismatched: Set<HttpMethod> | null = null
 
 function walk(
   node: TrieNode,
@@ -174,7 +192,6 @@ function walk(
   index: number,
   captures: string[],
   method: HttpMethod,
-  allowed: Set<HttpMethod>,
 ): RouteEntry | null {
   if (index === segments.length) {
     const methods = node.methods
@@ -185,7 +202,7 @@ function walk(
         const get = methods.get('GET')
         if (get !== undefined) return get
       }
-      addAllowed(methods, allowed)
+      addAllowed(methods, mismatched ??= new Set())
     }
     return null
   }
@@ -196,7 +213,7 @@ function walk(
   if (node.statics !== null) {
     const child = node.statics.get(segment)
     if (child !== undefined) {
-      const hit = walk(child, segments, index + 1, captures, method, allowed)
+      const hit = walk(child, segments, index + 1, captures, method)
       if (hit !== null) return hit
     }
   }
@@ -206,7 +223,7 @@ function walk(
     for (const typed of node.typed) {
       if (!typed.type.test(segment)) continue
       captures.push(segment)
-      const hit = walk(typed.node, segments, index + 1, captures, method, allowed)
+      const hit = walk(typed.node, segments, index + 1, captures, method)
       if (hit !== null) return hit
       captures.pop()
     }
@@ -215,7 +232,7 @@ function walk(
   // 3 — untyped param
   if (node.param !== null) {
     captures.push(segment)
-    const hit = walk(node.param.node, segments, index + 1, captures, method, allowed)
+    const hit = walk(node.param.node, segments, index + 1, captures, method)
     if (hit !== null) return hit
     captures.pop()
   }
@@ -237,7 +254,7 @@ function walk(
           return get
         }
       }
-      addAllowed(methods, allowed)
+      addAllowed(methods, mismatched ??= new Set())
     }
   }
 

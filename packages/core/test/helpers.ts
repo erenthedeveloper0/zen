@@ -18,11 +18,17 @@ export function silentLogger(): Logger {
   return logger
 }
 
+/**
+ * `inspect: true` because so many suites read `generatedSource()` — the gates
+ * that a stage emits nothing, or a route compiles byte-identically. What an
+ * app keeps without it is asserted in `generated-source.test.ts`.
+ */
 export function makeApp<X = {}>(opts: Partial<ZenOptions> = {}): ZenApp<X> {
   return createApp<X>({
     router: new ZenRouter(),
     pathParser,
     logger: silentLogger(),
+    inspect: true,
     ...opts,
   })
 }

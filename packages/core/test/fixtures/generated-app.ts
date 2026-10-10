@@ -41,7 +41,7 @@ export async function generatedFixture(): Promise<ZenApp> {
     return (value) => [columns.join(','), ...(value as Array<Record<string, unknown>>).map((row) => columns.map((c) => String(row[c])).join(','))].join('\n')
   })
 
-  const app = createApp({ router: new ZenRouter(), pathParser, logger: silentLogger() }) as unknown as ZenApp
+  const app = createApp({ router: new ZenRouter(), pathParser, logger: silentLogger(), inspect: true }) as unknown as ZenApp
 
   app.decorate('tenant', Tenant)
   app.decorate('requestedAt', () => 0)

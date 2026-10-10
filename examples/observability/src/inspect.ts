@@ -13,7 +13,7 @@ import { makeApp } from './app.ts'
  * arrays the pipeline compiler consumed, so it cannot describe an order the
  * pipeline does not have.
  */
-const app = makeApp({ quiet: true })
+const app = makeApp({ quiet: true, inspect: true })
 await app.ready()
 
 const graph = app.graph()

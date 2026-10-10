@@ -4,6 +4,143 @@ All notable changes to Zen. The packages are versioned together; every entry
 applies to all six. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Zen is an alpha: until `1.0`, any prerelease may change the API.
 
+## [0.1.0-alpha.5] — 2026-10-09
+
+The hot path, measured. Every benchmark here until now compared Zen with
+itself — a feature against its absence — which is the right instrument for a
+zero-cost claim and cannot test the thesis. RFC §1.4 says Zen's per-request
+work should be within noise of a hand-written `http.createServer` handler doing
+the same job, "and if that is not true in benchmarks, the thesis has failed and
+we should say so". This release measures it, against `node:http`, Fastify, Hono
+and Express on Annex C's first six workloads, before and after each of the
+three fixes aimed at the request path — and says so: Zen serves 0.79–0.82× of
+`node:http` on every workload without I/O, where Fastify serves ~1.0×.
+[`benchmarks/results/competitors.md`](./benchmarks/results/competitors.md) has
+the numbers, the losses first.
+
+The fix that moved the number is the one the first run pointed at: a JSON body
+paid for a reviver it almost never needed, and the POST workload went from
+0.49× of `node:http` to 0.79×.
+
+### Added
+
+- **`benchmarks/competitors`** — Zen against `node:http`, Fastify 5, Hono 4 and
+  Express 5, on Annex C workloads 1–6: static JSON, a response schema, five
+  path parameters, a ~1 KB POST validated with Zod, ten middleware, and a
+  realistic chain (JWT, rate limit, Zod, a 5 ms stubbed query, ~2 KB out).
+  Correctness is checked before anything is timed. An npm project of its own,
+  with its own lockfile, so the frameworks it compares against never enter the
+  install the release publishes from. CI runs it as a smoke pass; it is not a
+  CI timing gate.
+- **Issue codes that survive a translated message** (I7, §11.2).
+  `registerIssueMapper(vendor, issue => code | undefined)` reads a library's own
+  issue fields — Zod's `code`, Valibot's `type`, ArkType's `code` — where the
+  code used to be guessed from English message text. The vocabulary is the
+  exported `IssueCode`: `required`, `type`, `format`, `min`, `max`, `custom`,
+  `invalid`. Every example's `shared/zod.ts` registers the Zod mapper, and
+  `examples/coercion` checks real Zod's codes in English and in Turkish.
+- **Ingress limits in the Node adapter** (§4.2 stage 2, §19.2):
+  `maxHeaderSize` (8 KB), `maxUrlLength` (8 KB) and `maxRequestsPerSocket`
+  (0, no limit). A request target past `maxUrlLength` is answered 414
+  `ZEN_URI_TOO_LONG` before dispatch — no hook runs, no context is built — with
+  `Connection: close`. A limit that is not a whole number is
+  `ZEN_CONFIG_INVALID` when the adapter is made.
+- **`inspect: true`** keeps every compiled unit's source after boot, for
+  `app.generatedSource()` (below). `dev: true` implies it.
+- `explainRoute()` prints a `sync path` row — whether a request on the route can
+  finish without a promise, and if not, which member makes it wait.
+  `describeSyncPath()` and `MAX_SPECULATION` are exported.
+- Two codes: `ZEN_URI_TOO_LONG` (414) and `ZEN_INSPECT_DISABLED`.
+
+### Changed
+
+- **Headers larger than 8 KB are refused with 431.** The Node adapter now sets
+  `maxHeaderSize` to §19.2's 8 KB; Node's own default, which applied until now,
+  is 16 KB. The request line counts toward it. An application whose clients
+  send large cookies or tokens restores the old allowance with
+  `nodeAdapter({ maxHeaderSize: 16_384 })`.
+- **`app.generatedSource()` throws `ZEN_INSPECT_DISABLED`** on an app built
+  without `inspect: true` or `dev: true`. Every unit's source and externals used
+  to be kept for the life of the process: measured on Node 24 at 10,000 routes
+  with a validator, a middleware and a hook each, 54 MB of heap after boot with
+  them and 37 MB without — 31% less. It refuses rather than returning an empty
+  list, because an empty list is also what "nothing was compiled for this"
+  looks like, and the zero-cost gates read exactly that. `CodeGen` keeps units
+  only with `retain: true`, and `CodeGen.units` refuses likewise.
+- **`ctx.log` is bound to the request** (§7.2, §31.1): a child of the
+  application's logger with `requestId` and `route` (the path template), made
+  on its first read and made again when `ctx.id` changes — so a line written
+  after `requestId()` adopts an inbound id carries that id. A request that never
+  logs makes no child; one that does calls `child()` once, ~40–60 ns with the
+  default logger. `ctx.id` is an accessor on both context twins; the field
+  count, and so the hidden class, is unchanged.
+- **A missing value's issue code is `required`**, whatever the library calls
+  it: Zen decides it from the input it validated, before any mapper is asked.
+  With no mapper registered, every other code is still inferred from the
+  message, as before.
+- **Plain functions reach the synchronous pipeline** (§8.4). A function that is
+  neither `async` nor marked with `markSync()` is a speculation point: the
+  call, a thenable test, and the rest of the route as a continuation that runs
+  at once when no promise appeared. A route of plain functions with no `around`
+  and no body to read compiles with no `async` and no `await`. A segment
+  holding an `async` member compiles as before, byte for byte, and
+  `pipeline: 'simple'` still opts out. More than 32 speculation points in one
+  chain compile to the async form, which bounds the stack.
+
+### Performance
+
+Measured on one machine (Apple M5, Node 24), 5 runs of 10 s after a 3 s
+warm-up — shorter than Annex C's protocol, on a laptop rather than a dedicated
+host, with the load generator on the same machine. Ratios within a run are the
+claim; absolute numbers are this machine's.
+
+- **JSON intake.** A body that cannot hold a key named `__proto__`,
+  `constructor` or `prototype` — no such word and no `\u` escape anywhere in it
+  — is parsed with no reviver; any other body is revived exactly as before.
+  The depth limit is checked by visiting containers only, with the same
+  verdict, held differentially over 3,000 random nestings. On a clean ~1 KB
+  body, intake is 5.8× faster than alpha.4 on Node 22 and 5.5× on Node 24 —
+  gated at 5× in `benchmarks/request-path` — and 3.5× on Node 26, whose V8 at
+  times optimises the reviver path itself to under 4× a bare parse, which puts
+  5× out of reach there; that run publishes its figure rather than gating it.
+  End to end, the Zod POST workload went from 23,394 to 37,363 req/s.
+- **Speculative sync** made no difference to throughput that this benchmark can
+  resolve: the dispatcher around the pipeline is still an `async` function and
+  awaits what the pipeline returns, so a request still costs that promise.
+- **The router** builds the `Allow` set only on a miss — a served match
+  constructs no `Set`, gated structurally — and reuses one capture list,
+  guarded against a parameter type that matches a path itself. No end-to-end
+  difference beyond noise either.
+- **What it costs in code.** A speculative pipeline is longer than the `async`
+  one it replaces — each speculation point ends a function and starts the
+  next: a minimal route's pipeline went from 226 to 314 bytes of generated
+  source, and the context class from 4,468 to 4,706 for the `id` and `log`
+  accessors. Paid once, at boot; the byte-identical gates still hold, since
+  they compare two builds of the same compiler.
+
+### Documentation
+
+- §3.4, §4.2 stages 0 and 2, §8.4 (and the trampoline, corrected: the stack is
+  bounded at compile time, not by yielding), §11.2 with the Zod, Valibot and
+  ArkType mappers, §19.2's header and URL rows, §31.1, §28.8's four rows,
+  Annex B, the README's status lists and "The idea" listing — now the output of
+  plain functions, with no `markSync()` — and the Node adapter's options table.
+- The Valibot and ArkType mappers were checked by hand against Valibot 1.5.0
+  and ArkType 2.2.7, through a Zen app; the repository installs neither, so CI
+  does not hold them.
+
+### Repository
+
+- A tenth CI job: the competitor harness's smoke pass.
+- `benchmarks/request-path` section 6: the hot path's gates and costs.
+- Tests: a 2,000-text JSON differential against the reviver, plus the depth
+  walk's; issue codes through a vendor seam and real Zod in two languages;
+  the bound logger on both twins; the router's reused state; ingress limits
+  over raw sockets; what an app keeps after boot.
+- The claims ledger: 48 claims, 5 admitted gaps. `ctx-log` and `issue-codes`
+  closed and are claims now; `ingress-guards` and `unit-retention` are new.
+- Fifteen negative controls, one per new behaviour — 144 in all.
+
 ## [0.1.0-alpha.4] — 2026-10-08
 
 Nothing silent. An audit of the alpha.3 build wrote fourteen probes, each a
@@ -618,6 +755,7 @@ Found by the first push to CI, on Windows:
   rather than `string`, because its `parse` may return anything.
 - `Router.analyze` takes the same options as `Router.build`.
 
+[0.1.0-alpha.5]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.2

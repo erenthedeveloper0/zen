@@ -33,6 +33,7 @@ const DRAIN_MS = 300
 
 const app = zen({
   logger: quiet(),
+  inspect: true,
   timeout: { default: '30s', header: 'x-request-timeout' },
   adapter: nodeAdapter({ drainDelay: DRAIN_MS }),
   // ttl 0 so each poll re-probes: the smoke test flips a dependency and expects

@@ -25,7 +25,7 @@ import { makeApp } from './app.ts'
  *   - `/features` coerces a *header* into a list, which is the default and the
  *     only place a default array style is doing real work.
  */
-const app = makeApp({ quiet: true })
+const app = makeApp({ quiet: true, inspect: true })
 await app.ready()
 
 const graph = app.graph()

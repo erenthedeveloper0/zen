@@ -59,6 +59,9 @@ export const Codes = {
   CAPABILITY_UNAVAILABLE: 'ZEN_CAPABILITY_UNAVAILABLE',
   APP_FROZEN: 'ZEN_APP_FROZEN',
   APP_NOT_READY: 'ZEN_APP_NOT_READY',
+  /** `generatedSource()` on an app built without `inspect` or `dev`, which
+   *  keeps no generated source after boot — §3.4. */
+  INSPECT_DISABLED: 'ZEN_INSPECT_DISABLED',
   BOOT_FAILED: 'ZEN_BOOT_FAILED',
 
   // ── Request-time ──────────────────────────────────────────────────────────
@@ -66,6 +69,9 @@ export const Codes = {
   /** A malformed request that is not a body problem — an invalid `Host`, say. */
   BAD_REQUEST: 'ZEN_BAD_REQUEST',
   BODY_TOO_LARGE: 'ZEN_BODY_TOO_LARGE',
+  /** The request target is longer than the adapter accepts — answered at
+   *  ingress, before dispatch (§4.2 stage 2, §19.2). */
+  URI_TOO_LONG: 'ZEN_URI_TOO_LONG',
   /** The body did not parse as its content type, or nests past the limit. */
   BODY_INVALID: 'ZEN_BODY_INVALID',
   /** Well-formed, and refused on its meaning — `UnprocessableEntity`. */

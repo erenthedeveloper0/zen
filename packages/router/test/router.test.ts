@@ -338,3 +338,70 @@ describe('two parameter types in one position (§5.5, §5.6)', () => {
     assert.equal(forwards, '/v/:x<alpha>', 'the type whose name sorts first')
   })
 })
+
+describe('a match allocates only what its answer needs (§18.3)', () => {
+  // `matchTrie` reuses one capture list between calls and builds the `Allow`
+  // set only on a miss. Both are module state, so what has to hold is that no
+  // call can see another's: not the one before it, and not one made from
+  // inside it by a parameter type's `test`.
+  const ROUTES: Array<[HttpMethod, string]> = [
+    ['GET', '/users/:id'], ['DELETE', '/users/:id'], ['GET', '/users/:id/posts/:post'],
+    ['GET', '/files/*path'], ['GET', '/a/b'], ['PUT', '/:x/c'], ['POST', '/a/c/d'],
+  ]
+
+  test('consecutive matches carry no captures or allowed methods over', () => {
+    for (const compile of [true, false]) {
+      const router = build(ROUTES, compile)
+      const long = router.match('GET', '/users/1/posts/2')
+      const short = router.match('GET', '/users/3')
+      assert.ok(long !== null && long.route !== null && short !== null && short.route !== null)
+      assert.deepEqual({ ...long.params }, { id: '1', post: '2' })
+      assert.deepEqual({ ...short.params }, { id: '3' })
+
+      const refused = router.match('PATCH', '/users/3')
+      const served = router.match('GET', '/files/a/b')
+      const unknown = router.match('GET', '/nowhere/at/all')
+      const refusedAgain = router.match('PATCH', '/a/c')
+      assert.ok(refused !== null && refused.route === null)
+      assert.deepEqual([...refused.allowed].sort(), ['DELETE', 'GET', 'HEAD'])
+      assert.ok(served !== null && served.route !== null)
+      assert.deepEqual({ ...served.params }, { path: 'a/b' })
+      assert.equal(unknown, null, 'a path nothing serves is a 404, not a 405 left over from the last miss')
+      assert.ok(refusedAgain !== null && refusedAgain.route === null)
+      assert.deepEqual([...refusedAgain.allowed], ['PUT'], 'only this path\'s methods')
+    }
+  })
+
+  test('a backtracked branch still contributes its methods to Allow', () => {
+    for (const compile of [true, false]) {
+      // `/a/c` walks the static `a` first, misses, and backs out to `/:x/c`.
+      const refused = build([['GET', '/a/c/d'], ['GET', '/a/:y'], ['PUT', '/:x/c']], compile).match('DELETE', '/a/c')
+      assert.ok(refused !== null && refused.route === null)
+      assert.deepEqual([...refused.allowed].sort(), ['GET', 'HEAD', 'PUT'])
+    }
+  })
+
+  test('a parameter type that matches a path itself does not disturb the outer match', () => {
+    let inner: ReturnType<ReturnType<typeof build>['match']> = null
+    let router!: ReturnType<typeof build>
+    const nested = {
+      name: 'nested',
+      test(segment: string) {
+        inner = router.match('PATCH', '/users/9')
+        return segment.startsWith('n')
+      },
+      parse: (segment: string) => segment,
+    }
+    const paramTypes = new Map([...BUILTIN_PARAM_TYPES, ['nested', nested]])
+    router = new ZenRouter().build(
+      [route('GET', '/users/:id'), route('DELETE', '/users/:id'), route('GET', '/n/:a/:b<nested>/:c')],
+      { paramTypes },
+    )
+    const outer = router.match('GET', '/n/1/n2/3')
+    assert.ok(outer !== null && outer.route !== null)
+    assert.deepEqual({ ...outer.params }, { a: '1', b: 'n2', c: '3' })
+    const innerResult = inner as ReturnType<typeof router.match>
+    assert.ok(innerResult !== null && innerResult.route === null)
+    assert.deepEqual([...innerResult.allowed].sort(), ['DELETE', 'GET', 'HEAD'])
+  })
+})

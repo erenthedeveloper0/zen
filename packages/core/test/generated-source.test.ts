@@ -2,7 +2,10 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { CodeGen, DEFAULT_CAPABILITIES, createApp } from '@erenthedeveloper0/zen-core'
+import { ZenRouter } from '@erenthedeveloper0/zen-router'
 import { generatedFixture, renderUnits } from './fixtures/generated-app.ts'
+import { pathParser, silentLogger } from './helpers.ts'
 
 /**
  * Generated-source snapshots.
@@ -48,5 +51,45 @@ describe('generated source', () => {
   it('covers every compiler', async () => {
     const names = (await generatedFixture()).generatedSource().map((unit) => unit.name.split(':')[0])
     for (const kind of ['context', 'params', 'pipeline', 'serializer', 'coercer']) assert.ok(names.includes(kind), `no ${kind} unit in ${[...new Set(names)].join(', ')}`)
+  })
+})
+
+describe('what an app keeps after boot (§3.4)', () => {
+  const build = (options: { inspect?: boolean; dev?: boolean } = {}) => {
+    const app = createApp({ router: new ZenRouter(), pathParser, logger: silentLogger(), ...options })
+    app.get('/users/:id<int>', (ctx) => ({ id: ctx.params.id }))
+    return app
+  }
+
+  it('keeps no generated source unless asked, and says so rather than answering with nothing', async () => {
+    const app = build()
+    await app.ready()
+    assert.equal((await app.inject('GET', '/users/7')).text(), '{"id":7}', 'the compiled code runs all the same')
+    assert.throws(() => app.generatedSource(), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, 'ZEN_INSPECT_DISABLED')
+      return true
+    })
+  })
+
+  it('keeps it with inspect: true, compact, and with dev: true, readable', async () => {
+    const inspected = build({ inspect: true })
+    const dev = build({ dev: true })
+    await inspected.ready()
+    await dev.ready()
+    const pipeline = (app: typeof inspected) => app.generatedSource().find((u) => u.name === 'pipeline:GET_/users/:id<int>')?.source ?? ''
+    assert.notEqual(pipeline(inspected), '')
+    assert.doesNotMatch(pipeline(inspected), /\/\/ /)
+    assert.match(pipeline(dev), /\/\/ /, 'dev source carries its comments')
+  })
+
+  it('a CodeGen refuses to list units it did not keep, and hands every unit to onEmit regardless', () => {
+    const emitted: string[] = []
+    const quiet = new CodeGen({ caps: DEFAULT_CAPABILITIES, onEmit: (unit) => { emitted.push(unit.name) } })
+    const kept = new CodeGen({ caps: DEFAULT_CAPABILITIES, retain: true })
+    for (const gen of [quiet, kept]) gen.materialise({ name: 'probe', source: 'return 1', externals: {} }, () => 1)
+    assert.equal(quiet.retains, false)
+    assert.throws(() => quiet.units, /keeps no units/)
+    assert.deepEqual(emitted, ['probe'])
+    assert.deepEqual(kept.units.map((u) => u.name), ['probe'])
   })
 })

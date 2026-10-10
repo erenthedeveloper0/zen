@@ -28,7 +28,7 @@ interface Fixture {
 
 function fixture(): Fixture {
   const reports: DeadlineReport[] = []
-  const app = makeApp({ quiet: true, requestTimeout: '400ms', onTimeout: (r) => reports.push(r) })
+  const app = makeApp({ quiet: true, inspect: true, requestTimeout: '400ms', onTimeout: (r) => reports.push(r) })
   return { app, reports }
 }
 

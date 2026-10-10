@@ -6,7 +6,7 @@
  *
  *     node scripts/show-generated.ts
  */
-import { zen, slot, markSync, type Context } from '@erenthedeveloper0/zen'
+import { zen, slot, type Context } from '@erenthedeveloper0/zen'
 
 const CurrentUser = slot<{ id: number }>('demo.user')
 
@@ -18,12 +18,14 @@ const quiet = {
 
 const app = zen({ dev: true, logger: quiet })
 
-app.use(markSync(function attachUser(ctx) { ctx.set(CurrentUser, { id: 1 }) }))
-app.use(markSync(function cors() {}))
+// Plain functions, as the README writes them: no `markSync()`. Each is a
+// speculation point (§8.4), so the listing is what an ordinary app compiles to.
+app.use(function attachUser(ctx) { ctx.set(CurrentUser, { id: 1 }) })
+app.use(function cors() {})
 app.around(async function timing(_ctx, next) { return next() })
-app.after(markSync(function auditLog(_ctx, reply) { return reply }))
+app.after(function auditLog(_ctx, reply) { return reply })
 
-app.get('/users/:id<int>', markSync((ctx: Context<{}, {}, '/users/:id<int>'>) => ({ id: ctx.params.id })))
+app.get('/users/:id<int>', (ctx: Context<{}, {}, '/users/:id<int>'>) => ({ id: ctx.params.id }))
 
 await app.ready()
 

@@ -116,7 +116,7 @@ function pipeline(hooks: HookPlan, middleware = 0, id = 'p'): (ctx: unknown) => 
 
 /** The emitted source for a spec, for the structural claims. */
 function sourceOf(spec: PipelineSpec): string {
-  const probe = new CodeGen({ caps: DEFAULT_CAPABILITIES })
+  const probe = new CodeGen({ caps: DEFAULT_CAPABILITIES, retain: true })
   compilePipeline(spec, probe)
   return probe.units[probe.units.length - 1]?.source ?? ''
 }
@@ -207,7 +207,7 @@ const verdict = (ratio: number, spread: number, inside: string, outside: string)
 type Build = (app: ReturnType<typeof createApp>) => void
 
 function buildApp(configure: Build, mode: 'optimized' | 'simple' = 'optimized') {
-  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, pipeline: mode })
+  const app = createApp({ router: new ZenRouter(), pathParser, logger: silent, pipeline: mode, inspect: true })
   configure(app)
   return app
 }

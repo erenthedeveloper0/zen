@@ -33,6 +33,7 @@
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { request } from 'node:http'
+import { connect } from 'node:net'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,7 +46,7 @@ const OAS = await import('@erenthedeveloper0/zen-openapi')
 const {
   zen, definePlugin, slot, token, markSync, jsonSchema, html, explainRoute, defineConfig, normaliseIssues,
   NoopLogger, BootError, ServiceUnavailable, DEFAULT_CAPABILITIES, NODE_CAPABILITIES, healthPlugin,
-  cors, rateLimit, nodeAdapter, resolvePlugins,
+  cors, rateLimit, nodeAdapter, resolvePlugins, registerIssueMapper,
 } = Z as Record<string, any>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,7 +59,7 @@ type Probe = () => Promise<Verdict> | Verdict
 const verdict = (ok: boolean, observed: string): Verdict => ({ ok, observed })
 
 const app = (opts: Record<string, unknown> = {}): any =>
-  zen({ logger: new NoopLogger(), lifecycle: false, env: {}, ...opts })
+  zen({ logger: new NoopLogger(), lifecycle: false, env: {}, inspect: true, ...opts })
 
 /** A Standard Schema with no shape — the validator alone. */
 const schema = (check: (v: any) => boolean, message = 'rejected by probe schema') => ({
@@ -111,6 +112,18 @@ function http(url: string, init: { method?: string; headers?: Record<string, str
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** One request over a bare socket, so no client adds headers or retries; resolves with the raw reply. */
+function exchange(url: string, text: string): Promise<string> {
+  return new Promise((resolve) => {
+    let reply = ''
+    const socket = connect(Number(new URL(url).port), '127.0.0.1', () => { socket.write(text) })
+    socket.on('data', (chunk) => { reply += chunk.toString('latin1') })
+    socket.on('error', () => resolve(reply))
+    socket.on('close', () => resolve(reply))
+    setTimeout(() => { socket.destroy(); resolve(reply) }, 2000)
+  })
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Claims — what the docs say is built
@@ -658,11 +671,89 @@ const CLAIMS: Readonly<Record<string, Probe>> = {
     const a = app()
     a.get('/marked', markSync(() => 'x'))
     a.get('/plain', () => 'x')
+    a.get('/async', async () => 'x')
     await a.ready()
     const source = (name: string) => a.generatedSource().find((u: any) => u.name === name)?.source ?? ''
-    const marked = !/async function/.test(source('pipeline:GET_/marked'))
-    const plain = /async function/.test(source('pipeline:GET_/plain'))
-    return verdict(marked && plain, `markSync route synchronous=${marked}; plain function on the async path=${plain}`)
+    const synchronous = (name: string) => source(name) !== '' && !/\basync\b|\bawait\b/.test(source(name))
+    const marked = synchronous('pipeline:GET_/marked')
+    const plain = synchronous('pipeline:GET_/plain')
+    const kept = /async function/.test(source('pipeline:GET_/async'))
+    return verdict(marked && plain && kept, `markSync route synchronous=${marked}; plain function synchronous=${plain}; async handler on the async path=${kept}`)
+  },
+
+  // (alpha.3 audit, probe 9 — a gap until 0.1.0-alpha.5)
+  'ctx-log': async () => {
+    const children: Array<Record<string, unknown>> = []
+    const base = new NoopLogger()
+    const logger = Object.assign(Object.create(Object.getPrototypeOf(base)), base, {
+      child(bindings: Record<string, unknown>) { children.push(bindings); return this },
+    })
+    const a = zen({ logger, lifecycle: false, env: {} })
+    let id = ''
+    a.get('/quiet', () => 'ok')
+    a.get('/users/:id', (ctx: any) => { id = ctx.id; ctx.log.info('one'); ctx.log.info('two'); return 'ok' })
+    await a.inject('GET', '/quiet')
+    const quiet = children.length
+    await a.inject('GET', '/users/7')
+    const made = children.slice(quiet)
+    const bound = made.length === 1 && made[0]?.['requestId'] === id && made[0]?.['route'] === '/users/:id'
+    return verdict(quiet === 0 && bound, `a request that never logs made ${quiet} children; one that logged twice made ${made.length}: ${JSON.stringify(made)}`)
+  },
+
+  // (alpha.3 audit, probe 11 — a gap until 0.1.0-alpha.5)
+  'issue-codes': async () => {
+    // A vendor whose issues carry a code of their own and a message no English
+    // heuristic can read, the way a localised library's do.
+    registerIssueMapper('claims-probe', (issue: any) => (issue.code === 'too_small' ? 'min' : undefined))
+    const vendor = {
+      '~standard': {
+        version: 1,
+        vendor: 'claims-probe',
+        validate: (value: any) => Number(value?.page) >= 1
+          ? { value }
+          : { issues: [{ message: 'Çok küçük: sayfa en az 1 olmalı', path: ['page'], code: 'too_small' }] },
+      },
+    }
+    const a = app()
+    a.get('/items', { query: vendor }, () => 'ok')
+    const present = (await a.inject('GET', '/items?page=0')).json().errors?.[0]?.code
+    const missing = (await a.inject('GET', '/items')).json().errors?.[0]?.code
+    const guessed = normaliseIssues([{ message: 'Too small: expected number to be >=1', path: ['page'] }], 'query')[0].code
+    return verdict(present === 'min' && missing === 'required', `mapped=${present}, missing=${missing}; with no mapper the message alone still reads as ${guessed}`)
+  },
+
+  'ingress-guards': async () => {
+    const roomy = zen({ logger: new NoopLogger(), lifecycle: false, env: {}, adapter: nodeAdapter({ maxHeaderSize: 32_768 }) })
+    const plain = app()
+    for (const a of [roomy, plain]) a.get('/*rest', () => 'ok')
+    const [r, p] = [await roomy.listen(0), await plain.listen(0)]
+    try {
+      const long = await exchange(r.url, `GET /${'a'.repeat(9000)} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`)
+      const cookie = await exchange(p.url, `GET /x HTTP/1.1\r\nHost: x\r\nCookie: c=${'c'.repeat(9000)}\r\nConnection: close\r\n\r\n`)
+      const fine = await exchange(p.url, 'GET /x HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+      const status = (reply: string) => reply.slice(9, 12)
+      const code = /"code":"(ZEN_[A-Z_]+)"/.exec(long)?.[1]
+      return verdict(status(long) === '414' && code === 'ZEN_URI_TOO_LONG' && status(cookie) === '431' && status(fine) === '200',
+        `9 KB target with room for headers → ${status(long)} ${code}; 9 KB cookie on the defaults → ${status(cookie)}; ordinary → ${status(fine)}`)
+    } finally {
+      await roomy.close()
+      await plain.close()
+    }
+  },
+
+  'unit-retention': async () => {
+    const production = zen({ logger: new NoopLogger(), lifecycle: false, env: {} })
+    production.get('/a/:b', () => 'ok')
+    await production.ready()
+    let refused = ''
+    try { production.generatedSource() } catch (error) { refused = (error as { code?: string }).code ?? '' }
+    const served = (await production.inject('GET', '/a/1')).text()
+    const inspected = app()
+    inspected.get('/a/:b', () => 'ok')
+    await inspected.ready()
+    const kept = inspected.generatedSource().length
+    return verdict(refused === 'ZEN_INSPECT_DISABLED' && served === 'ok' && kept > 0,
+      `without inspect: generatedSource() → ${refused || 'answered'}, and the route serves "${served}"; with inspect: ${kept} units kept`)
   },
 }
 
@@ -700,30 +791,12 @@ const GAPS: Readonly<Record<string, Probe>> = {
     return verdict(!units.some((n: string) => /router|matcher/.test(n)), units.join(', '))
   },
 
-  // (alpha.3 audit, probe 9)
-  'ctx-log': async () => {
-    let child = 0
-    const base = new NoopLogger()
-    const logger = Object.assign(Object.create(Object.getPrototypeOf(base)), base, { child() { child++; return this } })
-    const a = zen({ logger, lifecycle: false, env: {} })
-    let same = false
-    a.get('/', (ctx: any) => { same = ctx.log === logger; return 'ok' })
-    await a.inject('GET', '/')
-    return verdict(same && child === 0, `same logger=${same}, child() calls=${child}`)
-  },
-
   // (alpha.3 audit, probe 10)
   'whatwg-response': async () => {
     const a = app()
     a.get('/', () => new Response('hello', { status: 201 }))
     const status = (await a.inject('GET', '/')).status
     return verdict(status !== 201, `status=${status}`)
-  },
-
-  // (alpha.3 audit, probe 11)
-  'issue-codes': () => {
-    const issues = normaliseIssues([{ message: 'Too small: expected number to be >=1', path: ['page'] }], 'query')
-    return verdict(issues[0].code !== 'min', `code=${issues[0].code} (a mapper would say min)`)
   },
 
   // (alpha.3 audit, probe 14)

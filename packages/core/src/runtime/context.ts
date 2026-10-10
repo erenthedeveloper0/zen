@@ -116,12 +116,18 @@ export class PlainContext {
    * same media type, so this is a reference store and never an allocation.
    */
   $negotiated: Representation | null = null
-  id = ''
+  /** `ctx.id`'s value. Behind an accessor so that changing it rebinds `ctx.log`. */
+  $id = ''
   startTime = 0
   signal: AbortSignal
   aborted = false
   timedOut = false
-  log: Logger
+  /**
+   * `ctx.log`, once something has read it: the application's logger bound to
+   * this request — `null` until then, and again whenever `ctx.id` changes. In
+   * the position the plain `log` field held, so neither twin's shape moved (I2).
+   */
+  $log: Logger | null = null
 
   constructor(
     raw: RawRequest,
@@ -140,7 +146,22 @@ export class PlainContext {
     this.$s = new Array(slotCount).fill(undefined) as unknown[]
     this.$deadline = deadline
     this.signal = signal
-    this.log = env.log
+  }
+
+  // ── identity (§7.2) ───────────────────────────────────────────────────────
+  get id(): string {
+    return this.$id
+  }
+
+  /** The dispatcher assigns it, and `requestId()` may adopt an inbound one — either way `ctx.log` follows. */
+  set id(value: string) {
+    this.$id = value
+    this.$log = null
+  }
+
+  /** §7.2, §31.1 — see {@link bindLog}. */
+  get log(): Logger {
+    return (this.$log ??= bindLog(this))
   }
 
   // ── lazy, memoised request data ───────────────────────────────────────────
@@ -314,7 +335,7 @@ export class PlainContext {
  * added here fails the suite rather than becoming shadowable.
  */
 export const CONTEXT_MEMBERS: ReadonlySet<string> = new Set([
-  // fields, in declaration order
+  // fields, in declaration order — `id` and `log` as the accessors over `$id` and `$log`
   'raw', 'route', 'env', 'method', 'id', 'startTime', 'signal', 'aborted', 'timedOut', 'log',
   // lazy request data
   'path', 'params', 'query', 'headers', 'cookies', 'body', 'url', 'host', 'secure', 'protocol', 'ip', 'ips',
@@ -326,6 +347,24 @@ export const CONTEXT_MEMBERS: ReadonlySet<string> = new Set([
   // the language's own
   'constructor', '__proto__', 'prototype', 'toString', 'valueOf', 'hasOwnProperty', 'then',
 ])
+
+/**
+ * `ctx.log` — rfcs/0001 §7.2, §31.1: the application's logger, bound to the
+ * request it is read in.
+ *
+ * Every line a handler writes then carries `requestId` and `route` — the route
+ * *template*, so the field has the cardinality of the route table rather than
+ * of the URLs — the same two fields the framework's own error lines carry, so
+ * a request's lines and its failure share a key. Made on the first read, so a
+ * request that never logs pays nothing, and one that does pays one `child()`;
+ * dropped when `ctx.id` changes, so an inbound id `requestId()` adopts reaches
+ * every line written after it.
+ *
+ * Shared by both context twins, so they cannot bind differently.
+ */
+export function bindLog(ctx: { readonly env: ContextEnv; readonly $id: string; readonly route: RouteInfo | null }): Logger {
+  return ctx.env.log.child({ requestId: ctx.$id, route: ctx.route === null ? null : ctx.route.path })
+}
 
 /**
  * The client address in an `X-Forwarded-For` value — §19.4.

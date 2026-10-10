@@ -39,10 +39,19 @@
  *      path, published whichever way they come out: the seal check on every
  *      `ctx.res` staging call, the protocol check `ctx.set` now makes for an
  *      object value, and the store at egress that seals the builder.
+ *   6. **`0.1.0-alpha.5` — the hot path.** Gates first: a plain-arrow handler
+ *      compiles with no `async` and no `await` (§8.4), a clean JSON body is
+ *      parsed with no reviver (§19.5), and a served match builds no `Set`.
+ *      Then JSON intake on a clean ~1 KB body against `0.1.0-alpha.4`'s
+ *      parser, verbatim: gated at 1.5× a bare decode-and-parse everywhere, and
+ *      at 5× faster than before wherever 5× is reachable — that needs a
+ *      reviver costing at least 6× a bare parse, which Node 22 and 24 do and
+ *      Node 26's V8 at times does not. Then what a request pays for `ctx.log`
+ *      on its first read, and the adapter's URL-length guard.
  */
 import {
   createApp, jsonSchema, markSync, pathnameOf, slot, token, trackIntrinsic, CodeGen, compileContext,
-  DEFAULT_CAPABILITIES, NoopLogger, ZenContainer,
+  DEFAULT_CAPABILITIES, NoopLogger, ZenContainer, ConsoleLogger, jsonParser, BODY_DEFAULTS, isForbiddenKey,
   type Logger, type RawRequest, type ZenApp,
 } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
@@ -128,7 +137,7 @@ const pass = (message: string): void => {
   console.log(`     ✔ ${message}`)
 }
 
-const makeApp = (): ZenApp => createApp({ router: new ZenRouter(), pathParser, logger: silent }) as unknown as ZenApp
+const makeApp = (): ZenApp => createApp({ router: new ZenRouter(), pathParser, logger: silent, inspect: true }) as unknown as ZenApp
 
 const source = (app: ZenApp, name: string): string => {
   const unit = app.generatedSource().find((u) => u.name === name)
@@ -265,7 +274,9 @@ console.log('\n  The request path after the pre-release fixes\n')
   const app = makeApp()
   app.around(async (_ctx, next) => next())
   app.get('/sync', markSync(() => 'ok'))
-  app.get('/maybe', () => 'ok')
+  // An `async` handler, not a plain one: since 0.1.0-alpha.5 a plain function
+  // is speculated synchronous (§8.4), so it would measure the sync arm twice.
+  app.get('/async', async () => 'ok')
   await app.ready()
   const bare = makeApp()
   bare.get('/sync', markSync(() => 'ok'))
@@ -274,7 +285,7 @@ console.log('\n  The request path after the pre-release fixes\n')
   const unwrapped = await compare(() => bare.inject('GET', '/sync'), () => app.inject('GET', '/sync'))
   console.log(`     no around                            ${unwrapped.a.toFixed(2).padStart(6)} µs`)
   console.log(`     around, synchronous downstream       ${unwrapped.b.toFixed(2).padStart(6)} µs   ${verdict(unwrapped.a, unwrapped.b, 'µs', unwrapped.a * 0.05)}  (all of around: closure, async hop, next())`)
-  const shapes = await compare(() => app.inject('GET', '/maybe'), () => app.inject('GET', '/sync'))
+  const shapes = await compare(() => app.inject('GET', '/async'), () => app.inject('GET', '/sync'))
   console.log(`     around, async downstream             ${shapes.a.toFixed(2).padStart(6)} µs`)
   console.log(`     around, synchronous downstream       ${shapes.b.toFixed(2).padStart(6)} µs   ${verdict(shapes.a, shapes.b, 'µs', shapes.a * 0.05)}  (the async next() wrapper)`)
   console.log('     the wrapper costs what an async downstream already cost — and only an around over a sync one pays it\n')
@@ -344,7 +355,7 @@ console.log('\n  The request path after the pre-release fixes\n')
   const plainSchema = makeApp()
   plainSchema.get('/u', { response: { 200: shape() } }, () => ({ id: 1, hash: 'h' }) as never)
   await plainSchema.ready()
-  const flagged = createApp({ router: new ZenRouter(), pathParser, logger: new NoopLogger() }) as unknown as ZenApp
+  const flagged = createApp({ router: new ZenRouter(), pathParser, logger: new NoopLogger(), inspect: true }) as unknown as ZenApp
   flagged.get('/u', { response: { 200: shape('password') } }, () => ({ id: 1, hash: 'h' }) as never)
   await flagged.ready()
   if (source(plainSchema, 'serializer:GET /u#200') === source(flagged, 'serializer:GET /u#200')) {
@@ -406,6 +417,170 @@ console.log('\n  The request path after the pre-release fixes\n')
   // context already has.
   const store = compareSync(() => { const ctx = fresh(); return ctx }, () => { const ctx = fresh(); ctx.$stage = SEALED; return ctx }, 200_000)
   console.log(`     sealing at egress                      ${(store.b - store.a).toFixed(1).padStart(6)} ns   ${Math.abs(store.b - store.a) <= Math.max(0.5, store.a * 0.05) ? 'inside noise' : ''}  (one store, no allocation)`)
+  console.log('')
+}
+
+// ── 6. 0.1.0-alpha.5 ────────────────────────────────────────────────────────
+{
+  console.log('  6. 0.1.0-alpha.5 — the hot path  (gates)\n')
+
+  // §8.4 — a plain function reaches the synchronous pipeline unmarked.
+  const plain = makeApp()
+  plain.get('/plain', () => ({ hello: 'world' }))
+  plain.get('/async', async () => ({ hello: 'world' }))
+  plain.get('/later', () => Promise.resolve('later'))
+  await plain.ready()
+  const plainSource = source(plain, 'pipeline:GET_/plain')
+  if (!/\basync\b/.test(plainSource) && !/\bawait\b/.test(plainSource)) {
+    pass('a plain-arrow handler compiles with no async and no await')
+  } else {
+    fail('a plain-arrow handler still compiles to async code')
+  }
+  if (/async function/.test(source(plain, 'pipeline:GET_/async'))) pass('an async handler keeps the async path it always had')
+  else fail('an async handler lost its async path')
+  const later = await plain.inject('GET', '/later')
+  if (later.status === 200 && later.text() === 'later') pass('a plain function that returns a promise is awaited where it returns one')
+  else fail(`a plain function returning a promise answered ${later.status} ${later.text()}`)
+
+  // §19.5 — a body that cannot carry a forbidden key is parsed without a reviver.
+  const order = JSON.stringify({
+    customer: { id: 'c_8f14e45fceea167a5a36dedd4bea2543', email: 'ada@example.com', name: 'Ada Lovelace' },
+    lines: Array.from({ length: 12 }, (_, i) => ({ sku: `SKU-${1000 + i}`, qty: i + 1, unitPrice: 12.5 + i, note: 'gift wrap' })),
+    shipping: { street: '12 Analytical Row', city: 'London', postcode: 'EC1A 1BB', country: 'GB' },
+    coupon: 'AUTUMN-2026',
+  })
+  const clean = new TextEncoder().encode(order)
+  const escaped = new TextEncoder().encode(order.replace('"Ada Lovelace"', '"\\u0041da Lovelace"'))
+  const options = { ...BODY_DEFAULTS }
+  const parse = JSON.parse
+  let revived = 0
+  JSON.parse = ((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+    if (reviver !== undefined) revived++
+    return parse(text, reviver)
+  }) as typeof JSON.parse
+  try {
+    jsonParser(clean, null as never, options)
+    const cleanRevived = revived
+    jsonParser(escaped, null as never, options)
+    if (cleanRevived === 0 && revived === 1) pass('a clean body is parsed with no reviver, and an escaped one still with it')
+    else fail(`revivers: clean body ${cleanRevived}, escaped body ${revived - cleanRevived}`)
+  } finally {
+    JSON.parse = parse
+  }
+
+  // §5.6 — a served match builds no Set; only a refusal gathers `Allow`.
+  const record = (method: 'GET' | 'DELETE', path: string) => {
+    const parsed = parsePath(path)
+    return {
+      id: `${method} ${parsed.path}`, name: undefined, method, path: parsed.path, segments: parsed.segments,
+      schema: {}, handler: () => undefined, middleware: [], meta: new Map(), collection: null, origin: undefined,
+    }
+  }
+  const matcher = new ZenRouter().build([record('GET', '/users/:a/:b/:c/:d/:e'), record('DELETE', '/users/:a/:b/:c/:d/:e')] as never)
+  const RealSet = globalThis.Set
+  let sets = 0
+  globalThis.Set = class CountedSet<T> extends RealSet<T> {
+    constructor(values?: Iterable<T> | null) { super(values); sets++ }
+  } as SetConstructor
+  let served = 0
+  let refused = 0
+  try {
+    for (let i = 0; i < 1000; i++) matcher.match('GET', '/users/1/2/3/4/5')
+    served = sets
+    matcher.match('PUT', '/users/1/2/3/4/5')
+    refused = sets - served
+  } finally {
+    globalThis.Set = RealSet
+  }
+  if (served === 0 && refused === 1) pass('a thousand served matches build no Set; the one refusal builds its Allow set')
+  else fail(`Sets built: ${served} across served matches, ${refused} for the refusal`)
+  console.log('')
+
+  console.log(`     costs on the request path (paired, median of ${REPS})\n`)
+
+  // §19.5 — the release's gate: JSON intake on a clean ~1 KB body, now and as
+  // it was. `before` is 0.1.0-alpha.4's `jsonParser`, verbatim but for the
+  // error class: every body revived, then walked value by value.
+  const decoder = new TextDecoder('utf-8', { fatal: false })
+  function protoStripper(this: unknown, key: string, value: unknown): unknown {
+    return isForbiddenKey(key) ? undefined : value
+  }
+  function assertDepth(value: unknown, max: number, depth = 0): void {
+    if (depth > max) throw new Error(`Body nesting exceeds the maximum depth of ${max}`)
+    if (typeof value !== 'object' || value === null) return
+    if (Array.isArray(value)) {
+      for (const item of value) assertDepth(item, max, depth + 1)
+      return
+    }
+    for (const key in value) assertDepth((value as Record<string, unknown>)[key], max, depth + 1)
+  }
+  const before = (bytes: Uint8Array, opts: { readonly maxDepth: number }): unknown => {
+    const text = decoder.decode(bytes)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text, protoStripper)
+    } catch (cause) {
+      throw new Error('Body is not valid JSON', { cause })
+    }
+    assertDepth(parsed, opts.maxDepth)
+    return parsed
+  }
+  if (JSON.stringify(before(clean, options)) !== JSON.stringify(jsonParser(clean, null as never, options))) {
+    fail('the two parsers disagree on the gate body')
+  }
+
+  const intake = compareSync(() => before(clean, options), () => jsonParser(clean, null as never, options), 50_000)
+  const bare = compareSync(() => JSON.parse(decoder.decode(clean)), () => jsonParser(clean, null as never, options), 50_000)
+  const speedup = intake.a / intake.b
+  const overhead = bare.b / bare.a
+  // The most removing the reviver can buy: what 0.1.0-alpha.4 paid against
+  // decoding and parsing with nothing else. Node 22 and 24 revive at six to
+  // seven times a bare parse; Node 26's V8 at times optimises the reviver
+  // path to under four, and then no intake could be 5× faster than it.
+  const ceiling = intake.a / bare.a
+  console.log(`     JSON intake, ${clean.length} B, 0.1.0-alpha.4      ${(intake.a / 1000).toFixed(2).padStart(6)} µs   (a reviver on every body)`)
+  console.log(`     JSON intake, ${clean.length} B, now                ${(intake.b / 1000).toFixed(2).padStart(6)} µs   ${speedup.toFixed(1)}× faster`)
+  console.log(`     decode + JSON.parse alone           ${(bare.a / 1000).toFixed(2).padStart(6)} µs   (intake now costs ${overhead.toFixed(2)}× that; the most it could gain was ${ceiling.toFixed(1)}×)`)
+  if (overhead <= 1.5) pass(`clean JSON intake costs at most 1.5× a bare decode and parse (${overhead.toFixed(2)}×)`)
+  else fail(`clean JSON intake costs ${overhead.toFixed(2)}× a bare decode and parse; the gate is 1.5×`)
+  if (ceiling < 6) {
+    console.log(`     – the 5× gate needs a reviver that costs 6× a bare parse; this runtime's costs ${ceiling.toFixed(1)}×, so 5× is out of reach and the ${speedup.toFixed(1)}× above is published, not gated`)
+  } else if (speedup >= 5) {
+    pass(`clean JSON intake is at least 5× faster than in 0.1.0-alpha.4 (${speedup.toFixed(1)}×)`)
+  } else {
+    fail(`clean JSON intake is only ${speedup.toFixed(1)}× faster than in 0.1.0-alpha.4; the gate is 5×`)
+  }
+  const careful = compareSync(() => before(escaped, options), () => jsonParser(escaped, null as never, options), 50_000)
+  console.log(`     …a body with one \\u escape, now      ${(careful.b / 1000).toFixed(2).padStart(6)} µs   ${verdict(careful.a, careful.b, 'ns', careful.a * 0.05).replace(/ ns/, ' ns over 0.1.0-alpha.4')}  (still revived: the careful path)`)
+
+  // §31.1 — ctx.log is a child made on the first read: the default logger's
+  // child() is what a request that logs now pays, once; one that never logs
+  // pays nothing.
+  const env = { log: new ConsoleLogger('fatal'), maxQueryParams: 100, trustProxy: false, container: new ZenContainer(), config: {} }
+  const raw: RawRequest = {
+    method: 'GET', url: '/', header: () => undefined, headerNames: () => [],
+    body: { kind: 'none', length: 0, read: async () => new Uint8Array(0), stream: async function* () {} },
+    remote: { address: '127.0.0.1', port: 0, family: 'IPv4' }, native: null,
+  }
+  const Ctx = compileContext({ decorations: [], slotCount: 8, codegen: new CodeGen({ caps: DEFAULT_CAPABILITIES }) })
+  const logs = compareSync(
+    () => new Ctx(raw, null, {}, env, new AbortController().signal),
+    () => { const ctx = new Ctx(raw, null, {}, env, new AbortController().signal); return ctx.log },
+    200_000,
+  )
+  console.log(`     a context that never logs              ${logs.a.toFixed(1).padStart(6)} ns`)
+  console.log(`     …and its first ctx.log read            ${logs.b.toFixed(1).padStart(6)} ns   ${verdict(logs.a, logs.b, 'ns', logs.a * 0.05)}  (ConsoleLogger.child, once per request)`)
+
+  // §4.2 stage 2 — the Node adapter's URL-length guard, alone: one property
+  // read and one comparison per request, on a target of ordinary length.
+  const message = { url: '/api/v2/orders/1234?expand=lines&page=2' }
+  const limit = 8192
+  let refusedTargets = 0
+  const guard = compareSync(
+    () => message,
+    () => { if ((message.url ?? '/').length > limit) refusedTargets++; return message },
+  )
+  console.log(`     the URL-length guard                   ${(guard.b - guard.a).toFixed(1).padStart(6)} ns   (one length compare; ${refusedTargets} refused)`)
   console.log('')
 }
 

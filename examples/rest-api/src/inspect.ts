@@ -9,7 +9,7 @@
 import { build } from './app.ts'
 import { UserRepoToken } from './services.ts'
 
-const app = build({ logger: quiet() })
+const app = build({ logger: quiet(), inspect: true })
 await app.ready()
 
 const units = app.generatedSource()
