@@ -1,6 +1,6 @@
 {
   "name": "@erenthedeveloper0/zen-middleware",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Zen first-party middleware: CORS, security headers, request ids and rate limiting, as hooks that also run on unmatched requests.",
   "keywords": [
     "cors",
@@ -52,7 +52,7 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@erenthedeveloper0/zen-core": "0.1.0-alpha.4"
+    "@erenthedeveloper0/zen-core": "0.1.0-alpha.5"
   },
   "peerDependencies": {
     "typescript": ">=5.0"

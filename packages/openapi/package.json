@@ -1,6 +1,6 @@
 {
   "name": "@erenthedeveloper0/zen-openapi",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Zen OpenAPI: the application graph as an OAS 3.1 document, $ref deduplication, breaking-change detection and a dependency-free viewer.",
   "keywords": [
     "openapi",
@@ -52,7 +52,7 @@
     "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
-    "@erenthedeveloper0/zen-core": "0.1.0-alpha.4"
+    "@erenthedeveloper0/zen-core": "0.1.0-alpha.5"
   },
   "peerDependencies": {
     "typescript": ">=5.0"
