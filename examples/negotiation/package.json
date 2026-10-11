@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@erenthedeveloper0/zen": "0.1.0-alpha.5",
+    "@erenthedeveloper0/zen": "0.2.0-alpha",
     "zod": "^4.6.5"
   },
   "scripts": {
