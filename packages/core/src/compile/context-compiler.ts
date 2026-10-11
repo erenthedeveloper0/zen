@@ -14,6 +14,7 @@ import {
 } from '../runtime/reply.ts'
 import { createSseChannel } from '../runtime/sse.ts'
 import { trackDisposal, trackIntrinsic } from '../primitives/disposal.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 export interface Decoration {
   readonly name: string
@@ -21,6 +22,8 @@ export interface Decoration {
   readonly slotIndex: number | null
   readonly accessor: ((ctx: unknown) => unknown) | null
   readonly source: string
+  /** Where `decorate()` was called (§5.1). Never read by the compiler. */
+  readonly origin?: SourceOrigin | undefined
 }
 
 export interface ContextClass {
@@ -38,6 +41,14 @@ export interface CompileContextOptions {
   readonly decorations: readonly Decoration[]
   readonly slotCount: number
   readonly codegen: CodeGen
+  /**
+   * §7.3's runtime half: the generated constructor ends with
+   * `Object.seal(this)` and request-derived values are frozen when read, so a
+   * stray `ctx.user = x` or `ctx.body.id = 7` throws in development instead
+   * of working until production. Off, the class is byte-identical to the one
+   * compiled before the option existed.
+   */
+  readonly dev?: boolean | undefined
 }
 
 /**
@@ -56,11 +67,13 @@ export interface CompileContextOptions {
  */
 export function compileContext(opts: CompileContextOptions): ContextClass {
   const { decorations, slotCount, codegen } = opts
+  const dev = opts.dev === true
 
   const unit: CodeUnit = {
     name: 'context',
-    source: generateSource(decorations, slotCount, codegen.readable),
+    source: generateSource(decorations, slotCount, codegen.readable, dev),
     externals: {
+      devFreeze,
       UNSET,
       pathnameOf,
       parseQuery,
@@ -89,8 +102,28 @@ export function compileContext(opts: CompileContextOptions): ContextClass {
   }
 
   return codegen.materialise<ContextClass>(unit, () =>
-    fallbackContext(decorations, slotCount),
+    fallbackContext(decorations, slotCount, dev),
   )
+}
+
+/**
+ * Deep-freeze what a request carries in — plain objects and arrays, all the
+ * way down — and return it. Development only (§7.3). A value already frozen is
+ * returned as it is, which is what makes a getter that calls this on every
+ * read cost one check after the first; a typed array, a `Date` or a class
+ * instance is left alone, because freezing a `Uint8Array` with elements throws
+ * and freezing someone else's object is not the context's business.
+ */
+export function devFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return value
+  if (Array.isArray(value)) {
+    for (const item of value) devFreeze(item)
+    return Object.freeze(value)
+  }
+  const proto: unknown = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return value
+  for (const key of Object.keys(value)) devFreeze((value as Record<string, unknown>)[key])
+  return Object.freeze(value)
 }
 
 function slotArrayLiteral(count: number): string {
@@ -101,7 +134,7 @@ function slotArrayLiteral(count: number): string {
   return `new Array(${count}).fill(undefined)`
 }
 
-function generateSource(decorations: readonly Decoration[], slotCount: number, readable: boolean): string {
+function generateSource(decorations: readonly Decoration[], slotCount: number, readable: boolean, dev: boolean): string {
   const decorationGetters = decorations
     .map((d, i) => {
       if (d.slotIndex !== null) {
@@ -149,18 +182,26 @@ return class Ctx {
     this.aborted = false
     this.timedOut = false
     // §31.1 — bound to the request on first read; see bindLog.
-    this.$log = null
+    this.$log = null${dev ? `
+    // §7.3 — development: nothing may add a property to a context, so a stray
+    // \`ctx.user = x\` throws here instead of working until production.
+    Object.seal(this)` : ''}
   }
 
   get id() { return this.$id }
   set id(value) { this.$id = value; this.$log = null }
   get log() { const l = this.$log; return l !== null ? l : (this.$log = bindLog(this)) }
   get path() { const v = this.$path; return v !== UNSET ? v : (this.$path = pathnameOf(this.raw.url)) }
-  get params() { return this.$params }
+${dev ? `  // §7.3 — development: request-derived values are frozen when they are read.
+  get params() { return devFreeze(this.$params) }
+  get query() { const v = this.$query; return devFreeze(v !== UNSET ? v : (this.$query = parseQuery(this.raw.url, this.env.maxQueryParams))) }
+  get headers() { const v = this.$headers; return devFreeze(v !== UNSET ? v : (this.$headers = buildHeaders(this.raw))) }
+  get cookies() { const v = this.$cookies; return devFreeze(v !== UNSET ? v : (this.$cookies = parseCookies(this.raw.header('cookie')))) }
+  get body() { return devFreeze(this.$body) }` : `  get params() { return this.$params }
   get query() { const v = this.$query; return v !== UNSET ? v : (this.$query = parseQuery(this.raw.url, this.env.maxQueryParams)) }
   get headers() { const v = this.$headers; return v !== UNSET ? v : (this.$headers = buildHeaders(this.raw)) }
   get cookies() { const v = this.$cookies; return v !== UNSET ? v : (this.$cookies = parseCookies(this.raw.header('cookie'))) }
-  get body() { return this.$body }
+  get body() { return this.$body }`}
   get url() { const v = this.$url; return v !== UNSET ? v : (this.$url = requestUrl(this.raw.url, this.secure, this.host)) }
   get host() { const h = this.raw.header('host'); return h !== undefined ? h : 'localhost' }
   get secure() {
@@ -227,7 +268,7 @@ ${decorationGetters}
  * prototype getters. Semantically identical, measurably slower, and covered by
  * the same conformance suite.
  */
-function fallbackContext(decorations: readonly Decoration[], slotCount: number): ContextClass {
+function fallbackContext(decorations: readonly Decoration[], slotCount: number, dev: boolean): ContextClass {
   class InterpretedContext extends PlainContext {
     constructor(
       raw: RawRequest,
@@ -238,6 +279,21 @@ function fallbackContext(decorations: readonly Decoration[], slotCount: number):
       deadline: Deadline | null = null,
     ) {
       super(raw, route, params, env, slotCount, signal, deadline)
+      // §7.3 — the interpreted twin seals in development too, at the same moment.
+      if (dev) Object.seal(this)
+    }
+  }
+
+  // …and freezes the same values when they are read.
+  if (dev) {
+    for (const name of ['params', 'query', 'headers', 'cookies', 'body'] as const) {
+      const inherited = Object.getOwnPropertyDescriptor(PlainContext.prototype, name)?.get
+      if (inherited === undefined) continue
+      Object.defineProperty(InterpretedContext.prototype, name, {
+        get(this: PlainContext) { return devFreeze(inherited.call(this)) },
+        enumerable: false,
+        configurable: false,
+      })
     }
   }
 

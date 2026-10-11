@@ -1,5 +1,5 @@
 import type { ParamType, PathSegment, RouteDiagnostic, RouteRecord } from '@erenthedeveloper0/zen-core'
-import { Codes } from '@erenthedeveloper0/zen-core'
+import { Codes, closest } from '@erenthedeveloper0/zen-core'
 import { BUILTIN_PARAM_TYPES } from './param-types.ts'
 
 /**
@@ -28,7 +28,7 @@ export function analyzeRoutes(
   routes: readonly RouteRecord[],
   opts: AnalyzeOptions,
 ): RouteDiagnostic[] {
-  const diagnostics: RouteDiagnostic[] = []
+  const diagnostics: RouteDiagnostic[] = [...unknownTypes(routes, opts)]
   const byMethod = new Map<string, RouteRecord[]>()
 
   for (const route of routes) {
@@ -115,6 +115,35 @@ export function analyzeRoutes(
   }
 
   return diagnostics
+}
+
+/**
+ * A typed segment whose type nobody registered — reported here, with every
+ * other routing problem and the line that registered the route (§5.1, §12.7),
+ * rather than thrown by `build` one route at a time. `build` keeps its throw as
+ * the backstop for a caller that builds without analysing.
+ */
+function unknownTypes(routes: readonly RouteRecord[], opts: AnalyzeOptions): RouteDiagnostic[] {
+  const out: RouteDiagnostic[] = []
+  const known = [...opts.paramTypes.keys()]
+  for (const route of routes) {
+    for (const segment of route.segments) {
+      if (segment.kind !== 'param' || segment.type === undefined || opts.paramTypes.has(segment.type)) continue
+      const meant = closest(segment.type, known)
+      out.push({
+        severity: 'error',
+        code: Codes.PARAM_TYPE_UNKNOWN,
+        message:
+          `Unknown parameter type "<${segment.type}>" in ${route.method} ${route.path}. ` +
+          `Known types: ${known.join(', ')}.`,
+        routes: [route],
+        hint: meant === null
+          ? `Register it with app.paramType('${segment.type}', { test, parse }) before ready().`
+          : `Did you mean "<${meant}>"? Or register "${segment.type}" with app.paramType().`,
+      })
+    }
+  }
+  return out
 }
 
 type Verdict = 'disjoint' | 'duplicate' | 'ambiguous' | 'ordered'

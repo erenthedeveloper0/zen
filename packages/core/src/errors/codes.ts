@@ -25,6 +25,9 @@ export const Codes = {
   PLUGIN_DUPLICATE: 'ZEN_PLUGIN_DUPLICATE',
   PLUGIN_CYCLE: 'ZEN_PLUGIN_CYCLE',
   PLUGIN_OPTIONS: 'ZEN_PLUGIN_OPTIONS',
+  /** A `defineMiddleware` factory was given options its schema refuses, or its
+   *  `setup` threw or returned something that is not a middleware — §8.6. */
+  MIDDLEWARE_OPTIONS: 'ZEN_MIDDLEWARE_OPTIONS',
   DECORATOR_CONFLICT: 'ZEN_DECORATOR_CONFLICT',
   SLOT_CONFLICT: 'ZEN_SLOT_CONFLICT',
   HOOK_PHASE_UNKNOWN: 'ZEN_HOOK_PHASE_UNKNOWN',
@@ -37,6 +40,9 @@ export const Codes = {
   DI_CYCLE: 'ZEN_DI_CYCLE',
   DI_LIFETIME: 'ZEN_DI_LIFETIME',
   SCHEMA_UNCONVERTIBLE: 'ZEN_SCHEMA_UNCONVERTIBLE',
+  /** `app.schema(name, schema)` was given a name OpenAPI cannot use, one another
+   *  schema already has, or a schema already registered under another name — §10.2. */
+  SCHEMA_NAME: 'ZEN_SCHEMA_NAME',
   /** A declared response media type is not `type/subtype`, carries a
    *  parameter, is a wildcard, or is declared twice — §13.4. */
   MEDIA_TYPE_INVALID: 'ZEN_MEDIA_TYPE_INVALID',
@@ -88,6 +94,9 @@ export const Codes = {
   CONFLICT: 'ZEN_CONFLICT',
   SLOT_EMPTY: 'ZEN_SLOT_EMPTY',
   SERIALIZATION: 'ZEN_SERIALIZATION',
+  /** A response value does not match the schema its status declares — §11.5,
+   *  under `validation.response: 'error'`. A 500, never exposed. */
+  RESPONSE_INVALID: 'ZEN_RESPONSE_INVALID',
   HEADER_INVALID: 'ZEN_HEADER_INVALID',
   /** `ctx.html()` was given something other than `SafeHtml`, or an `html`
    *  template put a value where escaping cannot make it safe — §19.5. */

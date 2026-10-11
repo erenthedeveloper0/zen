@@ -1,5 +1,6 @@
 import type { AnySchema, InferOutput } from '../contracts/standard-schema.ts'
 import type { ConfigDefinition, ConfigShape, ResolvedConfig } from '../contracts/config.ts'
+import { captureOrigin } from '../primitives/origin.ts'
 
 /**
  * `defineConfig` — rfcs/0001 §16.2.
@@ -77,11 +78,15 @@ export function defineConfig(spec: Readonly<Record<string, unknown>>): ConfigDef
   }
 
   const declared = spec['secrets']
+  // §5.1 — where the configuration was declared, so an invalid environment
+  // points at the schema that rejected it, not at the app that read it.
+  const origin = captureOrigin()
   return Object.freeze({
     env: (spec['env'] as AnySchema | undefined) ?? undefined,
     shape: Object.freeze(shape),
     secrets: Object.freeze(
       Array.isArray(declared) ? declared.filter((s): s is string => typeof s === 'string') : [],
     ) as readonly string[],
+    ...(origin === undefined ? {} : { origin }),
   }) as ConfigDefinition<unknown, unknown>
 }

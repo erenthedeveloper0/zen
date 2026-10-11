@@ -1,12 +1,22 @@
 import type { Capabilities } from '../contracts/capabilities.ts'
 import type { Plugin } from '../contracts/plugin.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 import { Codes } from '../errors/codes.ts'
 
 export interface PendingPlugin {
   readonly plugin: Plugin<never, object>
   readonly options: unknown
   readonly order: number
+  /** Where `app.use(plugin)` was written (§5.1) — what every diagnostic about it points at. */
+  readonly origin?: SourceOrigin | undefined
+}
+
+/** The `use()` sites of the registrations a diagnostic is about, those that have one. */
+function originsOf(...entries: ReadonlyArray<PendingPlugin | undefined>): { origins?: SourceOrigin[] } {
+  const origins: SourceOrigin[] = []
+  for (const entry of entries) if (entry?.origin !== undefined) origins.push(entry.origin)
+  return origins.length === 0 ? {} : { origins }
 }
 
 /**
@@ -42,6 +52,7 @@ export function resolvePlugins(
         code: Codes.PLUGIN_DUPLICATE,
         message: `Plugin "${name}" is registered twice.`,
         hint: 'Remove the duplicate registration, or declare `multiple: true` if the plugin supports it.',
+        ...originsOf(existing, entry),
       })
       continue
     }
@@ -57,6 +68,7 @@ export function resolvePlugins(
           severity: 'error',
           code: Codes.PLUGIN_CONFLICT,
           message: `Plugin "${entry.plugin.name}" conflicts with "${conflict}", which is also registered.`,
+          ...originsOf(entry, byName.get(conflict)),
         })
       }
     }
@@ -75,6 +87,7 @@ export function resolvePlugins(
             `Plugin "${entry.plugin.name}" requires capability "${key}", ` +
             `which this runtime does not provide (got ${JSON.stringify(actual)}).`,
           hint: 'Remove the plugin for this target, or choose an adapter that supports it.',
+          ...originsOf(entry),
         })
       }
     }
@@ -95,6 +108,7 @@ export function resolvePlugins(
           code: Codes.PLUGIN_MISSING,
           message: `Plugin "${entry.plugin.name}" requires "${depName}" (${range}), which is not registered.`,
           hint: `Register it first: app.use(${depName}Plugin)`,
+          ...originsOf(entry),
         })
         continue
       }
@@ -105,6 +119,7 @@ export function resolvePlugins(
           message:
             `Plugin "${entry.plugin.name}" requires "${depName}@${range}", ` +
             `but ${depName}@${dep.plugin.version} is registered.`,
+          ...originsOf(entry, dep),
         })
         continue
       }
@@ -161,12 +176,13 @@ export function resolvePlugins(
 
   if (order.length !== participants.length) {
     const placed = new Set(order.map(keyOf))
-    const stuck = participants.filter((p) => !placed.has(keyOf(p))).map((p) => p.plugin.name)
+    const stuck = participants.filter((p) => !placed.has(keyOf(p)))
     diagnostics.push({
       severity: 'error',
       code: Codes.PLUGIN_CYCLE,
-      message: `Circular plugin dependency involving: ${stuck.join(' → ')}`,
+      message: `Circular plugin dependency involving: ${stuck.map((p) => p.plugin.name).join(' → ')}`,
       hint: 'Break the cycle, or use `before`/`after` ordering hints instead of a hard dependency.',
+      ...originsOf(...stuck),
     })
   }
 

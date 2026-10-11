@@ -331,9 +331,11 @@ jobs:
       # LICENSE present — then all six tarballs installed in a scratch project
       # outside the workspace, serving a real request, and a consumer
       # type-checked against the published declarations on the oldest
-      # TypeScript the manifests declare.
-      - name: Pack, install, run, type-check on TypeScript 5.0
-        run: node scripts/check-pack.ts --typescript 5.0
+      # TypeScript the manifests declare and on TypeScript 7, the native
+      # compiler — whose default `types: []` is what found core's
+      # declarations naming Node's global `NodeJS` namespace.
+      - name: Pack, install, run, type-check on TypeScript 5.0 and 7.0
+        run: node scripts/check-pack.ts --typescript 5.0 --typescript 7.0
 
   zero-dependencies:
     name: '@erenthedeveloper0/zen-core has zero runtime dependencies'

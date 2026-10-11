@@ -1,5 +1,6 @@
 import type { AnySchema } from './standard-schema.ts'
 import type { EnvEntry } from '../primitives/dotenv.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * The configuration system — rfcs/0001 §16.
@@ -294,6 +295,12 @@ export interface ConfigDefinition<C = unknown, E = unknown> {
   /** Env keys and config paths the author marked secret by hand. */
   readonly secrets: readonly string[]
   /**
+   * Where `defineConfig()` was called (§5.1) — what an environment or
+   * configuration diagnostic points at. Absolute; the application makes it
+   * relative to its root.
+   */
+  readonly origin?: SourceOrigin | undefined
+  /**
    * Phantom. Never present at runtime; it exists so `C` and `E` have somewhere
    * to be inferred from.
    *
@@ -344,5 +351,32 @@ export const CONFIG_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze(
     // did, so introducing config does not silently change where a running app
     // is reachable from.
     host: '127.0.0.1',
+  }),
+  /**
+   * Request policy — §16.1, §19.2. What `zen({ timeout, body, redirect,
+   * trustProxy, maxQueryParams })` sets, as configuration with a layer and a
+   * source; `ready()` reads it from here. The body numbers are
+   * `runtime/body.ts`'s `BODY_DEFAULTS`, which a test holds equal to these.
+   */
+  policy: Object.freeze({
+    /** §4.4 — off; a duration turns it on, and §19.2's hardened profile says 30 s. */
+    timeout: Object.freeze({ default: false, header: false }),
+    body: Object.freeze({ maxSize: 1024 * 1024, maxDepth: 32, maxFields: 1000 }),
+    maxQueryParams: 100,
+    /** §19.4 — believe no proxy until told how many there are. */
+    trustProxy: false,
+    /** §19.5.2 — redirects stay on this origin. */
+    redirect: Object.freeze({ allowExternal: false }),
+    /** Ingress limits the adapter enforces — `undefined` keeps its own defaults. */
+    http: Object.freeze({ maxUrlLength: undefined, maxRequestsPerSocket: undefined, maxHeaderSize: undefined }),
+  }),
+  /** §31.4 — a thrown probe error's text stays off the wire. */
+  health: Object.freeze({ details: false }),
+  /**
+   * §31.1 — what the built-in logger hides when it writes a line. `**` is any
+   * depth: `**.password` hides a `password` key wherever it is.
+   */
+  logging: Object.freeze({
+    redact: Object.freeze(['**.authorization', '**.cookie', '**.password']),
   }),
 })

@@ -4,7 +4,7 @@ import {
   BootError, CONTEXT_MEMBERS, PlainContext, CodeGen, compileContext, NoopLogger, ZenContainer,
   DEFAULT_CAPABILITIES, type RawRequest, type ServerHandle, type RuntimeAdapter,
 } from '@erenthedeveloper0/zen-core'
-import { makeApp, shaped, silentLogger, uniqueName } from './helpers.ts'
+import { here, makeApp, shaped, silentLogger, uniqueName } from './helpers.ts'
 import { explainRoute, slot, type Logger } from '@erenthedeveloper0/zen-core'
 
 // ── §7.5: decoration names ──────────────────────────────────────────────────
@@ -133,7 +133,9 @@ describe('app.paramType() (§5.2)', () => {
   it('is what the unknown-type diagnostic tells you to call', async () => {
     const app = makeApp()
     app.get('/posts/:id<objectId>', () => 'x')
-    await assert.rejects(app.ready(), /Register more with app\.paramType\(\)/)
+    // A boot diagnostic since 0.2.0-alpha, reported with the rest and placed
+    // at the route's line, rather than thrown by the router's build alone.
+    await assert.rejects(app.ready(), /ZEN_PARAM_TYPE_UNKNOWN[\s\S]*app\.paramType\('objectId'/)
   })
 
   it('refuses a name that cannot appear in a path, and a type without test/parse', () => {
@@ -509,5 +511,69 @@ describe('the graph\'s decorations are what its type says (§2.4)', () => {
     assert.equal(tenantRecord?.slot, null)
     assert.equal(tenantRecord?.accessor, tenant)
     assert.equal('slotIndex' in (user ?? {}), false)
+  })
+})
+
+// ── §10.2: named schemas ─────────────────────────────────────────────────────
+
+describe('app.schema() names a schema for every tool that reads the graph (§10.2)', () => {
+  const User = shaped({ type: 'object', properties: { id: { type: 'integer' } } })
+  const Other = shaped({ type: 'object', properties: { id: { type: 'string' } } })
+
+  it('records the name, the schema, who registered it and where', async () => {
+    const app = makeApp()
+    app.schema('User', User)
+    let pluginLine = 0
+    app.use({
+      name: uniqueName('schemas'),
+      version: '1.0.0',
+      setup(r) { r.schema('Problem', Other); pluginLine = here().line },
+    })
+    await app.ready()
+    const schemas = app.graph().schemas
+    assert.equal(schemas.get('User')?.schema, User)
+    assert.equal(schemas.get('User')?.source, 'app')
+    assert.ok((schemas.get('User')?.origin?.line ?? 0) > 0)
+    assert.equal(schemas.get('Problem')?.schema, Other)
+    assert.match(schemas.get('Problem')?.source ?? '', /^plugin "/)
+    assert.equal(schemas.get('Problem')?.origin?.line, pluginLine, "a plugin's is placed in its setup")
+  })
+
+  it('refuses a name two registrations give to different schemas, naming both', async () => {
+    const app = makeApp()
+    app.schema('User', User)
+    app.schema('User', Other)
+    const error = await app.ready().then(() => null, (e: unknown) => e)
+    assert.ok(error instanceof BootError)
+    const named = error.diagnostics.filter((d) => d.code === 'ZEN_SCHEMA_NAME')
+    assert.equal(named.length, 1)
+    assert.equal(named[0]?.origins?.length, 2)
+  })
+
+  it('refuses one schema under two names, and a name OpenAPI cannot use', async () => {
+    const app = makeApp()
+    app.schema('User', User)
+    app.schema('Person', User)
+    app.schema('has space', Other)
+    const error = await app.ready().then(() => null, (e: unknown) => e)
+    assert.ok(error instanceof BootError)
+    const messages = error.diagnostics.filter((d) => d.code === 'ZEN_SCHEMA_NAME').map((d) => d.message)
+    assert.equal(messages.length, 2)
+    assert.ok(messages.some((m) => /under two names, "User" and "Person"/.test(m)))
+    assert.ok(messages.some((m) => /"has space".*cannot be an OpenAPI component name/.test(m)))
+  })
+
+  it('accepts the same registration twice — building an app twice registers twice', async () => {
+    const app = makeApp()
+    app.schema('User', User)
+    app.schema('User', User)
+    await app.ready()
+    assert.equal(app.graph().schemas.size, 1)
+  })
+
+  it('is a registration like any other: refused after ready()', async () => {
+    const app = makeApp()
+    await app.ready()
+    assert.throws(() => app.schema('Late', User), { code: 'ZEN_APP_FROZEN' })
   })
 })

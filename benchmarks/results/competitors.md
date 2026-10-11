@@ -6,6 +6,60 @@ benchmarks, the thesis has failed and we should say so."* This page says so. Eve
 below is read from the JSON files beside it, written by
 [`benchmarks/competitors/run.ts`](../competitors/run.ts).
 
+## `0.2.0-alpha` — the request path did not change, as far as this run can tell
+
+This release added nothing to what a request runs: its features are boot-time
+(registration origins, the graph document) or emit no code unless a route asks
+for them (response validation, `check`, `inject`, conditional middleware), and a
+plain route's generated pipeline is byte-identical to `0.1.0-alpha.5`'s. It was
+measured anyway, paired: `0.1.0-alpha.5` and the `0.2.0-alpha` tree run
+alternately, `node:http` and Zen only, twice.
+
+Zen's rate, and its fraction of `node:http` in the same run:
+
+| Workload | `0.1.0-alpha.5`, pass 1 | `0.2.0-alpha`, pass 1 | `0.1.0-alpha.5`, pass 2 | `0.2.0-alpha`, pass 2 |
+| --- | ---: | ---: | ---: | ---: |
+| 1. Static JSON, no schema | 60,609 (0.78×) | 60,269 (0.82×) | 54,358 (0.68×) | 61,593 (0.80×) |
+| 2. JSON with a response schema | 61,279 (0.81×) | 59,428 (0.82×) | 62,015 (0.85×) | 55,882 (0.85×) |
+| 3. A route with 5 path params | 62,989 (0.86×) | 57,511 (0.80×) | 61,347 (0.84×) | 58,736 (0.85×) |
+| 4. POST + body validation (Zod), ~1 KB | 36,170 (0.77×) | 34,854 (0.74×) | 37,395 (0.82×) | 37,476 (0.86×) |
+| 5. 10 middleware | 58,602 (0.80×) | 56,418 (0.80×) | 59,268 (0.82×) | 62,215 (0.82×) |
+| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 19,389 (0.98×) | 19,340 (0.96×) | 19,614 (0.98×) | 18,827 (0.93×) |
+
+**This run is noisier than the one below, and says less.** The laptop was not
+quiet — a browser playing media throughout — and within one cell the five runs
+spread by up to 30% (`0.2.0-alpha` pass 1, workload 5), against the ~2% the
+`0.1.0-alpha.5` run below managed. The two passes of the same build disagree with
+each other by more than either build differs from the other: workload 1 put
+`0.1.0-alpha.5` at 0.78× in one pass and 0.68× in the next. What it supports is
+that Zen remains at ~0.8× of `node:http` without I/O in both builds — the
+finding of `0.1.0-alpha.5`, unchanged — and nothing finer. The in-process
+measurement that resolves smaller differences agrees: `inject()` on a plain route
+costs ~1.18 µs in both builds, measured alternately (`benchmarks/request-path`
+section 3's figure, and a dedicated paired loop) — after a dispatch refactor made
+for `explainRequest()` was found adding ~60 ns to it and was undone.
+
+`0.2.0-alpha-paired-*.json` beside this page are the four runs. The `0.2.0-alpha`
+ones were measured before the version bump, on top of `b67d321`, so they name
+that commit "with uncommitted changes" and the version `0.1.0-alpha.5`.
+
+The release's own gate ran later, on the final tree, with Fastify beside it and
+a quieter machine — every cell's spread between 0.6% and 6.7%. It is the number
+to quote for `0.2.0-alpha`, and it is `0.1.0-alpha.5`'s: Zen at 0.79–0.83× of
+`node:http` without I/O, Fastify at 0.97–1.03×.
+
+| Workload | node-http | zen | fastify |
+| --- | ---: | ---: | ---: |
+| 1. Static JSON, no schema | 81,236 | 64,914 (0.80×) | 81,050 (1.00×) |
+| 2. JSON with a response schema | 78,764 | 65,510 (0.83×) | 79,561 (1.01×) |
+| 3. A route with 5 path params | 77,222 | 62,835 (0.81×) | 79,782 (1.03×) |
+| 4. POST + body validation (Zod), ~1 KB | 47,475 | 37,603 (0.79×) | 46,105 (0.97×) |
+| 5. 10 middleware | 79,793 | 66,180 (0.83×) | 81,318 (1.02×) |
+| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 20,086 | 18,936 (0.94×) | 20,264 (1.01×) |
+
+`0.2.0-alpha.json` is that run; it names `b67d321` "with uncommitted changes"
+because it ran before the release was committed.
+
 ## Where Zen stands — `0.1.0-alpha.5`
 
 **Behind.** On the five workloads that do no I/O, Zen serves

@@ -8,7 +8,7 @@
 export type * from './contracts/index.ts'
 export {
   DEFAULT_CAPABILITIES, REQUEST_PHASES, APP_PHASES, PIPELINE_PHASES, POST_FAMILY,
-  UNAVAILABLE_PHASES, isRequestPhase, SYNC_MARKER, isStandardSchema,
+  UNAVAILABLE_PHASES, isRequestPhase, SYNC_MARKER, CONFIGURED_MIDDLEWARE, isStandardSchema,
   TIMEOUT_STAGES, TIMEOUT_STATUS, CLIENT_CLOSED,
   HEALTH_MEDIA_TYPE, HEALTH_STATUS, HEALTH_DEFAULTS,
   COERCION_DEFAULTS, COERCION_OFF, BOOLEAN_WORDS, VALIDATION_SOURCES,
@@ -34,7 +34,7 @@ export {
 export {
   HttpError, BadRequest, BodyInvalid, Unauthorized, Forbidden, NotFound, MethodNotAllowed, NotAcceptable,
   RequestTimeout, Conflict, PayloadTooLarge, UnsupportedMediaType, UnprocessableEntity, TooManyRequests,
-  Internal, ServiceUnavailable, GatewayTimeout, ValidationError, issue, type Issue,
+  Internal, ServiceUnavailable, GatewayTimeout, ValidationError, issue, type Issue, type HttpErrorConstructor,
 } from './errors/http-errors.ts'
 
 // ── compile (stratum 3) ─────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ export {
   makeNegotiator, makeNegotiationStep, selectOffer, offersOf, notAcceptable,
   NEGOTIATION_CACHE_LIMIT, type Offer, type NegotiationCarrier,
 } from './runtime/negotiation.ts'
-export { ErrorEngine, classify, type ErrorMapper, type ErrorContextInfo } from './runtime/error-engine.ts'
+export { ErrorEngine, classify, BREAKER_DEFAULTS, type ErrorMapper, type ErrorContextInfo, type BreakerOptions, type ErrorEngineOptions } from './runtime/error-engine.ts'
 export { ConsoleLogger, NoopLogger } from './runtime/logger.ts'
 export { prepareForWire, stripBodyIfNeeded } from './runtime/egress.ts'
 export {
@@ -155,11 +155,24 @@ export { trackDisposal, trackIntrinsic, intrinsicDisposer, type DisposalCarrier 
 
 // ── configuration (§16) ─────────────────────────────────────────────────────
 export { defineConfig } from './api/define-config.ts'
+export { defineMiddleware, isConfiguredMiddleware } from './api/define-middleware.ts'
+export { pipelineSteps, conditionOf } from './compile/middleware-plan.ts'
 export {
   resolveConfig, foldEnv, secretEnvKeys, describeConstraint,
   type ResolveConfigInput, type ResolvedConfigResult,
 } from './registry/config-store.ts'
 export { explainRoute, explainConfig, steps, type ExplainedStep } from './api/explain.ts'
+export {
+  serializeGraph, graphFingerprint, contractFingerprint, contractOf, contractSchema, canonicalJson, sha256, jsonSafe,
+} from './api/graph-document.ts'
+export { GRAPH_DOCUMENT_VERSION } from './contracts/graph-document.ts'
+export {
+  explainRequest, type RequestExplanation, type TraceEvent, type StepOutcome, type Explainable,
+} from './api/explain-request.ts'
+export type {
+  GraphDocument, GraphRoute, GraphHook, GraphMiddleware, GraphCollection, GraphPlugin, GraphSlot, GraphDecoration,
+  GraphCheck, GraphParamType, GraphSchema, GraphService, GraphFunction, JsonValue,
+} from './contracts/graph-document.ts'
 export { healthPlugin, type HealthPluginOptions } from './api/health-plugin.ts'
 
 // ── dependency injection (§15) ──────────────────────────────────────────────

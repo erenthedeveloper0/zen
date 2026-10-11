@@ -1,6 +1,6 @@
 import type {
   AppGraph, CoercePlan, CollectionId, CollectionRecord, JsonSchema, ParamType, PathSegment,
-  RouteRecord,
+  RouteRecord, SourceOrigin,
 } from '@erenthedeveloper0/zen-core'
 import { toJsonSchema, isVariantRecord, normaliseMediaType, isMediaProblem, closest } from '@erenthedeveloper0/zen-core'
 import {
@@ -87,6 +87,8 @@ interface SchemaUse {
   readonly shape: string
   readonly projected: OpenApiSchema
   readonly place: (schema: OpenApiSchema) => void
+  /** The route this use belongs to, by its registration line (§5.1). */
+  readonly origin: SourceOrigin | undefined
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,11 +106,18 @@ class DocumentBuilder {
   readonly #operationIds = new Set<string>()
   readonly #collections = new Map<CollectionId, CollectionRecord>()
   readonly #tagsUsed = new Set<string>()
+  /** The origin of the route being documented — see `build()`. */
+  #current: SourceOrigin | undefined = undefined
+  /** §10.2 — `app.schema(name, schema)`, by the schema object: identity is how a use is recognised. */
+  readonly #named = new Map<object, string>()
+  /** Registered names a use has published — the rest are published on their own. */
+  readonly #published = new Set<string>()
 
   constructor(graph: AppGraph, options: OpenApiOptions) {
     this.#graph = graph
     this.#opts = options
     for (const collection of graph.collections) this.#collections.set(collection.id, collection)
+    for (const [name, record] of graph.schemas) this.#named.set(record.schema as object, name)
   }
 
   build(): OpenApiResult {
@@ -123,30 +132,23 @@ class DocumentBuilder {
     const paths = new Map<string, Record<string, unknown>>()
 
     for (const route of routes) {
-      const method = METHOD_TO_OPERATION[route.method]
-      if (method === undefined) {
-        this.#warn('ZEN_OAS_METHOD_UNMAPPED', `${route.method} has no OpenAPI equivalent and was omitted.`, `${route.method} ${route.path}`)
-        continue
-      }
-      for (const variant of pathVariants(route.segments)) {
-        const item = paths.get(variant.template) ?? {}
-        paths.set(variant.template, item)
-        const operation = this.#operation(route, variant, problems)
-        if (item[method] !== undefined) {
-          this.#diagnostics.push({
-            severity: 'error',
-            code: 'ZEN_OAS_OPERATION_COLLISION',
-            message: `Two routes produce ${route.method} ${variant.template}; the second was dropped from the document.`,
-            where: `${route.method} ${variant.template}`,
-            hint: 'This normally means an optional parameter expanded onto a path another route already owns.',
-          })
-          continue
+      // Everything reported while this route is documented is about this
+      // route — the projector's diagnostics included — so each is placed at
+      // the line that registered it (§5.1) once the route is done.
+      const first = this.#diagnostics.length
+      this.#current = route.origin
+      this.#route(route, paths, problems)
+      this.#current = undefined
+      for (let i = first; i < this.#diagnostics.length; i++) {
+        const diagnostic = this.#diagnostics[i] as DocDiagnostic
+        if (diagnostic.origin === undefined && route.origin !== undefined) {
+          this.#diagnostics[i] = { ...diagnostic, origin: route.origin }
         }
-        item[method] = operation
       }
     }
 
     this.#hoistSharedSchemas()
+    this.#publishNamedSchemas()
 
     const document: Record<string, unknown> = {
       openapi: '3.1.0',
@@ -177,6 +179,31 @@ class DocumentBuilder {
     const final = aliases.size === 0 ? document : (rewriteRefs(document, aliases) as Record<string, unknown>)
 
     return { document: final as unknown as OpenApiDocument, diagnostics: this.#diagnostics }
+  }
+
+  /** One route, every path variant of it, into `paths`. */
+  #route(route: RouteRecord, paths: Map<string, Record<string, unknown>>, problems: boolean): void {
+    const method = METHOD_TO_OPERATION[route.method]
+    if (method === undefined) {
+      this.#warn('ZEN_OAS_METHOD_UNMAPPED', `${route.method} has no OpenAPI equivalent and was omitted.`, `${route.method} ${route.path}`)
+      return
+    }
+    for (const variant of pathVariants(route.segments)) {
+      const item = paths.get(variant.template) ?? {}
+      paths.set(variant.template, item)
+      const operation = this.#operation(route, variant, problems)
+      if (item[method] !== undefined) {
+        this.#diagnostics.push({
+          severity: 'error',
+          code: 'ZEN_OAS_OPERATION_COLLISION',
+          message: `Two routes produce ${route.method} ${variant.template}; the second was dropped from the document.`,
+          where: `${route.method} ${variant.template}`,
+          hint: 'This normally means an optional parameter expanded onto a path another route already owns.',
+        })
+        continue
+      }
+      item[method] = operation
+    }
   }
 
   // ── operations ───────────────────────────────────────────────────────────
@@ -476,7 +503,9 @@ class DocumentBuilder {
     const projected = projectSchema(json, {
       components: this.#components, closed, diagnostics: this.#diagnostics, where,
     })
-    const use: SchemaUse = { json, original, closed, where, hint, projected, shape: canonical(projected), place }
+    const use: SchemaUse = {
+      json, original, closed, where, hint, projected, shape: canonical(projected), place, origin: this.#current,
+    }
     this.#uses.push(use)
     return use
   }
@@ -515,7 +544,10 @@ class DocumentBuilder {
       // would publish a pointer to a pointer.
       if (use.projected.$ref !== undefined) continue
 
-      const name = declaredName(use.json)
+      // A registered name is the author naming the component outright, so it
+      // outranks the `title` or `$id` the schema happens to carry (§10.2).
+      const registered = use.original === null ? undefined : this.#named.get(use.original)
+      const name = registered ?? declaredName(use.json)
       // Identity only merges uses that also project identically: the same object
       // used once as a request body and once as a response is two shapes,
       // because only one of them is closed.
@@ -533,6 +565,7 @@ class DocumentBuilder {
           message: `An anonymous schema is used by ${structural.length} operations and was named automatically.`,
           where: use.where,
           hint: 'Give the schema a title (or $id) so generated clients get a stable type name across releases.',
+          origin: use.origin,
         })
       }
 
@@ -546,15 +579,45 @@ class DocumentBuilder {
           `Two different schemas are both titled "${name}"; this one was published as "${component}".`,
           use.where,
           'Give them distinct titles — a generated client names its types from these.',
+          use.origin,
         )
       }
 
+      if (registered !== undefined) this.#published.add(registered)
       const ref: OpenApiSchema = { $ref: `#/components/schemas/${component}` }
       for (const member of structural) {
         member.place(ref)
         done.add(member)
       }
     }
+  }
+
+  /**
+   * Registered schemas no route returns or accepts as a whole — published
+   * anyway, which is the point of registering one (§10.2): a plugin's error
+   * envelope, a type its clients need. Described as a response would be
+   * (closed), since a component nobody sends is a component somebody reads.
+   */
+  #publishNamedSchemas(): void {
+    for (const [name, record] of this.#graph.schemas) {
+      if (this.#published.has(name)) continue
+      const json = toJsonSchema(record.schema, 'output')
+      this.#current = record.origin
+      if (json === null) {
+        this.#warn(
+          'ZEN_OAS_SCHEMA_UNCONVERTIBLE',
+          `The schema registered as "${name}" could not be converted to JSON Schema and was not published.`,
+          `schema("${name}")`,
+          'Register a converter with registerSchemaConverter(vendor, fn), or use a library exposing toJsonSchema().',
+        )
+        continue
+      }
+      const projected = projectSchema(json, {
+        components: this.#components, closed: true, diagnostics: this.#diagnostics, where: `schema("${name}")`,
+      })
+      this.#components.claim(name, projected, `named:${name}:${canonical(projected)}`)
+    }
+    this.#current = undefined
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -628,6 +691,8 @@ class DocumentBuilder {
       if (at <= 0) continue
       const plugin = key.slice(0, at)
       const field = key.slice(at + META_FAMILY.length)
+      // A plugin's metadata is placed where the plugin was registered (§5.1).
+      this.#current = this.#graph.plugins.find((p) => p.name === plugin)?.origin
       if (!META_FIELDS.includes(field)) {
         const meant = closest(field, META_FIELDS)
         this.#warn(
@@ -666,11 +731,12 @@ class DocumentBuilder {
       }
     }
 
+    this.#current = undefined
     return Object.keys(merged).length === 0 ? undefined : merged
   }
 
-  #warn(code: string, message: string, where: string, hint?: string): void {
-    this.#diagnostics.push({ severity: 'warning', code, message, where, hint })
+  #warn(code: string, message: string, where: string, hint?: string, origin = this.#current): void {
+    this.#diagnostics.push({ severity: 'warning', code, message, where, hint, origin })
   }
 }
 

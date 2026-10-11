@@ -1,4 +1,5 @@
 import { Codes, docsUrl } from './codes.ts'
+import { formatOrigin, type SourceOrigin } from '../primitives/origin.ts'
 
 export interface ZenErrorInit {
   readonly status?: number | undefined
@@ -153,9 +154,7 @@ export function renderDiagnostics(diagnostics: readonly Diagnostic[]): string {
 
   diagnostics.forEach((diagnostic, index) => {
     lines.push(`  ${index + 1}. ${diagnostic.code}  ${diagnostic.message}`)
-    if (diagnostic.locations !== undefined && diagnostic.locations.length > 0) {
-      lines.push(`     at ${diagnostic.locations.join('   ⇄   ')}`)
-    }
+    for (const where of placeOf(diagnostic)) lines.push(`     ${where}`)
     if (diagnostic.hint !== undefined) {
       lines.push(`     fix: ${diagnostic.hint}`)
     }
@@ -180,7 +179,32 @@ export interface Diagnostic {
   readonly hint?: string | undefined
   /** What else broke as a result. Rendered as `also:` — never as a fix. */
   readonly consequence?: string | undefined
+  /** What the problem is about, in the application's terms: `GET /users/:id`, `.env:3`. */
   readonly locations?: readonly string[] | undefined
+  /**
+   * Where the registrations involved were written — `src/routes.ts:31:3` —
+   * one per registration, in the order of `locations` when there are as many
+   * of each (§5.1, §12.7). A diagnostic that named a route and not the line
+   * that registered it sent a developer with forty route files looking.
+   */
+  readonly origins?: readonly SourceOrigin[] | undefined
+}
+
+/**
+ * The `at` line of a rendered diagnostic. Locations and origins are paired
+ * when they correspond one to one — `GET /a  src/app.ts:12:3` — and printed on
+ * their own lines when they do not.
+ */
+function placeOf(diagnostic: Diagnostic): string[] {
+  const locations = diagnostic.locations ?? []
+  const origins = diagnostic.origins ?? []
+  if (origins.length > 0 && origins.length === locations.length) {
+    return [`at ${locations.map((where, i) => `${where}  ${formatOrigin(origins[i] as SourceOrigin)}`).join('   ⇄   ')}`]
+  }
+  const out: string[] = []
+  if (locations.length > 0) out.push(`at ${locations.join('   ⇄   ')}`)
+  if (origins.length > 0) out.push(`${locations.length > 0 ? 'in' : 'at'} ${origins.map(formatOrigin).join('   ⇄   ')}`)
+  return out
 }
 
 function defaultTitle(status: number): string {

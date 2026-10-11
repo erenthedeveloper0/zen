@@ -41,12 +41,23 @@ npm install @erenthedeveloper0/zen-core@alpha
   before any plugin runs, with the key a typo meant; a `params` schema checked
   against its path; a response field its schema marks `writeOnly` refused
   before it can reach the wire; and a collection whose `when` is off absent
-  from the router and the graph rather than skipped at runtime.
+  from the router and the graph rather than skipped at runtime. Every
+  diagnostic prints the `file:line:col` of each registration it is about.
+- **The application as data.** `app.graphDocument()` is the graph as canonical
+  JSON with SHA-256 fingerprints — the application's, and each route's
+  contract — and `explainRequest()` shows what one request did at each step.
+  In development an error names the line that raised it and the code around
+  it, and a response of the wrong value is refused.
 - **Configuration.** Layered resolution with per-value provenance, a
   schema-validated environment checked before any plugin runs, and secrets that
   redact themselves when serialised.
 - **The contracts.** Every interface between subsystems, importable on their
   own from `@erenthedeveloper0/zen-core/contracts`.
+- **The testing kit.** `@erenthedeveloper0/zen-core/testing`:
+  `createTestApp(makeApp, { override: [[Db, () => fakeDb]] })` compiles the
+  real application with the fakes, `testContext()` calls a handler with no
+  application behind it, and `assertNoLeaks()` fails on a timer or socket an
+  application left running.
 
 ## Zero dependencies, and no platform
 

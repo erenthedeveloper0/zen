@@ -35,6 +35,7 @@ const STRATA: Readonly<Record<string, number>> = {
   compile: 3,
   runtime: 4,
   api: 5,
+  testing: 6,
 }
 
 /**

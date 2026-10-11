@@ -465,3 +465,55 @@ describe('a service that releases itself is released (§15.3)', () => {
     await c.dispose()
   })
 })
+
+describe('optional tokens (§15.2)', () => {
+  const optional = <T,>(name: string) => token<T>(uniqueName(name), { optional: true })
+
+  test('resolving one with no provider is undefined, from the container and from a handler', async () => {
+    const Tracer = optional<{ span(): void }>('tracer')
+    assert.equal(new ZenContainer().resolve(Tracer), undefined)
+
+    const app = makeApp()
+    app.get('/', (ctx) => ({ traced: ctx.resolve(Tracer) !== undefined }))
+    assert.deepEqual((await app.inject('GET', '/')).json(), { traced: false })
+  })
+
+  test('a service depending on one boots without it, and receives undefined', async () => {
+    const Cache = optional<Map<string, string>>('cache')
+    const Repo = t<{ cached: boolean }>('repo')
+    const app = makeApp()
+    app.provide(Repo, { deps: [Cache] as never, factory: (cache: Map<string, string> | undefined) => ({ cached: cache !== undefined }) })
+    app.get('/', (ctx) => ctx.resolve(Repo))
+    assert.deepEqual((await app.inject('GET', '/')).json(), { cached: false })
+  })
+
+  test('provided, it resolves like any other', async () => {
+    const Cache = optional<string>('cache-provided')
+    const app = makeApp()
+    app.provide(Cache, () => 'warm')
+    app.get('/', (ctx) => ({ cache: ctx.resolve(Cache) }))
+    assert.deepEqual((await app.inject('GET', '/')).json(), { cache: 'warm' })
+  })
+
+  test('only the optional one is excused — a required dependency is still refused', () => {
+    const c = new ZenContainer()
+    const Missing = t<number>('required-missing')
+    const Excused = optional<number>('optional-missing')
+    const Svc = t<number>('svc')
+    c.provide(Svc, { deps: [Missing, Excused] as never, factory: () => 1 })
+    const issues = c.analyze()
+    assert.equal(issues.length, 1)
+    assert.equal(issues[0]?.code, 'ZEN_DI_MISSING')
+    assert.match(issues[0]?.message ?? '', /required-missing/)
+  })
+
+  test('the token says so in its type', () => {
+    const Opt = optional<number>('typed')
+    const Req = t<number>('typed-required')
+    const opt: undefined extends (typeof Opt extends { $type?: infer V } ? V : never) ? true : false = true
+    const req: undefined extends (typeof Req extends { $type?: infer V } ? Exclude<V, undefined> : never) ? false : true = true
+    assert.equal(opt && req, true)
+    assert.equal(Opt.optional, true)
+    assert.equal(Req.optional, undefined)
+  })
+})

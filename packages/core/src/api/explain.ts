@@ -2,8 +2,11 @@ import type { RouteRecord } from '../contracts/route.ts'
 import type { RequestPhase } from '../contracts/hook.ts'
 import type { ConfigSnapshot } from '../contracts/config.ts'
 import { describeField } from '../compile/coercion-plan.ts'
-import { describeSyncPath, NO_HOOKS } from '../compile/pipeline-compiler.ts'
+import { classifySync, describeSyncPath, NO_HOOKS } from '../compile/pipeline-compiler.ts'
 import { pipelinePlan } from '../compile/hook-plan.ts'
+import { pipelineSteps } from '../compile/middleware-plan.ts'
+import type { MiddlewareRef } from '../contracts/route.ts'
+import { formatOrigin, type SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * `explainRoute` — rfcs/0001 §8.5.
@@ -24,15 +27,20 @@ export function explainRoute(record: RouteRecord): string {
   const head = `${record.method} ${record.path}`
   lines.push(record.name === undefined ? head : `${head.padEnd(38)}→ ${record.name}`)
   if (record.origin !== undefined) {
-    lines.push(`  registered  ${record.origin.file}:${record.origin.line}`)
+    lines.push(`  registered  ${formatOrigin(record.origin)}`)
   }
   lines.push('')
 
   const rows = steps(record)
   const kindWidth = Math.max(10, ...rows.map((s) => s.kind.length)) + 2
   const scopeWidth = Math.max(10, ...rows.map((s) => s.scope.length)) + 2
+  // §5.1 — each registered step says where it was registered, which is the
+  // half of "what runs on this route" that sends a reader to the right file.
+  const nameWidth = Math.max(10, ...rows.map((s) => s.name.length)) + 2
   for (const step of rows) {
-    lines.push(`  ${step.kind.padEnd(kindWidth)}${step.scope.padEnd(scopeWidth)}${step.name}`)
+    const where = step.origin === undefined ? '' : formatOrigin(step.origin)
+    const line = `  ${step.kind.padEnd(kindWidth)}${step.scope.padEnd(scopeWidth)}${where === '' ? step.name : step.name.padEnd(nameWidth) + where}`
+    lines.push(line)
   }
 
   // §8.4 — whether a request here can finish without a promise, and if not,
@@ -47,13 +55,20 @@ export function explainRoute(record: RouteRecord): string {
 /** The inputs the pipeline compiler classifies, read off the record it compiles from. */
 function syncPath(record: RouteRecord): string {
   const validates = (['params', 'query', 'headers', 'cookies', 'body'] as const).some((source) => record.schema[source] !== undefined)
+  // A check marked synchronous is emitted as a plain call; any other is a
+  // speculation point, as every validator is (§8.4).
+  const check = record.schema.check
+  const checks = typeof check === 'function' && classifySync(check) !== 'sync' ? 1 : 0
   return describeSyncPath({
-    steps: record.middleware.map((middleware) => ({ kind: middleware.kind, name: middleware.name, fn: middleware.fn })),
+    // The steps the compiler compiles — omitted ones gone, guarded ones behind
+    // their predicate — from the same function it compiles them with (§8.7).
+    steps: pipelineSteps(record.middleware),
     hooks: pipelinePlan(record.hooks, NO_HOOKS) ?? NO_HOOKS,
     handler: record.handler as Function,
-    intake: record.schema.body !== undefined,
-    // Every source a route validates compiles into one validator call site.
-    validators: validates ? 1 : 0,
+    intake: record.schema.body !== undefined || record.schema.intake !== undefined,
+    // Every source a route validates compiles into one validator call site, and
+    // a `check` into one more (§11.7).
+    validators: (validates ? 1 : 0) + checks,
   })
 }
 
@@ -63,6 +78,8 @@ export interface ExplainedStep {
   /** `[global]`, `[/api]`, `[route]` — where the registration lives. */
   readonly scope: string
   readonly name: string
+  /** The `file:line:column` that registered it, for a hook or a middleware (§5.1). */
+  readonly origin?: SourceOrigin | undefined
 }
 
 /**
@@ -76,7 +93,7 @@ export function steps(record: RouteRecord): ExplainedStep[] {
   const out: ExplainedStep[] = []
   const hooks = (phase: RequestPhase): void => {
     for (const hook of record.hooks.get(phase) ?? []) {
-      out.push({ kind: phase, scope: scopeLabel(hook.scope), name: hook.name ?? 'anonymous' })
+      out.push({ kind: phase, scope: scopeLabel(hook.scope), name: hook.name ?? 'anonymous', ...at(hook.origin) })
     }
   }
 
@@ -117,12 +134,12 @@ export function steps(record: RouteRecord): ExplainedStep[] {
   // it positionally here would describe an order that never happens.
   for (const middleware of record.middleware) {
     if (middleware.kind === 'after') continue
-    out.push({ kind: middleware.kind, scope: scopeLabel(middleware.scope), name: middleware.name })
+    out.push({ kind: middleware.kind, scope: scopeLabel(middleware.scope), name: conditional(middleware), ...at(middleware.origin) })
   }
 
-  if (record.schema.body !== undefined) {
-    out.push({ kind: 'intake', scope: '', name: 'read + parse body' })
-    hooks('onParse')
+  if (record.schema.body !== undefined || record.schema.intake !== undefined) {
+    out.push({ kind: 'intake', scope: '', name: intakeLine(record) })
+    if ((record.schema.intake?.mode ?? 'parse') === 'parse') hooks('onParse')
   }
 
   hooks('preValidation')
@@ -141,9 +158,19 @@ export function steps(record: RouteRecord): ExplainedStep[] {
   const sources = (['params', 'query', 'headers', 'cookies', 'body'] as const)
     .filter((source) => record.schema[source] !== undefined)
   if (sources.length > 0) out.push({ kind: 'validate', scope: '', name: sources.join(', ') })
+  // §11.7 — the last validator, where it runs: after the schemas, before postValidation.
+  if (typeof record.schema.check === 'function') {
+    out.push({ kind: 'check', scope: '', name: `${functionName(record.schema.check)} — 422 on issues` })
+  }
   hooks('postValidation')
 
   hooks('preHandler')
+  // §15.1 — what the handler is handed, and which services that reaches.
+  const inject = record.schema.inject
+  if (inject !== undefined && typeof inject === 'object' && inject !== null) {
+    const pairs = Object.entries(inject).map(([as, token]) => `${as} ← ${(token as { name?: string }).name ?? '?'}`)
+    out.push({ kind: 'inject', scope: '', name: pairs.join(', ') })
+  }
   out.push({ kind: 'handler', scope: '', name: functionName(record.handler) })
   hooks('postHandler')
 
@@ -152,7 +179,7 @@ export function steps(record: RouteRecord): ExplainedStep[] {
   // whatever is actually sent (§13.3).
   for (const middleware of record.middleware) {
     if (middleware.kind !== 'after') continue
-    out.push({ kind: 'after', scope: scopeLabel(middleware.scope), name: middleware.name })
+    out.push({ kind: 'after', scope: scopeLabel(middleware.scope), name: conditional(middleware), ...at(middleware.origin) })
   }
 
   hooks('onSerialize')
@@ -176,6 +203,34 @@ export function steps(record: RouteRecord): ExplainedStep[] {
   hooks('onTimeout')
 
   return out
+}
+
+/** §4.2 stage 6 — what the intake does, and the limits that are this route's own. */
+function intakeLine(record: RouteRecord): string {
+  const policy = record.schema.intake
+  const mode = policy?.mode ?? 'parse'
+  const what = mode === 'raw' ? 'read body as bytes' : mode === 'stream' ? 'stream body to the handler' : 'read + parse body'
+  const own: string[] = []
+  if (policy?.maxSize !== undefined) own.push(`maxSize ${policy.maxSize} B`)
+  if (policy?.maxDepth !== undefined) own.push(`maxDepth ${policy.maxDepth}`)
+  if (policy?.maxFields !== undefined) own.push(`maxFields ${policy.maxFields}`)
+  return own.length === 0 ? what : `${what} — ${own.join(', ')} (this route)`
+}
+
+/**
+ * A middleware's name, with §8.7's verdict when it has a condition: a step a
+ * boot-time `when.env` turned off is listed — it was registered, and "why does
+ * this not run here" is the question — and marked as never running.
+ */
+function conditional(middleware: MiddlewareRef): string {
+  if (middleware.omitted === true) return `${middleware.name} [omitted at boot]`
+  if (middleware.when?.request !== undefined) return `${middleware.name} [guarded]`
+  return middleware.name
+}
+
+/** `{ origin }`, or nothing — so a step without one stays shaped as it always was. */
+function at(origin: SourceOrigin | undefined): { origin?: SourceOrigin } {
+  return origin === undefined ? {} : { origin }
 }
 
 function scopeLabel(scope: string): string {

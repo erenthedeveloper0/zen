@@ -4,6 +4,242 @@ All notable changes to Zen. The packages are versioned together; every entry
 applies to all six. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Zen is an alpha: until `1.0`, any prerelease may change the API.
 
+## [0.2.0-alpha] — 2026-10-11
+
+Diagnostics and contracts. The application graph becomes data you can diff,
+and every diagnostic points at the line of code it is about. Until now a boot
+error named a route by its method and path and left the reader to find it; a
+development 500 carried a stack and the route template; and the only way to
+compare two builds was to boot both. Now each registration records the
+`file:line:col` that made it and every boot diagnostic prints those lines — a
+gate in every suite fails a test whose boot error has a diagnostic with no
+line — a development error names the line that raised it and shows the code
+around it, and `app.graphDocument()` is the whole application as canonical
+JSON with SHA-256 fingerprints, held to the API diff by an oracle of a thousand
+seeded schema edits.
+
+The first minor version. The packages stay on npm's `alpha` dist-tag.
+
+### Added
+
+- **Registration origins** (§5.1). Routes, middleware, hooks, collections,
+  plugins, services, health checks, decorations, named schemas and
+  `defineConfig()` each record the `file:line:col` that registered them, read
+  from V8's structured call sites, relative to `ZenOptions.root` — which
+  `zen()` sets to the working directory. Every boot diagnostic carries
+  `origins`, and the renderer pairs them with what they are about:
+  `at GET /:org/settings  src/routes.ts:6:12   ⇄   GET /admin/:page  src/routes.ts:7:12`.
+  A plugin's registrations are placed in its `setup`; a failing `setup` names
+  the `use()` line and the line that threw; an OpenAPI diagnostic names the
+  route's line. `explainRoute()` prints where the route and each step were
+  registered.
+- **Development errors with the code in them** (§12.6). A development problem
+  document's `debug` gains `message`, `hint`, `consequence` and `docs`, and,
+  from the application, `origin` (the route's registration line), `thrown` (the
+  first application frame of the error, or of its cause), `frame` (two lines
+  either side of it) and `chain` (the route's resolved steps).
+  `ZenOptions.devErrors` takes a `readSource` and a `report`; `zen()` installs
+  a cached file reader and a reporter that writes each development 5xx to
+  stderr — only when stderr is a terminal, coloured unless `NO_COLOR`, with OSC
+  8 links. A development request whose `Accept` prefers HTML gets the same
+  facts as an HTML page built with the `html` tag, every value escaped, with
+  the error's own headers. `renderError`, `terminalReporter` and `sourceReader`
+  are exported from `@erenthedeveloper0/zen`.
+- **The graph as a document** (§2.4). `app.graphDocument()` — or
+  `serializeGraph(app.graph())` — is the application as canonical JSON: routes
+  with their schemas as JSON Schema, hooks, middleware chains, plugins,
+  collections, services, health checks, named schemas, parameter types, slots,
+  decorations and the redacted configuration. `fingerprint` is SHA-256 over the
+  canonical form without configuration, origins and the process-wide slot list,
+  so neither registration order nor file layout moves it; each route's
+  `contract` is SHA-256 over what crosses the wire, normalised so that a
+  description or a converter's spelling of the same schema does not move it.
+  `fingerprintHeaders: true` sends both as `Zen-Graph` and `Zen-Contract`.
+  `AppGraph` gains `services` and `schemas`. Exported: `serializeGraph`,
+  `graphFingerprint`, `contractFingerprint`, `contractOf`, `contractSchema`,
+  `canonicalJson`, `sha256`, `jsonSafe`, `GRAPH_DOCUMENT_VERSION` and the
+  `Graph*` types.
+- **`explainRequest(app, method, url, init)`** (§8.5) — EXPLAIN ANALYZE for one
+  request: every step that ran, its outcome (`continue`, `short-circuit`,
+  `refused`, `threw`), its time, and what it did that is visible from outside —
+  headers staged, slots set, an async handler, the fields a response schema
+  kept off the wire. Served from an instrumented copy of the route table: the
+  application, and every concurrent request, is untouched.
+- **A route spec that carries its rule and its dependencies.** `check(ctx)` —
+  the business rule, after the schemas, answered as a 422 `ZEN_VALIDATION` whose
+  issues carry `source: 'check'` (§11.7). `inject: { db: Db }` — the handler's
+  second argument, singletons resolved once at boot into a frozen object, scoped
+  services per request, a missing provider a boot error at the route's line
+  (§15.1). `intake: { maxSize, maxDepth, maxFields, mode }` — the route's own
+  body limits, and `mode: 'raw'` or `'stream'` for the bytes or a stream with
+  the limit enforced per chunk (§4.2 stage 6).
+- **Configured middleware** (§8.6). `defineMiddleware({ name, options, setup })`
+  returns a factory whose options are validated at boot like a plugin's —
+  `ZEN_MIDDLEWARE_OPTIONS`, naming the key a typo meant — and whose `setup` runs
+  once per instance after every plugin's. The pipeline is the one the returned
+  function compiles to when used directly.
+- **Conditional middleware** (§8.7): `use(fn, { when: { env } })` is decided once
+  at boot against the validated environment and an omitted step is absent from
+  the pipeline; `{ when: { request } }` guards the step per request. A bare
+  function is refused: which of the two it is has to be said.
+- **Optional tokens** (§15.2): `token(name, { optional: true })` is
+  `Token<T | undefined>`, resolves to `undefined` without a provider, and is
+  never a missing dependency at boot.
+- **Named schemas** (§10.2): `app.schema(name, schema)` and the registrar's
+  `schema()`. `@erenthedeveloper0/zen-openapi` publishes the schema under that
+  component name, used or not. `ZEN_SCHEMA_NAME` for one name given two schemas,
+  one schema two names, or a name OpenAPI cannot use.
+- **Response validation** (§11.5). `validation.response: 'error' | 'log' | 'off'
+  | { sample: n }` validates a response with its schema's own `validate`, last in
+  the epilogue. A mismatch under `'error'` is `ZEN_RESPONSE_INVALID`, a 500 that
+  is never exposed. `'off'` emits no code.
+- **Request policy is configuration** (§16.1, §19.2). The deadline, body limits,
+  `maxQueryParams`, `trustProxy`, the redirect allowlist and the adapter's
+  ingress limits are read from a `policy` namespace with a source each;
+  `zen({ timeout, body, … })` is sugar at the configuration layer, beaten by the
+  configuration file. `zen({ profile: 'hardened' })` is a named source of
+  production values: a 30 s deadline, 1,000 requests per connection, an 8 KB
+  URL, probe error text withheld, and in production lenient serialization with
+  response validation `'log'`; an unset `trustProxy` is warned about.
+- **Logging configuration** (§31.1): `logging.level` and `logging.redact`, applied
+  to the built-in logger and every child it made; `*` is one key and `**` any
+  depth. `requestLog()` in `@erenthedeveloper0/zen-middleware` writes one line per
+  request from a global `onResponse` hook.
+- **A circuit breaker on the error formatter** (§12.8). Five formatter failures
+  in ten seconds open it for thirty (`BREAKER_DEFAULTS`): one `fatal` line, then
+  the minimal responder without calling the formatter, then one attempt decides.
+- **The testing kit** (§15.5, §20.2, §20.3), at `@erenthedeveloper0/zen-core/testing`
+  and `@erenthedeveloper0/zen/testing`. `createTestApp(makeApp, { override, config })`
+  builds the real application with services replaced — each replacement wins
+  over every `provide()` of its token, a plugin's at boot included, and is
+  type-checked against the token — and configuration at the override layer.
+  `testContext()` is a context with no application behind it, for calling a
+  handler. `assertNoLeaks()` closes the application and fails naming each timer,
+  socket or server left running. `fixedClock()` is a clock a test moves.
+- **The API diff reads every constraint** (§29.7): `OAS_CONSTRAINT_TIGHTENED`,
+  `OAS_CONSTRAINT_LOOSENED` and `OAS_CONSTRAINT_CHANGED` for bounds, `pattern`,
+  `multipleOf` and `uniqueItems`; `OAS_ADDITIONAL_PROPERTIES_OPENED`;
+  `OAS_ITEMS_CONSTRAINED` / `OAS_ITEMS_UNCONSTRAINED`; `OAS_DEFAULT_CHANGED`;
+  `OAS_KEYWORD_CHANGED` for any other assertion keyword; and `OAS_UNION_CHANGED`
+  for a change inside one branch of a union of objects.
+- Three codes: `ZEN_SCHEMA_NAME`, `ZEN_MIDDLEWARE_OPTIONS`, `ZEN_RESPONSE_INVALID`.
+  Also exported: `defineMiddleware`, `isConfiguredMiddleware`,
+  `CONFIGURED_MIDDLEWARE`, `conditionOf`, `pipelineSteps`, `BREAKER_DEFAULTS`,
+  `explainRequest`, and the types `SourceOrigin`, `DevFacts`,
+  `HttpErrorConstructor`.
+
+### Changed
+
+- **Development validates responses.** `validation.response` is `'error'` by
+  default when `dev: true`, so a development response of the wrong value is a
+  500 `ZEN_RESPONSE_INVALID` rather than sent; production is `'off'`. Set
+  `validation: { response: 'off' }` to keep the old behaviour in development.
+- **Development seals the context and freezes request data** (§7.3):
+  `ctx.user = x` throws a `TypeError` in development, and so does writing into
+  `ctx.params`, `ctx.query`, `ctx.headers`, `ctx.cookies` or `ctx.body`. Use a
+  slot or a decoration. Production compiles the class it always did.
+- **The built-in logger masks `authorization`, `cookie` and `password`** keys at
+  any depth (`logging.redact`'s default). Set `logging: { redact: [] }` in the
+  configuration to log them again.
+- **`zen()` in development** writes each 5xx to stderr when stderr is a
+  terminal, and answers a browser's failed request with an HTML page.
+  `devErrors: { report: () => {} }` silences the first.
+- **Framework configuration namespaces.** `policy`, `serialization`,
+  `validation`, `logging` and `health.details` are now the framework's keys in
+  the configuration, beside `server`; an application namespace of the same name
+  merges with them. `serialization.strict` reads from the configuration, with
+  `zen({ serialization: { strict } })` still working as sugar.
+- **`ZEN_PARAM_TYPE_UNKNOWN` is a boot diagnostic**, aggregated with every other
+  routing problem, placed at the route's line and naming the closest known
+  type — instead of an error thrown by the router's build for the first
+  offending route.
+- **Shared serializers.** Two routes whose response schemas compile to the same
+  serializer now share one unit, named after the first route that needed it, so
+  `generatedSource()` lists fewer units.
+- **Types.** A route spec with `check` is typed through a second verb overload,
+  so `ctx.body` inside `check` is the schema's output; a spec with `inject`
+  gives the handler a typed second argument (`DepsOf<S>`); `RouteRecord.schema`
+  is a `RouteSpec`.
+- `explainRoute()` prints a `registered` row and each step's origin.
+
+### Fixed
+
+- **Core's declarations required Node's global types.** The inferred type of
+  each named HTTP error (`BadRequest`, `NotFound`, …) repeated `Error`'s static
+  side as `@types/node` augments it — `NodeJS.CallSite`, sixteen times in
+  `errors/http-errors.d.ts` — so a consumer without `@types/node` failed to
+  compile against `@erenthedeveloper0/zen-core`: TypeScript 7, whose default is
+  `types: []`, or a workerd project. Present since `0.1.0-alpha.1`; found by the
+  new TypeScript 7 consumer check. The errors now declare `HttpErrorConstructor`,
+  and a test holds core's declarations free of Node globals.
+- **The API diff passed every constraint change.** A request `maxLength` cut
+  from 100 to 10, a new `minimum`, a changed `pattern` — each was "No changes".
+  The stricter reading found `examples/openapi`'s committed baseline stale: zod's
+  JSON Schema for `email()` and `datetime()` patterns, and its response
+  descriptions, changed under a dependency update while no byte on the wire did.
+  `0.1.0-alpha.5`'s code emits the same document as this release's, so the drift
+  is the dependency's; the baseline is regenerated.
+
+### Performance
+
+Measured on the machine `0.1.0-alpha.5`'s numbers came from, against a
+worktree of `0.1.0-alpha.5` run alternately with this tree.
+
+- **Registration pays for origins.** One V8 stack walk of six frames per
+  registration, each frame's file classified once per file: ~5 µs a route,
+  against ~0.3 µs in `0.1.0-alpha.5`, so 10,000 routes register in ~54 ms
+  instead of ~3. `ready()` is unchanged (1.24–1.36 s at 10,000 routes in both).
+  The first version cost 13 µs; a profile put 45% of it in converting and
+  classifying frames that were never chosen. The new `benchmarks/boot`
+  (`npm run bench:boot`) publishes these.
+- **Heap after boot** at 10,000 routes: 50.6 MB, from 52.4 MB — routes whose
+  response schemas compile to the same serializer now share it.
+- **`graphDocument()`** costs ~37 µs a route on its first call — 378 ms and
+  10.6 MB of JSON at 10,000 routes — and is kept after that.
+- **The request path is unchanged.** A plain route's generated pipeline is
+  byte-identical to `0.1.0-alpha.5`'s, every `benchmarks/request-path` gate
+  holds, and `inject()` costs ~1.18 µs in both builds, paired — after a dispatch
+  refactor made for `explainRequest()` was found adding ~60 ns and was undone.
+  Against other servers Zen is where it was: 0.79–0.83× of `node:http` on
+  every workload without I/O, Fastify 0.97–1.03×, in the release gate's run
+  (cell spreads under 7%). A paired run against `0.1.0-alpha.5` found the same
+  ~0.8× in both, though too noisy to resolve anything finer;
+  `benchmarks/results/competitors.md` has both.
+
+### Documentation
+
+- ARCHITECTURE.md: new status blocks for §2.4 (the graph document), §8.5
+  (`explainRequest`), §12.6 (development errors), §15.5 and §20.3 (the testing
+  kit), §29.7 (the diff); statuses rewritten for §5.1, §7.3, §8.6, §8.7, §10.2,
+  §11.5, §11.7, §12.8, §15.1, §15.2, §19.2 and §31.1; §3.1's ladder gains
+  `testing`; §20.1 names the testing kit where it now lives; §28.8's rows for
+  origins, `when`, per-route body limits, the development error page and dev
+  sealing are struck through, and the union row says what is now reported;
+  Annex B gains the three codes.
+- README: the status lists, two in-depth sections ("Every diagnostic points at a
+  line", "The application as data"), and the test table. `docs/errors.md`: the
+  three codes, and `ZEN_PARAM_TYPE_UNKNOWN` and `ZEN_DI_MISSING` as they now
+  behave.
+
+### Repository
+
+- CI's packaging job type-checks a consumer on TypeScript 5.0 **and 7.0**, each
+  in its own project, and runs the testing kit from both subpaths of the
+  installed tarballs.
+- `npm test` loads `scripts/placed-boot.ts`, which fails any test whose boot
+  error has a diagnostic with no line — in every package's suite and every
+  example's.
+- `examples/hello-world` is split into `app.ts` and `main.ts` and has tests;
+  it and `examples/health` declare a response schema with zod. Every example's
+  tests boot it ten times to one graph fingerprint and refuse a seeded
+  wrong-type value in a response — through response validation, or, in the two
+  examples whose response shapes are `jsonSchema()` and cannot validate, through
+  the strict serializer.
+- Tests: 1,494, from 1,285. The contract oracle: a thousand seeded schema edits per run
+  (fifty-one seeds, 51,000 edits, checked once by hand).
+- The claims ledger: 66 claims (18 new), 2 admitted gaps. `route-origin`, `middleware-when` and `per-route-body-limit` closed and are claims now.
+- Negative controls: 177 — 33 new, one per new behaviour; four that this release's refactors had made stale were pointed at the code again. Writing them found two suites that were not load-bearing: the per-chunk body limit is unreachable through `inject()`, which always declares a length, and is now tested over a socket; `requestLog`'s skip test counted lines without checking which.
+
 ## [0.1.0-alpha.5] — 2026-10-09
 
 The hot path, measured. Every benchmark here until now compared Zen with
@@ -755,6 +991,7 @@ Found by the first push to CI, on Windows:
   rather than `string`, because its `parse` may return anything.
 - `Router.analyze` takes the same options as `Router.build`.
 
+[0.2.0-alpha]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.2.0-alpha
 [0.1.0-alpha.5]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/erenthedeveloper0/zen/releases/tag/v0.1.0-alpha.3

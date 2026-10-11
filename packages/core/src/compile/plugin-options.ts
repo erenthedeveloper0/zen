@@ -1,6 +1,6 @@
 import type { Plugin } from '../contracts/plugin.ts'
 import type { JsonSchema } from '../contracts/json-schema.ts'
-import type { StandardResult } from '../contracts/standard-schema.ts'
+import type { AnySchema, StandardResult } from '../contracts/standard-schema.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { closest } from '../primitives/nearest.ts'
@@ -52,10 +52,45 @@ export async function validatePluginOptions(
   plugin: Pick<Plugin<never, object>, 'name' | 'version' | 'options'>,
   given: unknown,
 ): Promise<OptionsVerdict> {
-  const schema = plugin.options
-  if (schema === undefined) return { value: given, diagnostic: null }
+  return validateOptions({
+    kind: 'plugin',
+    label: `Plugin "${plugin.name}@${plugin.version}"`,
+    name: plugin.name,
+    code: Codes.PLUGIN_OPTIONS,
+    correct: `Correct the options passed to ${plugin.name} — in app.use(plugin, options), or in the call that built it.`,
+  }, plugin.options, given)
+}
 
-  const label = `${plugin.name}@${plugin.version}`
+/**
+ * A configured middleware's options — §8.6, by the same machinery as a
+ * plugin's: `rateLimit({ limt: 100 })` is refused at boot with the key it was
+ * meant to be, not discovered at 3 a.m. under load.
+ */
+export async function validateMiddlewareOptions(
+  definition: { readonly name: string; readonly options?: AnySchema | undefined },
+  given: unknown,
+): Promise<OptionsVerdict> {
+  return validateOptions({
+    kind: 'middleware',
+    label: `Middleware "${definition.name}"`,
+    name: definition.name,
+    code: Codes.MIDDLEWARE_OPTIONS,
+    correct: `Correct the options passed to ${definition.name}(…), in the call that configured it.`,
+  }, definition.options, given)
+}
+
+interface OptionsOwner {
+  readonly kind: 'plugin' | 'middleware'
+  /** `Plugin "cors@1.0.0"`, `Middleware "rateLimit"`. */
+  readonly label: string
+  readonly name: string
+  readonly code: string
+  /** The `fix:` when no key was misspelled. */
+  readonly correct: string
+}
+
+async function validateOptions(owner: OptionsOwner, schema: AnySchema | undefined, given: unknown): Promise<OptionsVerdict> {
+  if (schema === undefined) return { value: given, diagnostic: null }
 
   let result: StandardResult<unknown>
   try {
@@ -66,9 +101,9 @@ export async function validatePluginOptions(
       value: undefined,
       diagnostic: {
         severity: 'error',
-        code: Codes.PLUGIN_OPTIONS,
+        code: owner.code,
         message:
-          `Plugin "${label}"'s options schema threw while checking its options: ` +
+          `${owner.label}'s options schema threw while checking its options: ` +
           (error instanceof Error ? error.message : String(error)),
         hint: 'A schema reports a bad value through `issues`; this one threw instead. Fix the schema.',
       },
@@ -86,19 +121,17 @@ export async function validatePluginOptions(
 
   const suggestions = unknown
     .filter((entry) => entry.suggestion !== null)
-    .map(({ key, suggestion }) => `"${key}" is not an option of ${plugin.name} — did you mean "${suggestion}"?`)
+    .map(({ key, suggestion }) => `"${key}" is not an option of ${owner.name} — did you mean "${suggestion}"?`)
 
   return {
     value: undefined,
     diagnostic: {
       severity: 'error',
-      code: Codes.PLUGIN_OPTIONS,
-      message: `Plugin "${label}" was given options it does not accept: ${problems.join('; ')}.`,
-      hint: suggestions.length > 0
-        ? suggestions.join(' ')
-        : `Correct the options passed to ${plugin.name} — in app.use(plugin, options), or in the call that built it.`,
+      code: owner.code,
+      message: `${owner.label} was given options it does not accept: ${problems.join('; ')}.`,
+      hint: suggestions.length > 0 ? suggestions.join(' ') : owner.correct,
       consequence:
-        'Booting anyway would run the plugin on a configuration nobody wrote: an option it does not read ' +
+        `Booting anyway would run the ${owner.kind} on a configuration nobody wrote: an option it does not read ` +
         'is not merely ignored, it leaves the default in its place.',
     },
   }
@@ -113,7 +146,7 @@ export async function validatePluginOptions(
  * stands alone — the honest answer, rather than a guess at its keys.
  */
 function unknownKeys(
-  schema: NonNullable<Plugin<never, object>['options']>,
+  schema: AnySchema,
   given: unknown,
 ): Array<{ key: string; suggestion: string | null }> {
   if (typeof given !== 'object' || given === null || Array.isArray(given)) return []

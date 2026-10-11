@@ -13,6 +13,7 @@
  */
 
 import type { Disposal } from '../primitives/disposal.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 export type Lifetime = 'singleton' | 'scoped' | 'transient'
 
@@ -20,6 +21,12 @@ export interface Token<T> {
   readonly name: string
   /** Index into the context slot array; only meaningful for `scoped`. */
   readonly index: number
+  /**
+   * §15.2 — resolving it with no provider registered yields `undefined`
+   * rather than `ZEN_DI_MISSING`, and boot analysis does not require one. For
+   * a service an application may or may not configure: a tracer, a cache.
+   */
+  readonly optional?: boolean | undefined
   /** Phantom type carrier. Never present at runtime. */
   readonly $type?: T
 }
@@ -42,6 +49,8 @@ export interface ProviderRecord {
   readonly deps: readonly Token<unknown>[]
   readonly lifetime: Lifetime
   readonly eager: boolean
+  /** Where `provide()` was called (§5.1). */
+  readonly origin?: SourceOrigin | undefined
 }
 
 export interface DiDiagnostic {
@@ -49,6 +58,8 @@ export interface DiDiagnostic {
   readonly code: string
   readonly message: string
   readonly hint?: string | undefined
+  /** The `provide()` sites involved — see `Diagnostic.origins`. */
+  readonly origins?: readonly SourceOrigin[] | undefined
 }
 
 /**
@@ -65,7 +76,7 @@ export interface ScopeCarrier {
 }
 
 export interface Container {
-  provide<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T)): void
+  provide<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T), origin?: SourceOrigin): void
   has(token: Token<unknown>): boolean
   resolve<T>(token: Token<T>, scope?: ScopeCarrier): T
   resolveAsync<T>(token: Token<T>, scope?: ScopeCarrier): Promise<T>

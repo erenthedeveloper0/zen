@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import type { Collection, Reply, Token } from '@erenthedeveloper0/zen'
 import { PaymentsToken } from '../../plugins/payments.ts'
 import type { Dependencies } from '../../shared/dependencies.ts'
@@ -17,6 +18,13 @@ import type { Dependencies } from '../../shared/dependencies.ts'
  * probing its database twice for every order it serves.
  */
 
+/**
+ * What an order looks like on the wire. Declared, so the serializer emits
+ * these fields and no others (§13.3), and a development build refuses a value
+ * of the wrong type instead of sending it (§11.5).
+ */
+const OrderView = z.object({ id: z.string(), total: z.number().int(), currency: z.string() })
+
 interface Ctx {
   resolve<T>(token: Token<T>): T
   json<T>(body: T, init?: { status?: number }): Reply<T>
@@ -35,7 +43,7 @@ export function orderRoutes(deps: Dependencies) {
       return ctx.json({ orders: [{ id: 'ord_1', total: 4200 }, { id: 'ord_2', total: 1750 }] })
     })
 
-    orders.get('/:id', async function getOrder(ctx: CtxWithId) {
+    orders.get('/:id', { response: { 200: OrderView } }, async function getOrder(ctx: CtxWithId) {
       await deps.db.query(unbounded)
       return ctx.json({ id: ctx.params.id, total: 4200, currency: 'EUR' })
     })

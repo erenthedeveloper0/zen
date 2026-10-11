@@ -200,7 +200,8 @@ npm install --registry http://localhost:4873 @erenthedeveloper0/zen@alpha
   machine), every source map ships with the source it points at, `README.md`
   and `LICENSE` are present — then all six tarballs are installed outside the
   workspace, serve a request, and a consumer is type-checked on TypeScript 5.0,
-  the oldest the manifests accept.
+  the oldest the manifests accept, and on TypeScript 7, whose default
+  `types: []` loads no `@types/*` a declaration forgot to import.
 - **Trusted publishing and a human gate.** GitHub Actions authenticates to npm
   with OIDC, so no long-lived publish token exists to be stolen, and npm
   records provenance — which workflow, repository and commit built each

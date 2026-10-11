@@ -79,3 +79,68 @@ describe('ConsoleLogger never throws (§12.8)', () => {
     assert.equal(logged['shard'], 3)
   })
 })
+
+describe('redaction and configuration (§31.1, §16.1)', () => {
+  let lines: string[] = []
+  const original = { log: console.log, error: console.error }
+  beforeEach(() => {
+    lines = []
+    console.log = (line: string) => { lines.push(line) }
+    console.error = (line: string) => { lines.push(line) }
+  })
+  afterEach(() => {
+    console.log = original.log
+    console.error = original.error
+  })
+  const last = (): Record<string, unknown> => JSON.parse(lines.at(-1) as string) as Record<string, unknown>
+
+  it('hides what a path names, at the depth it names, and leaves the rest', () => {
+    const logger = new ConsoleLogger('info')
+    logger.configure({ redact: ['req.headers.authorization', '*.token', '**.password'] })
+    logger.info({
+      req: { headers: { authorization: 'Bearer abc', accept: 'text/html' } },
+      session: { token: 't0k3n', user: 'ada' },
+      token: 'top-level-kept',
+      deep: { a: { b: { password: 'hunter2' } } },
+      password: 'hunter3',
+    }, 'line')
+    const line = last()
+    assert.deepEqual(line['req'], { headers: { authorization: '********', accept: 'text/html' } })
+    assert.deepEqual(line['session'], { token: '********', user: 'ada' })
+    assert.equal(line['token'], 'top-level-kept', '`*.token` is one level down, not the top')
+    assert.deepEqual(line['deep'], { a: { b: { password: '********' } } })
+    assert.equal(line['password'], '********', '`**` matches no key as well as many')
+  })
+
+  it('hides a binding as well as a field: the whole line is serialised, then redacted', () => {
+    const logger = new ConsoleLogger('info')
+    logger.configure({ redact: ['**.cookie'] })
+    logger.child({ cookie: 'session=1' }).info({ path: '/x' }, 'bound')
+    assert.equal(last()['cookie'], '********')
+  })
+
+  it('children follow what the root is configured with, even when made before it', () => {
+    const logger = new ConsoleLogger('info')
+    const child = logger.child({ requestId: 'r1' })
+    logger.configure({ level: 'error', redact: ['secret'] })
+    child.info('dropped')
+    child.error({ secret: 's' }, 'kept')
+    assert.equal(lines.length, 1)
+    assert.equal(last()['secret'], '********')
+    assert.equal(child.level, 'error')
+  })
+
+  it("an application's logging configuration reaches the built-in logger — and its defaults hide credentials", async () => {
+    const app = makeApp({ logger: undefined, overrides: { logging: { level: 'warn' } } })
+    app.get('/', (ctx) => {
+      ctx.log.info('not at warn')
+      ctx.log.warn({ headers: { authorization: 'Bearer abc', cookie: 'sid=1' }, user: { password: 'p' } }, 'seen')
+      return 'ok'
+    })
+    await app.inject('GET', '/')
+    const written = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((l) => l['msg'] === 'seen' || l['msg'] === 'not at warn')
+    assert.deepEqual(written.map((l) => l['msg']), ['seen'])
+    assert.deepEqual(written[0]?.['headers'], { authorization: '********', cookie: '********' })
+    assert.deepEqual(written[0]?.['user'], { password: '********' })
+  })
+})

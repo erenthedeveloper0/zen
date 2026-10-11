@@ -2,6 +2,7 @@ import type { JsonSchemaNode, JsonType } from '@erenthedeveloper0/zen-core'
 import type {
   HttpOperation, OpenApiDocument, OpenApiSchema, OperationObject, ParameterObject, ResponseObject,
 } from './types.ts'
+import { canonical } from './schema.ts'
 
 /**
  * API change detection — rfcs/0001 §29.5.
@@ -262,8 +263,20 @@ function diffSchema(
     diffTypes(before.types, after.types, direction, where, ctx)
     // Several branches left after a union is read: their types were compared
     // above, and nothing else can be — which branch of one document is which of
-    // the other is not knowable in general (§28.8).
-    if (before.union || after.union) return
+    // the other is not knowable in general (§28.8). What *can* be known is
+    // whether the branches changed at all, and a change nothing above named is
+    // reported as one, conservatively, rather than not at all.
+    if (before.union || after.union) {
+      if (before.union && after.union && before.types.size > 0 && sameTypes(before.types, after.types) &&
+          canonical(before.branches) !== canonical(after.branches)) {
+        ctx.changes.push(breaking(
+          'OAS_UNION_CHANGED',
+          'A branch of the union changed; which branch of one document is which of the other cannot be told apart, so it is reported as breaking.',
+          where,
+        ))
+      }
+      return
+    }
 
     diffEnum(before.node, after.node, direction, where, ctx)
 
@@ -281,19 +294,21 @@ function diffSchema(
     const afterItems = typeof after.node.items === 'object' ? after.node.items : undefined
     if (beforeItems !== undefined && afterItems !== undefined) {
       diffSchema(beforeItems, afterItems, direction, `${where}[]`, ctx, active)
+    } else if (beforeItems === undefined && afterItems !== undefined) {
+      // Elements were anything and are now constrained: a request accepts less.
+      ctx.changes.push(direction === 'request'
+        ? breaking('OAS_ITEMS_CONSTRAINED', 'Array elements are now constrained by a schema.', where)
+        : compatible('OAS_ITEMS_CONSTRAINED', 'Array elements are now described by a schema.', where))
+    } else if (beforeItems !== undefined && afterItems === undefined) {
+      ctx.changes.push(direction === 'response'
+        ? breaking('OAS_ITEMS_UNCONSTRAINED', 'Array elements may now be anything.', where)
+        : compatible('OAS_ITEMS_UNCONSTRAINED', 'Array elements are no longer constrained.', where))
     }
 
-    if (
-      direction === 'request' &&
-      before.node.additionalProperties !== false &&
-      after.node.additionalProperties === false
-    ) {
-      ctx.changes.push(breaking(
-        'OAS_ADDITIONAL_PROPERTIES_CLOSED',
-        'Extra properties are no longer accepted.',
-        where,
-      ))
-    }
+    diffAdditional(before.node, after.node, direction, where, ctx, active)
+    diffBounds(before.node, after.node, direction, where, ctx)
+    diffDefault(before.node, after.node, direction, where, ctx)
+    diffOtherKeywords(before.node, after.node, where, ctx)
   } finally {
     if (key !== null) active.delete(key)
   }
@@ -336,6 +351,8 @@ interface SchemaView {
   readonly types: ReadonlySet<JsonType>
   /** Several non-null branches: their types are compared, nothing else is. */
   readonly union: boolean
+  /** A union's branches, resolved and without documentation, for the conservative change check. */
+  readonly branches?: readonly unknown[] | undefined
   /** The component this view was reached through — for the cycle guard. */
   readonly ref: string | undefined
 }
@@ -374,7 +391,31 @@ function viewOf(resolver: Resolver, raw: OpenApiSchema | undefined): SchemaView 
     if (own.size === 0) stated = false
     for (const type of own) types.add(type)
   }
-  return { node: {}, types: stated ? types : new Set(), union: others.length > 1, ref: raw.$ref }
+  return {
+    node: {},
+    types: stated ? types : new Set(),
+    union: others.length > 1,
+    ref: raw.$ref,
+    branches: branches.map((branch) => withoutDescription(branch.node)),
+  }
+}
+
+/** A schema with its descriptive words removed, at every level — what a union check compares. */
+function withoutDescription(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(withoutDescription)
+  if (typeof node !== 'object' || node === null) return node
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (DESCRIPTIVE.has(key) || key.startsWith('x-')) continue
+    out[key] = withoutDescription(value)
+  }
+  return out
+}
+
+function sameTypes(a: ReadonlySet<JsonType>, b: ReadonlySet<JsonType>): boolean {
+  if (a.size !== b.size) return false
+  for (const type of a) if (!b.has(type)) return false
+  return true
 }
 
 function plainView(node: OpenApiSchema, ref: string | undefined): SchemaView {
@@ -474,6 +515,164 @@ function diffProperties(
     }
 
     diffSchema(from, to, direction, at, ctx, active)
+  }
+}
+
+/**
+ * `additionalProperties` — the keys a schema does not name.
+ *
+ * Closing them on a request is breaking (a caller sending extra keys is now
+ * refused) and opening them is a relaxation; on a response the asymmetry
+ * mirrors: closing drops keys a reader may have used, opening may hand it
+ * keys it has never seen, which every other rule here treats as compatible
+ * (`OAS_RESPONSE_FIELD_ADDED`). A schema on both sides is compared as one.
+ */
+function diffAdditional(
+  before: OpenApiSchema,
+  after: OpenApiSchema,
+  direction: Direction,
+  where: string,
+  ctx: Context,
+  active: Set<string>,
+): void {
+  const from = before.additionalProperties
+  const to = after.additionalProperties
+  if (typeof from === 'object' && from !== null && typeof to === 'object' && to !== null) {
+    diffSchema(from as OpenApiSchema, to as OpenApiSchema, direction, `${where}{*}`, ctx, active)
+    return
+  }
+  const closedBefore = from === false
+  const closedAfter = to === false
+  const schemaBefore = typeof from === 'object' && from !== null
+  const schemaAfter = typeof to === 'object' && to !== null
+  if (closedBefore === closedAfter && schemaBefore === schemaAfter) return
+  // Wider means more keys are allowed than before: open > schema > closed.
+  const width = (closed: boolean, schema: boolean): number => (closed ? 0 : schema ? 1 : 2)
+  const wider = width(closedAfter, schemaAfter) > width(closedBefore, schemaBefore)
+  if (direction === 'request') {
+    ctx.changes.push(wider
+      ? compatible('OAS_ADDITIONAL_PROPERTIES_OPENED', 'Extra properties are now accepted.', where)
+      : breaking('OAS_ADDITIONAL_PROPERTIES_CLOSED', 'Extra properties are no longer accepted.', where))
+  } else {
+    ctx.changes.push(wider
+      ? compatible('OAS_ADDITIONAL_PROPERTIES_OPENED', 'The response may now carry properties it does not name.', where)
+      : breaking('OAS_ADDITIONAL_PROPERTIES_CLOSED', 'Properties the response carried without naming are no longer sent.', where))
+  }
+}
+
+/**
+ * Bounds — the keywords that narrow a value without changing its type.
+ *
+ * Read the way every other rule here is: a request that accepts less breaks a
+ * caller, a response that may return more breaks a reader. A lower bound that
+ * rises, or appears, *tightens*; one that falls, or goes, *loosens*. An upper
+ * bound is the mirror. `multipleOf` and `pattern` have no order — `2` to `3`
+ * is neither tighter nor looser — so any change to either is breaking in both
+ * directions, the conservative reading this file promises.
+ *
+ * These were invisible until `0.2.0-alpha`: a `maxLength` cut from 255 to 20
+ * passed `openapi:check` while the route's contract fingerprint (§2.4)
+ * changed. The two have to see the same edits or one of them is lying, and
+ * `test/contract-oracle.test.ts` holds them to it.
+ */
+const LOWER_BOUNDS = ['minLength', 'minItems', 'minProperties', 'minimum', 'exclusiveMinimum', 'minContains'] as const
+const UPPER_BOUNDS = ['maxLength', 'maxItems', 'maxProperties', 'maximum', 'exclusiveMaximum', 'maxContains'] as const
+const UNORDERED = ['multipleOf', 'pattern'] as const
+
+function diffBounds(before: OpenApiSchema, after: OpenApiSchema, direction: Direction, where: string, ctx: Context): void {
+  const report = (keyword: string, tighter: boolean, from: unknown, to: unknown): void => {
+    const what = `${keyword} ${describeBound(from)} → ${describeBound(to)}`
+    const breaks = tighter ? direction === 'request' : direction === 'response'
+    const code = tighter ? 'OAS_CONSTRAINT_TIGHTENED' : 'OAS_CONSTRAINT_LOOSENED'
+    const message = direction === 'request'
+      ? `Request ${tighter ? 'accepts less' : 'accepts more'}: ${what}.`
+      : `Response ${tighter ? 'is narrower' : 'may now be wider'}: ${what}.`
+    ctx.changes.push(breaks ? breaking(code, message, where) : compatible(code, message, where))
+  }
+  const changed = (keyword: string, from: unknown, to: unknown): void => {
+    ctx.changes.push(breaking(
+      'OAS_CONSTRAINT_CHANGED',
+      `${keyword} changed from ${describeBound(from)} to ${describeBound(to)}, and neither is the narrower one.`,
+      where,
+    ))
+  }
+  const compare = (keyword: string, lower: boolean): void => {
+    const from = before[keyword]
+    const to = after[keyword]
+    if (from === to) return
+    if (typeof from === 'number' && typeof to === 'number') report(keyword, lower ? to > from : to < from, from, to)
+    else if (from === undefined && typeof to === 'number') report(keyword, true, from, to)
+    else if (typeof from === 'number' && to === undefined) report(keyword, false, from, to)
+    else changed(keyword, from, to)
+  }
+  for (const keyword of LOWER_BOUNDS) compare(keyword, true)
+  for (const keyword of UPPER_BOUNDS) compare(keyword, false)
+  for (const keyword of UNORDERED) {
+    if (canonical(before[keyword]) !== canonical(after[keyword])) changed(keyword, before[keyword], after[keyword])
+  }
+  const uniqueBefore = before['uniqueItems'] === true
+  const uniqueAfter = after['uniqueItems'] === true
+  if (uniqueBefore !== uniqueAfter) report('uniqueItems', uniqueAfter, uniqueBefore, uniqueAfter)
+}
+
+function describeBound(value: unknown): string {
+  return value === undefined ? 'none' : JSON.stringify(value)
+}
+
+/**
+ * A request field's `default` is what the server uses when a caller leaves the
+ * field out, so changing it changes what such a caller gets: breaking, by the
+ * rule that a change which could break a reasonable consumer is reported as
+ * one. A response's `default` describes nothing the serializer does, and is
+ * documentation.
+ */
+function diffDefault(before: OpenApiSchema, after: OpenApiSchema, direction: Direction, where: string, ctx: Context): void {
+  const from = before['default']
+  const to = after['default']
+  if (from === undefined && to === undefined) return
+  if (from !== undefined && to !== undefined && canonical(from) === canonical(to)) return
+  if (direction === 'request') {
+    ctx.changes.push(breaking(
+      'OAS_DEFAULT_CHANGED',
+      `The default changed from ${describeBound(from)} to ${describeBound(to)}: a caller that omits the field now gets another value.`,
+      where,
+    ))
+  } else {
+    ctx.changes.push(documentation('OAS_DEFAULT_CHANGED', 'The documented default changed.', where))
+  }
+}
+
+/** Compared by the rules above, or read structurally by the union and `$ref` handling. */
+const HANDLED = new Set<string>([
+  'type', 'nullable', 'enum', 'const', 'format', 'properties', 'required', 'items', 'additionalProperties', 'default',
+  ...LOWER_BOUNDS, ...UPPER_BOUNDS, ...UNORDERED, 'uniqueItems',
+  '$ref', '$defs', 'definitions', 'anyOf', 'oneOf',
+])
+
+/** Words that describe a schema to a reader without constraining a value. */
+const DESCRIPTIVE = new Set<string>([
+  'title', 'description', 'examples', 'example', '$comment', 'deprecated', 'readOnly', 'writeOnly',
+  '$schema', '$id', '$anchor',
+])
+
+/**
+ * Every other keyword — `not`, `patternProperties`, `prefixItems`, `allOf`,
+ * `contentMediaType`, a keyword from a later draft — compared by what it
+ * says. A change to one is reported as breaking with its name: this file does
+ * not know what it means to a client, and reporting nothing would be the
+ * under-report the header refuses. A vendor extension (`x-…`) constrains no
+ * value and is not compared.
+ */
+function diffOtherKeywords(before: OpenApiSchema, after: OpenApiSchema, where: string, ctx: Context): void {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+  for (const key of [...keys].sort()) {
+    if (HANDLED.has(key) || DESCRIPTIVE.has(key) || key.startsWith('x-')) continue
+    if (canonical(before[key]) === canonical(after[key])) continue
+    ctx.changes.push(breaking(
+      'OAS_KEYWORD_CHANGED',
+      `"${key}" changed. What that means to a client is not classified, so it is reported as breaking.`,
+      where,
+    ))
   }
 }
 

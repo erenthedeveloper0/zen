@@ -1,7 +1,7 @@
 /**
  * What actually ships, as a check instead of a checklist.
  *
- * `node scripts/check-pack.ts [--typescript 5.0]`
+ * `node scripts/check-pack.ts [--typescript 5.0 [--typescript 7.0 …]]`
  *
  * The workspace resolves every package through symlinks and never packs, so
  * nothing else in the repository sees a tarball. Every packaging defect this
@@ -21,8 +21,11 @@
  *
  * `--typescript <version>` additionally type-checks a consumer against the
  * published declarations with that TypeScript — the floor the manifests declare
- * as a peer (`>=5.0`) is a claim, and this is how it is checked. It needs the
- * network to install TypeScript.
+ * as a peer (`>=5.0`) is a claim, and this is how it is checked. Repeat it for
+ * more than one: CI checks the floor and TypeScript 7, the native compiler, the
+ * release consumers are moving to while this repository builds with 5.9. Each
+ * version gets a consumer project of its own, so one's `@types/node` cannot
+ * stand in for another's. It needs the network to install TypeScript.
  */
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
@@ -32,8 +35,7 @@ import { join, resolve } from 'node:path'
 const ORDER = ['core', 'router', 'adapter-node', 'openapi', 'middleware', 'zen'] as const
 const root = resolve(import.meta.dirname, '..')
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const tsFlag = process.argv.indexOf('--typescript')
-const tsVersion = tsFlag === -1 ? null : process.argv[tsFlag + 1] ?? null
+const tsVersions = process.argv.flatMap((arg, i) => (arg === '--typescript' && process.argv[i + 1] !== undefined ? [process.argv[i + 1] as string] : []))
 
 const problems: string[] = []
 const fail = (message: string): void => { problems.push(message) }
@@ -107,6 +109,8 @@ try {
     import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
     import * as core from '@erenthedeveloper0/zen-core'
     import * as contracts from '@erenthedeveloper0/zen-core/contracts'
+    import { createTestApp } from '@erenthedeveloper0/zen/testing'
+    import * as coreTesting from '@erenthedeveloper0/zen-core/testing'
     import pkg from '@erenthedeveloper0/zen/package.json' with { type: 'json' }
 
     const app = zen({ env: {}, logger: new NoopLogger(), lifecycle: false })
@@ -121,34 +125,59 @@ try {
     if (!doc.paths['/hello/{name}']) throw new Error('the document is missing the route')
     console.log('    ✔ served a request and an OpenAPI document from the installed tarballs')
     console.log('      core exports: ' + Object.keys(core).length + ', contracts entry resolved: ' + (typeof contracts === 'object'))
+
+    const tested = await createTestApp(() => {
+      const a = zen({ env: {}, logger: new NoopLogger(), lifecycle: false })
+      a.get('/', () => 'tested')
+      return a
+    })
+    const text = (await tested.get('/')).text()
+    await tested.close()
+    if (text !== 'tested') throw new Error('the testing kit answered ' + JSON.stringify(text))
+    if (coreTesting.createTestApp !== createTestApp) throw new Error('two testing kits: the meta-package re-export is a copy')
+    console.log('    ✔ the testing kit runs from both subpaths, and they are one module')
   `)
   process.stdout.write(execFileSync(process.execPath, ['check.mjs'], { cwd: project, encoding: 'utf8' }))
 
-  if (tsVersion !== null) {
-    console.log(`\n  Type-checking a consumer with TypeScript ${tsVersion}\n`)
+  for (const version of tsVersions) {
+    console.log(`\n  Type-checking a consumer with TypeScript ${version}\n`)
+    const consumer = join(scratch, `consumer-ts${version}`)
+    mkdirSync(consumer)
     // `@types/node@ts<version>` is DefinitelyTyped's newest release that still
     // supports that TypeScript; the plain latest does not go back to 5.0, and
     // its errors would be reported as ours.
-    run(['install', '--no-audit', '--no-fund', '--loglevel=error', `typescript@${tsVersion}`, `@types/node@ts${tsVersion}`], project)
-    writeFileSync(join(project, 'consumer.ts'), `
-      import { zen, defineConfig } from '@erenthedeveloper0/zen'
+    writeFileSync(join(consumer, 'package.json'), JSON.stringify({
+      name: `zen-pack-check-ts${version}`, private: true, type: 'module',
+      dependencies: { ...specs, typescript: version, '@types/node': `ts${version}` }, overrides: specs,
+    }, null, 2))
+    run(['install', '--no-audit', '--no-fund', '--loglevel=error'], consumer)
+    writeFileSync(join(consumer, 'consumer.ts'), `
+      import { zen, defineConfig, token } from '@erenthedeveloper0/zen'
+      import { createTestApp, testContext, fixedClock } from '@erenthedeveloper0/zen/testing'
       import { cors } from '@erenthedeveloper0/zen-middleware'
       import { openapiPlugin } from '@erenthedeveloper0/zen-openapi'
       export const config = defineConfig({ server: { port: 3000 } })
-      const app = zen({ lifecycle: false })
-      app.use(cors({ origin: ['https://example.com'] }))
-      app.use(openapiPlugin, { title: 't', version: '1' })
-      app.get('/users/:id<int>', (ctx) => ({ id: ctx.params.id + 1 }))
+      const Clock = token<{ now(): number }>('clock')
+      const make = () => {
+        const app = zen({ lifecycle: false })
+        app.use(cors({ origin: ['https://example.com'] }))
+        app.use(openapiPlugin, { title: 't', version: '1' })
+        app.get('/users/:id<int>', (ctx) => ({ id: ctx.params.id + 1 }))
+        return app
+      }
+      export const tested = createTestApp(make, { override: [[Clock, () => fixedClock(0)]] })
+      export const ctx = testContext({ params: { id: 1 } })
     `)
-    writeFileSync(join(project, 'tsconfig.json'), JSON.stringify({
+    writeFileSync(join(consumer, 'tsconfig.json'), JSON.stringify({
       compilerOptions: { strict: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022', noEmit: true, skipLibCheck: false },
       files: ['consumer.ts'],
     }))
     try {
-      execFileSync(process.execPath, [join(project, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', project], { encoding: 'utf8' })
-      console.log(`    ✔ the published declarations type-check under TypeScript ${tsVersion}`)
+      const out = execFileSync(process.execPath, [join(consumer, 'node_modules', 'typescript', 'bin', 'tsc'), '-v'], { encoding: 'utf8' }).trim()
+      execFileSync(process.execPath, [join(consumer, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', consumer], { encoding: 'utf8' })
+      console.log(`    ✔ the published declarations type-check under TypeScript ${version} (${out})`)
     } catch (error) {
-      fail(`TypeScript ${tsVersion} rejects the published declarations:\n${(error as { stdout?: string }).stdout ?? String(error)}`)
+      fail(`TypeScript ${version} rejects the published declarations:\n${(error as { stdout?: string }).stdout ?? String(error)}`)
     }
   }
 } catch (error) {

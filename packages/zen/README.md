@@ -50,7 +50,14 @@ JavaScript. Stages a route does not use are not emitted at all.
   and router-checks every value, so a link reaches the route it names — or is
   refused before anyone clicks it.
 - **Boot-time diagnostics**, aggregated: every registration problem in one run,
-  each with a fix.
+  each with a fix and the `file:line:col` of what it is about.
+- **Errors that point at your code** in development: the line that raised a
+  5xx and the lines around it, written to the terminal with clickable links,
+  and an HTML page for a browser — and a response of the wrong value refused
+  rather than sent.
+- **A testing kit**, `@erenthedeveloper0/zen/testing`: `createTestApp()` builds
+  your application with services replaced, `testContext()` calls a handler on
+  its own, and `assertNoLeaks()` fails on anything left running.
 
 ```ts
 import { html } from '@erenthedeveloper0/zen'
@@ -85,10 +92,12 @@ await app.listen()                                  // address from config.serve
 | [`@erenthedeveloper0/zen-adapter-node`](https://www.npmjs.com/package/@erenthedeveloper0/zen-adapter-node) | Node's `http` server |
 | [`@erenthedeveloper0/zen-middleware`](https://www.npmjs.com/package/@erenthedeveloper0/zen-middleware) | CORS, security headers, request ids, rate limiting |
 
-and re-exports all of them, so one import is enough. It also supplies the two
+and re-exports all of them, so one import is enough. It also supplies the
 things only a Node process has: `process.env` as the configuration environment,
-and signal handling — `SIGTERM`/`SIGINT` run the graceful shutdown and exit, and
-an uncaught exception is logged and does the same with exit code 1. Pass
+the working directory that registration lines are printed relative to, the
+source reader and terminal reporter behind development errors, and signal
+handling — `SIGTERM`/`SIGINT` run the graceful shutdown and exit, and an
+uncaught exception is logged and does the same with exit code 1. Pass
 `lifecycle: false` if something else manages the process.
 
 OpenAPI generation is a separate install:

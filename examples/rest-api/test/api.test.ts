@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { build } from '../src/app.ts'
 import { UserRepoToken } from '../src/services.ts'
 import type { UserRow } from '../src/domain.ts'
+import { canonicalJson, graphFingerprint, type GraphDocument } from '@erenthedeveloper0/zen'
+import { createTestApp } from '@erenthedeveloper0/zen/testing'
 
 /**
  * Testing a Zen app is calling `inject()` — no socket, no supertest, no
@@ -246,3 +248,39 @@ function quiet() {
   const noop = () => {}
   return { level: 'fatal' as const, child() { return this }, trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop }
 }
+
+// ── The graph as data, and responses held to their schemas ─────────────────
+
+describe('the graph as data, and responses held to their schemas', () => {
+  test('the graph round-trips to canonical JSON, with one fingerprint across ten shuffled boots', async () => {
+    const prints = new Set<string>()
+    for (let boot = 0; boot < 10; boot++) {
+      const booted = app()
+      await booted.ready()
+      const document = await booted.graphDocument()
+      const parsed = JSON.parse(JSON.stringify(document)) as GraphDocument
+      assert.equal(canonicalJson(parsed), canonicalJson(document))
+      const k = boot % parsed.routes.length
+      const reordered = { ...parsed, routes: [...parsed.routes.slice(k), ...parsed.routes.slice(0, k)], plugins: [...parsed.plugins].reverse() }
+      assert.equal(await graphFingerprint(reordered), document.fingerprint)
+      prints.add(document.fingerprint)
+      await booted.close()
+    }
+    assert.equal(prints.size, 1)
+  })
+
+  test('a wrong-type value in a response is refused, not sent', async () => {
+    const tested = await createTestApp(() => {
+      const made = app()
+      // Seeded: `id` is an integer in the response schema, and here it is not.
+      // `validation.response: 'error'` is development's default (§11.5); the
+      // example builds a production app, so the test asks for it.
+      made.hook('onSerialize', (ctx, payload) => (ctx.path === '/users/1' ? { ...(payload as object), id: 'one' } : payload))
+      return made
+    }, { config: { validation: { response: 'error' } } })
+    const res = await tested.get('/users/1', asAdmin)
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_RESPONSE_INVALID')
+    await tested.close()
+  })
+})

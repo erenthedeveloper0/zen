@@ -6,6 +6,8 @@ import { makeApp } from '../src/app.ts'
 import type { DeadlineReport } from '../src/plugins/deadlines.ts'
 import { settled, resetUpstreams } from '../src/shared/upstream.ts'
 import type { QuoteEnvelope } from '../src/features/quotes/index.ts'
+import { canonicalJson, graphFingerprint, type GraphDocument } from '@erenthedeveloper0/zen'
+import { createTestApp } from '@erenthedeveloper0/zen/testing'
 
 /**
  * The example, tested as an application — rfcs/0001 §20.2, §23.4.
@@ -284,3 +286,41 @@ function assertBudget(actual: number, ideal: number, toleranceMs = 15): void {
     `budget ${actual}ms is not within ${toleranceMs}ms below the ideal ${ideal}ms`,
   )
 }
+
+// ── The graph as data, and responses held to their schemas ─────────────────
+
+describe('the graph as data, and responses held to their schemas', () => {
+  test('the graph round-trips to canonical JSON, with one fingerprint across ten shuffled boots', async () => {
+    const prints = new Set<string>()
+    for (let boot = 0; boot < 10; boot++) {
+      const booted = makeApp({ quiet: true })
+      await booted.ready()
+      const document = await booted.graphDocument()
+      const parsed = JSON.parse(JSON.stringify(document)) as GraphDocument
+      assert.equal(canonicalJson(parsed), canonicalJson(document))
+      const k = boot % parsed.routes.length
+      const reordered = { ...parsed, routes: [...parsed.routes.slice(k), ...parsed.routes.slice(0, k)], plugins: [...parsed.plugins].reverse() }
+      assert.equal(await graphFingerprint(reordered), document.fingerprint)
+      prints.add(document.fingerprint)
+      await booted.close()
+    }
+    assert.equal(prints.size, 1)
+  })
+
+  test('a wrong-type value in a response is refused, not sent', async () => {
+    const tested = await createTestApp(() => {
+      const made = makeApp({ quiet: true })
+      // Seeded: `rows` is an integer in the response shape, and here it is not.
+      // This example's response schemas are `jsonSchema()` shapes, which
+      // describe and cannot validate (§11.5) — so the wrong type is caught by
+      // the strict serializer instead (§13.3.4), development's default, asked
+      // for here because the example builds a production app.
+      made.hook('onSerialize', (ctx, payload) => (ctx.path === '/reports/status' ? { ...(payload as object), rows: 'many' } : payload))
+      return made
+    }, { config: { serialization: { strict: true } } })
+    const res = await tested.get('/reports/status')
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_SERIALIZATION')
+    await tested.close()
+  })
+})

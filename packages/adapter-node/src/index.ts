@@ -517,9 +517,15 @@ function sizeOption(name: string, value: number | undefined, fallback: number, l
 }
 
 export function nodeAdapter(options: NodeAdapterOptions = {}): RuntimeAdapter {
-  const maxHeaderSize = sizeOption('maxHeaderSize', options.maxHeaderSize, 8192, 1)
-  const maxUrlLength = sizeOption('maxUrlLength', options.maxUrlLength, 8192, 1)
-  const maxRequestsPerSocket = sizeOption('maxRequestsPerSocket', options.maxRequestsPerSocket, 0, 0)
+  // Checked here, when the adapter is built, so a bad argument fails at the
+  // line that wrote it; `undefined` is "not given", which lets configuration in.
+  const given = {
+    maxHeaderSize: options.maxHeaderSize === undefined ? undefined : sizeOption('maxHeaderSize', options.maxHeaderSize, 8192, 1),
+    maxUrlLength: options.maxUrlLength === undefined ? undefined : sizeOption('maxUrlLength', options.maxUrlLength, 8192, 1),
+    maxRequestsPerSocket: options.maxRequestsPerSocket === undefined
+      ? undefined
+      : sizeOption('maxRequestsPerSocket', options.maxRequestsPerSocket, 0, 0),
+  }
 
   return {
     name: 'node',
@@ -527,6 +533,13 @@ export function nodeAdapter(options: NodeAdapterOptions = {}): RuntimeAdapter {
 
     async listen(dispatch: Dispatch, listenOptions: ListenOptions): Promise<ServerHandle> {
       const state: ServerState = { closing: false, streams: new Set() }
+      // §16.1 — an explicit adapter argument, then `policy.http` from the
+      // application's configuration, then this adapter's defaults.
+      const limits = listenOptions.limits ?? {}
+      const maxHeaderSize = given.maxHeaderSize ?? sizeOption('policy.http.maxHeaderSize', limits.maxHeaderSize, 8192, 1)
+      const maxUrlLength = given.maxUrlLength ?? sizeOption('policy.http.maxUrlLength', limits.maxUrlLength, 8192, 1)
+      const maxRequestsPerSocket = given.maxRequestsPerSocket ??
+        sizeOption('policy.http.maxRequestsPerSocket', limits.maxRequestsPerSocket, 0, 0)
 
       const server: Server = createServer({ maxHeaderSize }, (request, response) => {
         // One length compare, then nothing: no context, no hooks, no log line.

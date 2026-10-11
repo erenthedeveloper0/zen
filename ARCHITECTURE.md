@@ -304,6 +304,8 @@ That the AppGraph is *serialisable* is deliberate and load-bearing. It means eve
 
 Serialisable also means **a secret must not be in it**, which is why the configuration snapshot is redacted at the source rather than by each printer (§16.2). A projection that has to remember to hide something eventually forgets; a projection that was never given it cannot. The unredacted values exist in exactly one place — `app.config` — and reaching them requires naming the key you want, which is what a database driver does and a log line does not.
 
+> **Status: the document is built in `0.2.0-alpha`; the build manifest is not (§17).** `app.graphDocument()` — or `serializeGraph(graph)` — is the AppGraph as JSON: every route with its schemas converted to JSON Schema, every hook, plugin, collection, slot, decoration, service, health check and named schema, each with its registration origin, and the configuration already redacted. It carries two kinds of SHA-256 fingerprint. The application's, `fingerprint`, is over the canonical document without the configuration, the origins and the slot list — slots are declared once per process (§7.4), so the list holds whatever else the process imported — so moving a line or registering the same routes in another order does not change it, and changing what the application serves does. Each route's `contract` fingerprint is over what crosses the wire — method, path, parameters, bodies, statuses — normalised the way the API diff compares schemas (§29.7), so a description, an example or a converter's spelling of the same schema changes neither. A seeded suite of a thousand schema edits asserts the contract fingerprint changes exactly when the API diff reports a non-documentation change. `fingerprintHeaders: true` sends both as `Zen-Graph` and `Zen-Contract` on every response. <!-- claim: graph-document -->
+
 ---
 
 ## 3. Internal Module Boundaries
@@ -321,7 +323,7 @@ Stratum 1   contracts/*           (may import 0)   ← interfaces only, zero run
 Stratum 0   primitives/*          (may import nothing)
 ```
 
-Inside `@erenthedeveloper0/zen-core` the ladder is `primitives` 0, `contracts` and `errors` 1, `registry` and `di` 2, `compile` 3, `runtime` 4 and `api` 5; `index.ts` re-exports every stratum and is not on it. Two modules at one stratum may import each other, as two files in one directory do. The upward edges that exist are the compilers whose output must call exactly what their interpreted twins call (I6) — the context compiler, the pipeline compiler and the validation compiler import their twins' helpers from `runtime/` — and each is named in the script with its reason, so a new one fails the build until somebody writes down why it is not a slip.
+Inside `@erenthedeveloper0/zen-core` the ladder is `primitives` 0, `contracts` and `errors` 1, `registry` and `di` 2, `compile` 3, `runtime` 4, `api` 5 and `testing` 6 — the testing kit drives an application, so it sits above the one thing nothing else imports; `index.ts` re-exports every stratum but `testing`, which is its own entry point, and is not on it. Two modules at one stratum may import each other, as two files in one directory do. The upward edges that exist are the compilers whose output must call exactly what their interpreted twins call (I6) — the context compiler, the pipeline compiler and the validation compiler import their twins' helpers from `runtime/` — and each is named in the script with its reason, so a new one fails the build until somebody writes down why it is not a slip.
 
 `contracts/` deserves emphasis: it contains **only** `interface`, `type`, and `const enum`-equivalent declarations. It compiles to zero bytes. Every cross-subsystem reference goes through it, which is what makes I6 (two implementations of everything) mechanically possible — a `Router` implementation imports `contracts/router` and nothing else from the framework.
 
@@ -490,7 +492,7 @@ Global `onRequest` hooks also run when stage 3 matched nothing. Rate limiting an
 
 **6 — Intake.** Skipped entirely unless the route's compiled pipeline includes it, which it does only if the route declares `body` in its schema *or* opts in with `body: 'raw' | 'stream' | 'auto'`. This is the single biggest divergence from Express, where `express.json()` reads and parses every body on every matched route regardless of need.
 
-The body source is pull-based; the parser is selected by `Content-Type` against the `BodyParser` registry at compile time when the route declares a single content type, or at request time from a small perfect-hash when it declares several. Limits (`maxBodySize`, per-route override) are enforced *during* read, aborting the stream rather than after buffering.
+The body source is pull-based; the parser is selected by `Content-Type` against the `BodyParser` registry at compile time when the route declares a single content type, or at request time from a small perfect-hash when it declares several. Limits (`maxBodySize`, per-route override) are enforced *during* read, aborting the stream rather than after buffering. The per-route override is `RouteSpec.intake` — `maxSize`, `maxDepth`, `maxFields`, and a `mode` of `'parse'`, `'raw'` (the bytes) or `'stream'` (an `AsyncIterable<Uint8Array>` the handler consumes, the limit checked chunk by chunk) — built in `0.2.0-alpha`; a stream with a `body` schema is a boot error, because a stream cannot be validated.
 
 **7 — Validate.** Bracketed by `preValidation` and `postValidation`. Sources are validated in a fixed order — params, query, headers, cookies, body — chosen so that cheap, small, already-in-memory sources fail first. Each validated source *replaces* the lazy getter's cache with the parsed, coerced output, so `ctx.query.page` is `number`, not `string`, and there is no second "validated" object to keep in sync (which is the flaw in the `req.validated.body` pattern many Express middlewares use). The coercion that makes that sentence true runs *inside* this stage, immediately before the source's validator and only where the schema declared a type the wire cannot carry — §11.4.
 
@@ -675,9 +677,9 @@ interface RouteRecord<S extends RouteSchema = RouteSchema> {
 }
 ```
 
-> **Not built.** `origin` is designed below and is `undefined` on every record today, as is every middleware's (§28.8); the diagnostics that would quote it name the route instead. <!-- gap: route-origin -->
+> **Status: built in `0.2.0-alpha`.** Every route, middleware, hook, collection, plugin, service, health check and decoration records the `file:line:column` that registered it, relative to `ZenOptions.root` (the `zen` meta-package passes `process.cwd()`), and every boot diagnostic carries the origins of the registrations it is about. `explainRoute` prints them per step. A plugin's registrations are placed at the line in its `setup` that made them — or, for a first-party plugin that is framework code all the way down, at the application's `app.use()` call, which is the only line the application wrote. The type is still optional: a runtime with no readable stack yields `undefined` rather than a throw. It is boot-only and costs one V8 stack walk of six frames per registration, the frames' files classified once per file: ~5 µs a route against ~0.3 µs without it, so 10,000 routes register in ~55 ms rather than ~3, beside a `ready()` of ~1.3 s that origins do not change (`benchmarks/boot`). Nothing reaches a generated unit, so the request path is unchanged byte for byte. <!-- claim: route-origins -->
 
-`origin` is not optional and is not debug-only. It is designed to be captured at registration via a cheap stack-frame parse (one `Error().stack` read, only during boot) and it is what makes every downstream error message able to say *"route registered at `src/routes/users.ts:42`"* instead of pointing into framework internals. This is the single highest-leverage DX decision in the registry.
+`origin` is not optional in spirit and is not debug-only. It is captured at registration with V8's structured call-site API (`Error.captureStackTrace` with a temporary `prepareStackTrace` restored in a `finally`; eight frames, and thirty-two only when those eight were all the framework's), falling back to one read of `Error().stack` where that API is missing — only during boot, never on the request path, and never entering a generated unit, so every byte-identity gate holds. It is what makes every downstream error message able to say *"route registered at `src/routes/users.ts:42`"* instead of pointing into framework internals. This is the single highest-leverage DX decision in the registry.
 
 ### 5.2 Path syntax
 
@@ -747,7 +749,7 @@ Zen classifies every pair of routes at boot:
 
 | Class | Example | Behaviour |
 | --- | --- | --- |
-| **Duplicate** | `GET /users/:id` twice | **Boot error** `ZEN_ROUTE_DUPLICATE`, both routes reported — and both origins, once §5.1's are captured |
+| **Duplicate** | `GET /users/:id` twice | **Boot error** `ZEN_ROUTE_DUPLICATE`, both routes reported with both origins (§5.1) |
 | **Shadowed** | `GET /users/:id` then `GET /users/new` | **Not an error.** Static beats dynamic by priority (§5.6); the intent is unambiguous |
 | **Ambiguous** | `GET /:a/b` vs `GET /a/:b` for `/a/b` | **Boot error** `ZEN_ROUTE_AMBIGUOUS` — no priority rule makes this obviously right, so we refuse to guess |
 | **Unreachable** | `GET /*path` then `GET /files/x` | Static still wins; no error, but `zen doctor` warns |
@@ -1093,7 +1095,9 @@ Note what is absent: no `ctx.send()`, no `ctx.end()`, no `ctx.next()`, no `ctx.a
 | Response staging (`ctx.res.header(...)`) | Mutable until egress, then frozen | `ReplyBuilder` throws `ZEN_REPLY_SENT` after egress — built in `0.1.0-alpha.4`: egress replaces `ctx.$stage` with one shared frozen builder whose every method throws, and a builder kept from before egress checks for it on each call, so neither shape of late write is accepted and discarded |
 | Everything else | Not mutable — the property does not exist | Generated class is created with `Object.seal` in dev; in prod, sealing is unnecessary because no code path assigns |
 
-> **Status: the type-level half is built; the development-mode half is not.** No setter exists for request data in either context class, and a staging call after egress throws. Development mode does not seal the class or freeze request-derived values — those two cells describe the design — so an assignment to an undeclared property in development is not caught today (§28.8). <!-- claim: reply-sent -->
+> **Status: both halves are built.** No setter exists for request data in either context class, and a staging call after egress throws. <!-- claim: reply-sent -->
+
+> **Status: the development-mode half is built in `0.2.0-alpha`.** With `dev: true` the generated constructor ends with `Object.seal(this)` and `params`, `query`, `headers`, `cookies` and `body` are deep-frozen when read — plain objects and arrays only, so a raw `Uint8Array` body or a class instance is left alone — so `ctx.user = x` or `ctx.body.id = 7` throws in development rather than working until production. The interpreted twin does the same. Without `dev` the class is byte-identical to the one compiled before (the generated-source snapshot holds it), and both carry the same fields in the same order (I2). <!-- claim: dev-seal -->
 
 The critical claim: **immutability is enforced by the type system and by the absence of setters, not by runtime freezing.** `Object.freeze` on hot objects pushes V8 into slower property access paths and costs on every request. Dev mode freezes (catching mistakes during development); production does not (paying nothing for a guarantee the compiler already gave). This is the same trade React makes with `Object.freeze` on props in development only.
 
@@ -1407,6 +1411,8 @@ Two corrections this section needed once the chain could actually be printed. Th
 
 The property that makes it worth having rather than nice to have: `explainRoute` reads `record.middleware` and `record.hooks`, which are *the same arrays the pipeline compiler consumes*. There is no second model of the ordering to keep in sync, so the explanation cannot drift from the pipeline — it can only be wrong by the pipeline being wrong. The test suite pins that down by comparing the printed chain against the order the steps actually ran in.
 
+> **Status: the plan, and since `0.2.0-alpha` what one request did with it.** `explainRequest(app, method, url, init)` is `EXPLAIN ANALYZE` for one request: each step that ran, in the order it ran, with its outcome — `continue`, `short-circuit`, `refused`, `threw` — its duration, and what it did that is visible from outside it: the headers it staged, the slots it set, whether the handler went async, the fields a response schema kept off the wire. A request that stops shows where it stopped, and one no route matched shows the global hooks it ran. The instrumented pipeline is compiled from the same records into a copy of the route table that serves only the explained request — never installed, so a concurrent request, and every later one, runs the production pipeline, and `generatedSource()` is unchanged. <!-- claim: explain-request -->
+
 ### 8.6 Middleware as configured factories
 
 ```ts
@@ -1427,16 +1433,18 @@ app.use(rateLimit({ limit: 100, window: '1m' }))
 
 `setup` runs at boot; the returned function is what gets compiled into pipelines. Options are validated at boot with the same engine as request validation, so `rateLimit({ limt: 100 })` fails at startup with a spelling suggestion, not at 3 a.m. under load.
 
+> **Status: built in `0.2.0-alpha`.** `defineMiddleware({ name, options, setup })` returns a factory whose result is data until boot. `ready()` checks every configured instance's options with the machinery a plugin's go through (§10.5 step 2) — the schema's verdict, and every undeclared key named with the one it was probably meant to be, as `ZEN_MIDDLEWARE_OPTIONS` — then runs `setup` once per instance, after every plugin's `setup`, with the schema's output and a `MiddlewareSetup` (`config`, `caps`, `log`, `resolve`). What it returns is compiled exactly as the same function passed to `use()` directly: the pipelines are byte-identical. A configured middleware is phase middleware; `around()` and `after()` refuse it. A middleware's declaring which slots it provides and requires, for a boot-time check that every read has a writer before it, is not built. <!-- claim: define-middleware -->
+
 ### 8.7 Conditional middleware
 
 ```ts
-app.use(compression(), { when: ctx => ctx.headers['accept-encoding']?.includes('br') })  // runtime
-app.use(devToolbar(),  { when: env => env.NODE_ENV === 'development' })                  // boot-time
+app.use(compression(), { when: { request: (ctx) => ctx.headers['accept-encoding']?.includes('br') === true } })  // per request
+app.use(devToolbar(),  { when: { env: (env) => env.NODE_ENV === 'development' } })                              // at boot
 ```
 
-> **Not built.** `MiddlewareOptions.when` is declared, documented `@experimental — not read`, and read by nothing: `app.use()` takes `{ name }` alone, so a `when` passed today omits and guards nothing (§28.8). For a subtree that exists only in some environments, a collection's `when` is built (§6.2). <!-- gap: middleware-when -->
+> **Status: built in `0.2.0-alpha`, with the forms corrected.** `when: { env }` is decided once, at boot, against the validated environment — the rule a collection's `when` follows (§6.2): it must answer a boolean synchronously or the boot is refused, and a step it turns off stays on the record marked `omitted` and is compiled into nothing, so the pipeline is byte-identical to one that never registered it. `when: { request }` compiles to a guarded call that runs the step only when the predicate returns `true`. Given both, `env` decides whether the guard exists at all. Both twins share one guard, and `explainRoute` prints `[omitted at boot]` or `[guarded]`. <!-- claim: middleware-when -->
 
-The compiler is designed to distinguish by arity/marker: an `Env`-typed predicate is evaluated at boot and the middleware is either inlined or **omitted from the generated source entirely**; a `Context`-typed predicate compiles to a guarded call. Same API, two very different costs, and `zen routes --explain` shows which one you got.
+The compiler was designed to tell the two apart by arity or marker — an `Env`-typed predicate evaluated at boot, a `Context`-typed one compiled to a guarded call. That cannot be built as written: types are erased before anything runs, and `(x) => x.NODE_ENV === 'development'` has one parameter whichever it means, so a runtime reading arity would guess, and a wrong guess turns a free condition into a per-request one, or a per-request one into a boot-time constant. The two forms are therefore spelled out, and a bare function is refused with both spellings. Same two costs, legible at the call site, and `explainRoute` shows which one you got.
 
 ### 8.8 Error boundaries
 
@@ -1704,7 +1712,9 @@ The `app` handle passed to `setup` is a **scoped registrar**, not the applicatio
 | `app.config` | *Reads* the resolved configuration | §16.3. Not a registration — the frozen tree, readable because §16.2 already folded it before any `setup` ran |
 | `app.url(name, params, query)` | *Builds* the path of a named route | §5.7. Not a registration either — for the plugin's handlers, at request time; from `setup` it is `ZEN_APP_NOT_READY`, because routes compile after every plugin has run |
 
-Built today: `route`, `use`/`around`/`after`, `hook` (all twelve live phases, §9), `slot`, `decorate`, `provide`, `errorMap`, `health`, `probe`, `meta`, `onBoot`, `exportsOf`, `config`, and `url`. `command` waits on §17; `schema` and `adapterHook` are not built.
+Built today: `route`, `use`/`around`/`after`, `hook` (all twelve live phases, §9), `slot`, `decorate`, `provide`, `errorMap`, `health`, `probe`, `meta`, `onBoot`, `exportsOf`, `config`, `url`, and — since `0.2.0-alpha` — `schema`. `command` waits on §17; `adapterHook` is not built.
+
+> **Status: `schema` built in `0.2.0-alpha`** — on the application as `app.schema(name, schema)` and on the registrar. The graph carries it as `graph.schemas`; `@erenthedeveloper0/zen-openapi` publishes the schema under that name ahead of any `title` or `$id` it carries wherever a route's whole request or response is that schema, and publishes it even when no route uses it, which is how a plugin contributes a shared component. Names are the application's, not namespaced by plugin, because they are what a generated client calls the type: a name two registrations give different schemas, one schema under two names, or a name OpenAPI cannot use as a component key is `ZEN_SCHEMA_NAME` at boot, naming both lines. A schema nested inside another is converted to JSON before the generator sees it, so the name applies to whole schemas; a nested one keeps its own `title`. <!-- claim: named-schemas -->
 
 Two of those were not true until `0.1.0-alpha.4`, and both were §9.7's failure — a registration that silently does nothing. **`meta`** wrote into the root scope's map, and the graph was handed a fresh empty one, so nothing a plugin wrote could be read; `graph.meta` now carries it, keyed `<plugin>.<key>`, and `@erenthedeveloper0/zen-openapi` merges a plugin's `openapi.securitySchemes` into the document. **`hook('onBoot', fn)`** passed every phase check, was stored, and was never called, because boot ran only the separate list `onBoot(fn)` filled; the two are now one table, run in registration order with the frozen graph. <!-- claim: plugin-meta, onboot-hook -->
 
@@ -1786,6 +1796,8 @@ Steps 2–6 are pure analysis over data. `zen plugin graph` renders the result a
 ### 10.6 Plugin errors
 
 A plugin that throws during `setup` produces a `PluginError` carrying: plugin name and version, the phase it failed in, the origin (`node_modules/@acme/thing/dist/index.js` → mapped to source), its position in the dependency graph, and the plugins that will now not load. This is what turns "TypeError: cannot read property 'x' of undefined" at boot into "plugin `@acme/thing@2.1.0` failed during setup; `billing` and `reports` depend on it and were not registered."
+
+> **Built as a boot diagnostic rather than a `PluginError` class** (§12.7): `Plugin "x@1.0.0" threw during setup`, with the error's own `hint` and `consequence`, the plugins that depended on it, and — since `0.2.0-alpha` — two origins: the application's `app.use(x)` line and the line in the plugin that threw (§5.1). Source-map translation of a published plugin's `dist/` frame is not done; the frame is printed as the runtime reports it.
 
 ### 10.7 Distribution conventions
 
@@ -2029,6 +2041,8 @@ Response schemas serve three jobs, and which of them run is configurable:
 
 Full response validation in production is off by default because the compiled serializer already provides the security-relevant guarantee — undeclared fields cannot be emitted — at negative cost. Validation additionally catches *wrong* values (a `string` where the schema says `number`), which is a bug-detection tool best suited to dev and staging. `validation.response: 'error' | 'log' | 'off'` per environment.
 
+> **Status: built in `0.2.0-alpha`.** `validation.response` is configuration (§16.1), with `zen({ validation: { response } })` as sugar: `'error'` by default in development, `'off'` otherwise, `'log'` under the hardened profile in production (§19.2), and `{ sample: n }` to log one response in `n`. The value is validated with the schema library's own `validate` against the schema its status declares — the negotiated representation's, on a negotiated route — last in the epilogue, after `after` middleware, `onSerialize` and `onSend`, so it judges what is actually sent. A mismatch under `'error'` is `ZEN_RESPONSE_INVALID`, a 500 that is never exposed, its issues in the log and in the development problem document's `debug.meta`. `jsonSchema()` shapes describe and cannot validate, and are skipped — a wrong *type* in one is still refused by the strict serializer, development's default (§13.3.4), as `ZEN_SERIALIZATION`. `'off'` emits nothing: the pipeline is byte-identical to one built before the feature. <!-- claim: response-validation -->
+
 ### 11.6 Composition and reuse
 
 ```ts
@@ -2043,7 +2057,7 @@ app.get('/users', {
 
 The Schema Registry deduplicates by **identity first** (`WeakMap` on the schema object), then by structural hash. `Paginated(UserSchema)` called in ten routes produces one `PaginatedUser` component in the OpenAPI document with ten `$ref`s, and one compiled serializer shared by ten routes. Names come from `.meta({ id: 'User' })` where available, from the variable name via the build step where not, and from a stable structural hash as a last resort (`Schema_a3f9c1`) with a `zen doctor` nudge to name it.
 
-> **Built, with two corrections** (§29.5). There is no standalone Schema Registry: deduplication lives in the OpenAPI generator, because it is the only consumer that needs *names*, and one shared serializer per schema is not yet implemented (each route compiles its own). And the middle naming rule — recovering a name from the variable via the build step — is not merely unbuilt but questionable: it would make a component's published name depend on a local identifier that a refactor can rename without anyone noticing the API changed. The current fallback is an automatic name plus a diagnostic asking for a real one.
+> **Built, with two corrections** (§29.5). There is no standalone Schema Registry: deduplication lives in the OpenAPI generator, because it is the only consumer that needs *names*, and the serializer shares in the compiler — since `0.2.0-alpha`, one compiled serializer per distinct shape, by schema identity first and then by a canonical encoding of the serializer IR, so two schemas that differ only in a `description` or a `minLength` (which write the same bytes) share one. Diagnostics stay per route. And the middle naming rule — recovering a name from the variable via the build step — is not merely unbuilt but questionable: it would make a component's published name depend on a local identifier that a refactor can rename without anyone noticing the API changed. The current fallback is an automatic name plus a diagnostic asking for a real one.
 
 ### 11.7 Custom validation and business rules
 
@@ -2060,6 +2074,8 @@ app.post('/users', {
 ```
 
 `check` runs after validation, before `preHandler`, has full context and services, and returns issues in the same normalised shape — so the client sees one consistent error format for both classes of failure while the status code correctly distinguishes them.
+
+> **Status: built in `0.2.0-alpha`.** `check` is the last validator of stage 7 — after the schemas, before `postValidation` and `preHandler` — and a request the schemas refused never reaches it. Its issues are a 422 `ZEN_VALIDATION` tagged `source: 'check'`; a rule that means a 409 or a 403 throws that error instead. Its `ctx` is typed by the route: each verb has a second overload whose spec is a homomorphic mapped type, the one form from which TypeScript can infer the schemas beside `check` before typing `check` itself. A route without one compiles exactly as before. <!-- claim: route-check -->
 
 ---
 
@@ -2191,7 +2207,7 @@ Mappers are keyed by constructor and resolved at boot into a `Map<Function, Mapp
 
 Non-exposed errors collapse to title/status/code/requestId. The `requestId` is always present and always logged alongside the full internal detail — so support can turn a user's screenshot into the exact stack trace without ever having shipped that stack to the user.
 
-**Development** — the same JSON, plus a `debug` object. Built today, it carries the stack, the cause, the route and the error's `meta`; the source frame with a code excerpt, the resolved middleware chain, the suggestions and the hyperlinked terminal rendering below are designed and not built (§28.8):
+**Development** — the same JSON, plus a `debug` object: the stack, the cause, the route and the error's `meta`, and the facts below — where the route was registered, where in the application the error was raised with the code around that line, the route's resolved chain, the fix, and the docs link. A terminal rendering of it:
 
 ```
   ZEN_VALIDATION  Validation failed (422)     POST /api/v2/users     req 01JC8X4M9K2Q7T
@@ -2211,6 +2227,8 @@ Non-exposed errors collapse to title/status/code/requestId. The `requestId` is a
 ```
 
 Terminal output is colourised, hyperlinked (OSC 8), and the file paths are clickable in every modern terminal. Framework frames are elided by default (`--stack=full` to keep them), because 40 lines of `node_modules/zen/dist/...` is how a stack trace becomes unreadable.
+
+> **Status: built in `0.2.0-alpha`, the facts in core and the rendering where the host is.** A development `debug` carries `message`, `hint`, `consequence` and `docs`, and, from the application, `origin` (the failing route's registration line, §5.1), `thrown` (the first frame of the application's own code — the wrapped cause's when there is one), `frame` (two lines either side of it) and `chain` (the route's resolved steps, as `explainRoute` prints them). Reading the file for `frame` needs a filesystem and printing needs a terminal, and core has neither (§3.3 B2): `ZenOptions.devErrors` takes `readSource` and `report`, and `zen()` installs a cached file reader and a reporter that renders each development 5xx to stderr — colour unless `NO_COLOR`, OSC 8 links — only when stderr is a terminal, so a test run or a log pipeline is left as it was. A 4xx is the client's to read and is not reported. A development request whose `Accept` prefers HTML to JSON gets the same facts as a page built with the `html` tag, every value escaped (§19.5), with the error's own headers — a browser is still owed a 401's challenge. Production is unchanged: no `debug`, no page, and neither hook is called. Not built: `--stack=full` — the stack is filtered to drop core's runtime frames, always. <!-- claim: dev-error-facts -->
 
 ### 12.7 Boot diagnostics
 
@@ -2235,11 +2253,15 @@ Boot errors are **aggregated, not fail-fast**. A misconfigured app should report
 
 This is a deliberate inversion of the usual "throw the first error" behaviour and it is worth the implementation cost: a developer adding a feature module typically has three or four registration problems at once, and a fail-fast framework turns that into four restart cycles.
 
+> **The lines are real since `0.2.0-alpha`** (§5.1), in one layout difference: an origin sits beside the location it belongs to — `at GET /:org/settings  src/routes/org.ts:14:3   ⇄   GET /admin/:page  src/routes/admin.ts:9:3`. Every diagnostic the framework produces carries the origins of the registrations it is about; `packages/core/test/origins.test.ts` provokes each one and holds it to the line that caused it, and every core suite's apps refuse a boot diagnostic without one.
+
 ### 12.8 Process-level safety
 
 - `unhandledRejection` / `uncaughtException` handlers are installed by default (configurable): log at `fatal` with full context, then initiate graceful shutdown. **Zen never keeps serving after an uncaught exception**, because the process's state is unknown at that point — the "keep the server up" instinct is how corrupted data gets written.
 - Errors thrown inside `onResponse`, `onClose`, or the error formatter itself are caught, logged, and never re-enter the pipeline.
-- A circuit-breaker on the error path: if the formatter throws more than N times per window, Zen falls back to a hard-coded minimal 500 responder and logs the formatter as broken. *The window is designed, not built:* a formatter that throws degrades that one response to a minimal 500 and is logged at `fatal`, every time, with no latch.
+- A circuit-breaker on the error path: if the formatter throws more than N times per window, Zen falls back to a hard-coded minimal 500 responder and logs the formatter as broken.
+
+> **Status: the window is built in `0.2.0-alpha`.** Five formatter failures inside ten seconds open the circuit (`BREAKER_DEFAULTS`; `ErrorEngine` takes others): the failure that opens it is the one `fatal` line, each earlier one an `error`, and for the next thirty seconds every error is answered by the minimal responder without calling the formatter at all. Then one attempt decides — a formatter still broken re-opens the circuit without a second `fatal`, and one that works closes it with a line counting what it skipped. Before, every failing request logged its own `fatal`, which turned a broken formatter's log into the incident. <!-- claim: formatter-breaker -->
 
 ---
 ## 13. Serialization Architecture
@@ -2796,6 +2818,8 @@ app.get('/users', { inject: { db: Db, tenant: TenantService } },
   (ctx, { db, tenant }) => db.users.findMany({ where: { tenantId: tenant.id } }))
 ```
 
+> **Status: L3 built in `0.2.0-alpha`.** The handler's second argument is typed from `inject`. When every injected token is a singleton, the services are resolved once at boot — an asynchronous factory awaited then — into one frozen object the pipeline passes to every request: `d.handler(ctx, d.deps)`, one property read. A scoped or transient token is resolved per request from the request's own scope, without a promise when its build is synchronous, with the singletons beside it still resolved at boot. A token with no provider is `ZEN_DI_MISSING` naming the route and its line; `RouteRecord.dependencies` lists every service the route reaches, transitively, by name. A route that injects nothing compiles exactly as before. <!-- claim: declarative-injection -->
+
 ### 15.2 Tokens
 
 ```ts
@@ -2803,6 +2827,8 @@ function token<T>(name: string, opts?: { optional?: boolean }): Token<T>
 ```
 
 A token is a unique symbol-backed object carrying a phantom type. No `reflect-metadata`, no decorator emit, no class-as-token (which breaks with `isolatedModules`, interfaces, and bundler tree-shaking). Interfaces are first-class citizens — `token<Logger>('logger')` works, whereas class-based DI cannot inject an interface without a runtime artefact.
+
+> **Status: `optional` built in `0.2.0-alpha`.** `token<T>(name, { optional: true })` is a `Token<T | undefined>`: resolving it with no provider is `undefined` — from `ctx.resolve`, a provider's `deps` and `inject` alike — and boot analysis does not require one, so a service an application may or may not configure (a tracer, a cache) is declared once and decided by whoever composes the application. <!-- claim: optional-tokens -->
 
 ### 15.3 Lifetimes
 
@@ -2840,6 +2866,8 @@ const app = await createTestApp(makeApp, {
 ```
 
 Overrides are applied before compilation, so the app under test is compiled with the fakes and behaves identically to production in every other respect. There is no partial-mock, no module interception, no `jest.mock` hoisting semantics to reason about.
+
+> **Status: built in `0.2.0-alpha`, as `@erenthedeveloper0/zen-core/testing`** — re-exported as `@erenthedeveloper0/zen/testing` — rather than the separate `@erenthedeveloper0/zen-testing` §20.1 named: a kit published on its own could be a version behind the core it drives, and it needs nothing core does not already have. `createTestApp(make, { override, config })` calls the application's own factory, which returns the application unbooted; each replacement wins over every `provide()` of its token — the application's, and a plugin's as it boots — and is type-checked against the token, so a fake of the wrong shape does not compile; `config` is the override layer of §16.1, named `test overrides` in provenance. A factory that already booted is `ZEN_APP_FROZEN`: a replacement after compilation would be the mock this section rules out. `fixedClock()` is the clock replacement in the example: Zen owns no notion of time, so a service that needs one takes a clock the application provides. `assertNoLeaks(t)` closes the application and fails naming each timer, socket or server it left running, counted against what was running when `createTestApp` built it. <!-- claim: testing-kit -->
 
 ### 15.6 For NestJS refugees
 
@@ -3253,7 +3281,7 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 
 | Control | Default | Why not looser |
 | --- | --- | --- |
-| Body size limit | 1 MB, app-wide (`body.limit`). Per-route overrides are designed and not built — a route's own limit is ignored today (§28.8) <!-- gap: per-route-body-limit --> | Unbounded bodies are trivial memory exhaustion |
+| Body size limit | 1 MB, app-wide (`body.maxSize`), and per route since `0.2.0-alpha` (`intake: { maxSize, maxDepth, maxFields, mode }`, §4.2 stage 6), compiled into that route's intake closure <!-- claim: route-body-policy --> | Unbounded bodies are trivial memory exhaustion |
 | Header count / size | 64 headers (`maxHeadersCount`) / 8 KB for the request line and headers together (`maxHeaderSize`, built in `0.1.0-alpha.5`; Node's own default is 16 KB). Past either, Node answers 431 | Slowloris and hash-flood surface |
 | URL length | 8 KB (`maxUrlLength`, built in `0.1.0-alpha.5`), answered 414 `ZEN_URI_TOO_LONG` before dispatch. The URL also counts toward the 8 KB header limit, so on the defaults a long one is a 431 first | Bounds what one request makes the server parse and log before any route is chosen |
 | Param count in query | 100 | Hash flooding, `qs` complexity |
@@ -3261,7 +3289,7 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 | JSON `__proto__`/`constructor`/`prototype` keys | **stripped** | Prototype pollution; there is no legitimate use in request data |
 | Multipart: parts / file size / total | 20 / 10 MB / 25 MB, streamed to disk with random names | Zip-bomb and disk-fill defence |
 | `headersTimeout` / `requestTimeout` | 20 s / 30 s | Slowloris. Both belong to the adapter and are on by default |
-| Request deadline | 30 s **when configured** | Hung upstreams. Built (§4.4) and *off* unless set: arming costs ~1 µs per request and Zen does not levy costs nobody asked for. This is the one hardened default that is a recommendation rather than a default. §16 is now built, so the hardened profile that would set it is a `ConfigOverlay` at layer 1 and nothing more — it is unbuilt because nobody has decided what else belongs in it, not because there is anywhere left to put it |
+| Request deadline | 30 s **when configured** — and under `zen({ profile: 'hardened' })` | Hung upstreams. Built (§4.4) and *off* unless set: arming costs ~1 µs per request and Zen does not levy costs nobody asked for. This is the one hardened default that is a recommendation rather than a default, and the hardened profile is where it is set (below) |
 | Health-check error text | **withheld** unless `details: true` | A probe's *returned* message was chosen by its author; a driver's exception says `getaddrinfo ENOTFOUND db-primary.internal`, which is topology handed to whoever can reach `/readyz` (§31.4). The check still fails and the text is still logged |
 | Health probe budget | 1 s per check, no unbounded option | An unbounded probe is how an endpoint hangs, and a hung `/healthz` gets a live process killed by its own orchestrator |
 | `x-powered-by` | absent | Fingerprinting |
@@ -3276,6 +3304,8 @@ The rule: **the secure configuration must be the default, and relaxing it must b
 | `trust proxy` | **off** | §19.4 |
 | Stack traces | never in production responses | |
 | Rate limiting | not on by default, but **built** as `rateLimit()` (§32.4) and one line to add; `zen doctor` will flag unauthenticated write routes without one. §19.4's misconfiguration is detected at runtime, once per process, at the moment it is provably real | Defaults that break local dev get disabled globally |
+
+> **Status: request policy is configuration, and the hardened profile is built, in `0.2.0-alpha`.** The deadline, the body limits, `maxQueryParams`, `trustProxy`, the redirect allowlist and the adapter's ingress limits are read from a `policy` namespace with the framework's defaults at layer 1 (§16.1); `zen({ timeout, body, redirect, trustProxy, maxQueryParams })` is sugar contributing at layer `config` under the source `zen()`, where the configuration file beats it, so every value has a source — `policy.timeout.default 30s ← profile: hardened`. `zen({ profile: 'hardened' })` is a named source in layer 1: a 30 s deadline, 1000 requests per keep-alive connection, an 8 KB URL limit, probe error text withheld, and in production `serialization.strict: false` with response validation `'log'` (§11.5). A profile is configuration, not composition — `securityHeaders()` is still the application's line to write. `trustProxy` must be explicit under it: unset, it is warned about at boot, and the first `X-Forwarded-For` that arrives is reported once — the check `rateLimit()` made, promoted into core. An adapter's own explicit options still beat configuration, as `listen(3000)` beats `server.port`. <!-- claim: request-policy -->
 
 ### 19.3 Parser hardening
 
@@ -3419,7 +3449,7 @@ zen openapi --security    → the same, as an OpenAPI security requirements repo
 | --- | --- | --- | --- |
 | Type | `expectTypeOf` / `tsd` | ms | Inference is correct; no `any` escapes |
 | Unit | node:test / vitest | µs | Handlers are functions returning values |
-| Injection | `@erenthedeveloper0/zen-testing` | ~50 µs/req | Full pipeline, no sockets |
+| Injection | `@erenthedeveloper0/zen-core/testing` (§15.5) | ~50 µs/req | Full pipeline, no sockets |
 | Integration | real adapter + ephemeral port | ~1 ms/req | Adapter behaviour |
 | Conformance | `@erenthedeveloper0/zen-adapter-conformance` | — | Adapters are interchangeable |
 | Differential | fuzzer | — | Compiled ≡ interpreted |
@@ -3459,6 +3489,8 @@ expect(reply.status).toBe(200)
 ```
 
 No `httpMocks`, no fake `res` with 30 stubbed methods, no assertion on "was `res.json` called with".
+
+> **Status: built in `0.2.0-alpha`; the typed `res.json()` of §20.2 is not.** `testContext(init)` is a `PlainContext` — the interpreted twin that defines a context (§7.6) — so `ctx.get()` of an unset slot throws `ZEN_SLOT_EMPTY` and `ctx.json()` returns a reply, as in production. It takes `params`, `query`, `headers`, `cookies`, `body`, `slots`, `services`, `config` and the `decorations` a plugin would have added, all taken as already validated: what a pipeline does is `createTestApp`'s to test. The context type is the one the call site asks for and is not checked against those values. `createTestApp` gives a method per verb (`t.get`, `t.post`, …) over `inject()`, but `res.json()` is still `unknown` unless the test names a type: typing it from the route's response schema needs the route table in the application's type, the accumulation §10.4 warns about. <!-- claim: testing-kit -->
 
 ### 20.4 Type testing
 
@@ -4892,16 +4924,16 @@ The strongest architecture loses to the framework people already know. Nothing i
 | ~~The sync fast path needs `markSync()`~~ | **Built in `0.1.0-alpha.5`** (§8.4). A plain function is a speculation point, and a route of plain functions compiles with no `async` and no `await`. The dispatcher around the pipeline is still `async` |
 | A returned WHATWG `Response` is a 500 | §13.2, corrected — the table said pass-through. It has a `status`, `headers` and a `body`, so `finalize` takes it for a `Reply`, and egress fails writing a status onto its read-only getter: `ZEN_INTERNAL`. An earlier correction said it reached the JSON encoder and failed as `ZEN_SERIALIZATION`, which a probe of the build showed it does not |
 | ~~Issue codes are inferred from message text~~ | **Built in `0.1.0-alpha.5`** (§11.2). A value missing from the request is `required` whatever the library calls it, and `registerIssueMapper(vendor, map)` reads the rest from the library's own issue fields. A vendor with no mapper still has its codes guessed from English text |
-| `MiddlewareOptions.when` is not read | §8.7, corrected — declared and documented, and `app.use()` takes `{ name }` alone. A collection's `when` is built (§6.2) |
-| A route cannot override the body limit | §4.2, §19.2, corrected — `body.limit` is app-wide; a route's own is ignored |
-| `RouteRecord.origin` is always `undefined` | §5.1, corrected — designed as "not optional and not debug-only". Diagnostics name the route instead of the file and line that registered it |
+| ~~`MiddlewareOptions.when` is not read~~ | **Built in `0.2.0-alpha`** (§8.7), as two explicit forms: `when: { env }` omits the step at boot, `when: { request }` guards it per request |
+| ~~A route cannot override the body limit~~ | **Built in `0.2.0-alpha`** (§4.2 stage 6, §19.2). `intake: { maxSize, maxDepth, maxFields }` overrides the application's limits for one route, and `mode: 'raw' \| 'stream'` hands the handler bytes or a stream with the limit enforced per chunk |
+| ~~`RouteRecord.origin` is always `undefined`~~ | **Built in `0.2.0-alpha`** (§5.1). Every registration records its `file:line:column`, every boot diagnostic prints the origins of what it is about, and `explainRoute` prints one per step |
 | Error mappers are global; error boundaries are not built | §8.8, §12.4, corrected |
-| The development error page is a `debug` object | §12.6, corrected — stack, cause, route and `meta`; no code frame, chain, suggestions or hyperlinks |
-| Dev mode neither seals the context nor freezes request data | §7.3, corrected — the type-level half of the immutability model is built, the runtime half is not |
+| ~~The development error page is a `debug` object~~ | **Built in `0.2.0-alpha`** (§12.6). A development `debug` names the route's registration line, the application line that raised the error with the code around it, the resolved chain, the fix and the docs; `zen()` renders each 5xx to a terminal with OSC 8 links, and a browser gets an escaped HTML page |
+| ~~Dev mode neither seals the context nor freezes request data~~ | **Built in `0.2.0-alpha`** (§7.3). Development seals the context and deep-freezes request data when it is read; production compiles the class it always did |
 | Cookie signing, ETag and compression in egress, pre-encoded bodies, frozen replies | §13.6, §13.7, corrected — designed, not built; ETag and 304 exist for file responses |
 | ~~Request header size and URL length are Node's limits~~ | **Built in `0.1.0-alpha.5`** (§4.2 stage 2, §19.2). `maxHeaderSize` and `maxUrlLength`, 8 KB each, and `maxRequestsPerSocket`. The URL counts toward the header limit, so on the defaults a long URL is Node's 431 before it is Zen's 414 |
 | No SBOM and no continuous fuzzing | §19.8, §20.6, corrected — releases carry npm provenance; the property suites run on every build |
-| The API diff compares the branches of a multi-branch union by type only | §29.7 — a nullable union is compared as its one non-null branch, fields and all; a union of several object shapes is compared by the types it admits, because which branch corresponds to which across two documents is not knowable in general. A field removed inside one of them is not reported |
+| The API diff cannot say which branch of a multi-branch union changed | §29.7 — a nullable union is compared as its one non-null branch, fields and all; a union of several object shapes is compared by the types it admits, because which branch corresponds to which across two documents is not knowable in general. Since `0.2.0-alpha` a change inside one of them is reported, conservatively, as one breaking `OAS_UNION_CHANGED` at the union — a reviewer learns that something changed there, not what |
 
 ---
 # Part IX — Extended Subsystems
@@ -5034,7 +5066,9 @@ Changes are reported once per *use*, not once per component: a field removed fro
 
 The classification is deliberately conservative — when a change could break a reasonable consumer it is reported as breaking, because a tool that under-reports is worse than no tool once it is trusted.
 
-**What is compared is what a schema says, not how its converter spelled it** — and until `0.1.0-alpha.3` it was the spelling, which failed in both directions. zod 4.6 writes a nullable string as `type: ['string', 'null']` where 4.4 wrote `anyOf: [{ type: 'string' }, { type: 'null' }]`; the type set was read off `type` alone, so a dependency update that changed no byte on the wire failed this gate with two `OAS_TYPE_WIDENED`. And because nothing looked inside an `anyOf` at all, the same blindness passed a field removed from a nullable object — `z.object({…}).nullable()`, the commonest union there is — without a word. So a union is now read before it is compared: `$ref`s followed and nested unions flattened, `null` branches set aside, a single remaining branch compared exactly as a plain schema with `null` added to its types, and several compared by the types they admit. `const: v` is `enum: [v]`. Which branch of one document corresponds to which of the other is not knowable in general, so a change *inside* one of several object branches is not seen; §28.8 records it.
+**What is compared is what a schema says, not how its converter spelled it** — and until `0.1.0-alpha.3` it was the spelling, which failed in both directions. zod 4.6 writes a nullable string as `type: ['string', 'null']` where 4.4 wrote `anyOf: [{ type: 'string' }, { type: 'null' }]`; the type set was read off `type` alone, so a dependency update that changed no byte on the wire failed this gate with two `OAS_TYPE_WIDENED`. And because nothing looked inside an `anyOf` at all, the same blindness passed a field removed from a nullable object — `z.object({…}).nullable()`, the commonest union there is — without a word. So a union is now read before it is compared: `$ref`s followed and nested unions flattened, `null` branches set aside, a single remaining branch compared exactly as a plain schema with `null` added to its types, and several compared by the types they admit. `const: v` is `enum: [v]`. Which branch of one document corresponds to which of the other is not knowable in general, so a change *inside* one of several object branches cannot be named; since `0.2.0-alpha` it is reported, conservatively, as `OAS_UNION_CHANGED` (§28.8).
+
+> **Status: since `0.2.0-alpha` the diff reads every keyword that decides what a value may be.** Numeric and length bounds, the item, property and `contains` counts and `uniqueItems` are compared with the same asymmetry as types — a bound that tightens is `OAS_CONSTRAINT_TIGHTENED` and one that loosens `OAS_CONSTRAINT_LOOSENED`, breaking on a request and on a response respectively — and a changed `pattern` or `multipleOf`, which cannot be ordered, is `OAS_CONSTRAINT_CHANGED` either way. `additionalProperties` opening is read as well as closing (`OAS_ADDITIONAL_PROPERTIES_OPENED`), array items gaining or losing a schema is `OAS_ITEMS_CONSTRAINED` / `OAS_ITEMS_UNCONSTRAINED`, a request field's changed `default` is `OAS_DEFAULT_CHANGED`, and any other assertion keyword — `not`, `prefixItems`, a keyword from a later draft — is `OAS_KEYWORD_CHANGED`, breaking, because what it means to a client is not classified. It is held to the contract fingerprint (§2.4) by an oracle: a thousand seeded edits to a document, each of which must change the fingerprint exactly when the diff reports a non-documentation change. Before, a request `maxLength` cut from 100 to 10 was no change at all. The stricter reading found the repository's own baseline stale — zod's JSON Schema for `email()` and `datetime()` patterns, and for response descriptions, changed under a dependency update while no byte on the wire did — and the baseline was regenerated with that recorded. <!-- claim: contract-diff -->
 
 Recursion is bounded by the descent rather than by the location: a component is skipped only while it is already being compared further up the same path. The guard used to key on the location string, which grows by a segment at every level and so never repeats, and any recursive schema — a tree, a comment thread — overflowed the stack and took `openapi:check` with it.
 
@@ -5119,6 +5153,8 @@ Leadership election (so one replica runs a cron, not all twelve) is delegated to
 > **Built in `0.1.0-alpha.5` — the request id and the route; plugin fields are not.** `ctx.log` is a child of the application's logger bound to `requestId` and `route` — the route's path template, which every route has, where the paragraph above says its name, which is optional — made on the first read and made again when `ctx.id` changes, so the request-id plugin adopting an inbound id rebinds every later line. A request that never logs makes no child. Until then it was the application's logger, unbound, and this paragraph read as though it were not. Fields a plugin contributes to the binding are designed and not built. <!-- claim: ctx-log -->
 
 Redaction is configured by path (`req.headers.authorization`, `*.password`, `*.token`) and applied by the serializer, plus automatic redaction of anything branded `secret` in config (§16.2). The default request log line contains method, route *template* (never the raw URL — cardinality), status, duration, request id, and length.
+
+> **Status: built in `0.2.0-alpha`.** `logging.redact` (default `['**.authorization', '**.cookie', '**.password']`) and `logging.level` are configuration (§16.1), applied by `ready()` to the built-in logger and shared with every child it made, so `ctx.log` follows. A path is dot-separated keys, `*` one key and `**` any number of them; the whole line — bindings and fields — is redacted when it is serialised, so a secret is hidden whichever object carried it in. An application's own logger (pino) keeps its own redaction. `requestLog()` in the middleware pack writes the request line above through `ctx.log`, from a global `onResponse` hook, so it costs a route's pipeline nothing and sees every request, 404s included. <!-- claim: log-redaction -->
 
 ### 31.2 Metrics
 
@@ -5378,6 +5414,7 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_ROUTE_INVALID_PATH` | Malformed path syntax |
 | `ZEN_PARAM_TYPE_UNKNOWN` | Unregistered param type in a path |
 | `ZEN_PLUGIN_MISSING` / `_VERSION` / `_CONFLICT` / `_DUPLICATE` / `_CYCLE` / `_OPTIONS` | Plugin resolution failures |
+| `ZEN_MIDDLEWARE_OPTIONS` | A configured middleware's options rejected by its schema, or an undeclared key named with the one it was probably meant to be (§8.6) |
 | `ZEN_DECORATOR_CONFLICT` | Two plugins decorating the same context property |
 | `ZEN_SLOT_CONFLICT` | Two slots with the same name |
 | `ZEN_HOOK_PHASE_UNAVAILABLE` | A hook is registered for a phase this build cannot fire (§9.7). Refused rather than ignored: a hook that never runs looks exactly like one whose condition never occurred |
@@ -5387,6 +5424,7 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_HEALTH_CHECK_MISSING` | Readiness requires a check nothing registered (§31.4). The alternative is a service that stays in the load balancer through an outage of a dependency it believed it was watching |
 | `ZEN_DI_MISSING` / `_CYCLE` / `_LIFETIME` | Container graph failures |
 | `ZEN_SCHEMA_UNCONVERTIBLE` | Schema cannot produce JSON Schema; OpenAPI will be incomplete |
+| `ZEN_SCHEMA_NAME` | `app.schema(name, …)`: one name given two schemas, one schema two names, or a name OpenAPI cannot use as a component key (§10.2) |
 | `ZEN_MEDIA_TYPE_INVALID` | A declared response media type is not `type/subtype`, carries a parameter, is a wildcard, or is declared twice after lowercasing (§13.4.4). Each has a distinct fix, and each would otherwise match nothing — the same failure mode as a CORS allowlist entry with a trailing slash: an entry that can never match looks configured |
 | `ZEN_MEDIA_TYPE_UNSUPPORTED` | A declared media type has no registered encoder, or its encoder refused the schema at boot (§13.4.4). Booting anyway would send a JSON body under someone else's `Content-Type`, which the client parses as what it was told it was getting and fails somewhere else |
 | `ZEN_NEGOTIATION_INCONSISTENT` | Two statuses on one route offer different media types, or the same ones in a different order (§13.4.2). `Accept` is matched once, at stage 5, before the status exists — so the offer list cannot depend on it, and order is part of it because order is the server's preference |
@@ -5419,6 +5457,7 @@ Codes are public API and semver-protected. Each has an entry in [`docs/errors.md
 | `ZEN_UNAUTHORIZED` / `ZEN_FORBIDDEN` | 401/403 | Authentication / authorization failure |
 | `ZEN_SLOT_EMPTY` | 500 | A slot was read before being written |
 | `ZEN_SERIALIZATION` | 500 | Response did not satisfy its schema (strict mode) |
+| `ZEN_RESPONSE_INVALID` | 500 | A response value its schema's own validator refused, under `validation.response: 'error'` — development's default (§11.5). Never exposed; the issues are in the log and the development `debug` |
 | `ZEN_HEADER_INVALID` | 500 | A header name that is not a token, or a value with a character no header can carry — a line break, another control character, anything past U+00FF — refused where it was set, `ctx.res` included (§19.5) |
 | `ZEN_HTML_UNSAFE` | 500 | `ctx.html()` was given something other than `SafeHtml`, or an `html` template put a hole where escaping cannot make it safe — inside `<script>`, in an `onclick`, in an unquoted attribute — or is read differently by HTML and by SVG (§19.5.1). Refused on the template's first render, whatever the values; a fragment is refused where it is nested, if it could end the text element it lands in or carries an HTML-only script into SVG |
 | `ZEN_REDIRECT_EXTERNAL` | 500 | `ctx.redirect()` would have left the origin for one `redirect.allowExternal` does not name — the open redirect, refused, with no `Location` sent (§19.5.2) |

@@ -7,6 +7,8 @@ import type { OpenApiDocument, OpenApiSchema } from '@erenthedeveloper0/zen-open
 import { build } from '../src/app.ts'
 import { openapiOptions } from '../src/config/zen.config.ts'
 import type { ZenApp } from '@erenthedeveloper0/zen'
+import { canonicalJson, graphFingerprint, type GraphDocument } from '@erenthedeveloper0/zen'
+import { createTestApp } from '@erenthedeveloper0/zen/testing'
 
 let app: ZenApp
 let document: OpenApiDocument
@@ -262,5 +264,41 @@ describe('the API still behaves like an API', () => {
 
   it('rejects a path param that is not an integer before the handler', async () => {
     assert.equal((await app.inject('GET', '/users/abc')).status, 404)
+  })
+})
+
+// ── The graph as data, and responses held to their schemas ─────────────────
+
+describe('the graph as data, and responses held to their schemas', () => {
+  it('the graph round-trips to canonical JSON, with one fingerprint across ten shuffled boots', async () => {
+    const prints = new Set<string>()
+    for (let boot = 0; boot < 10; boot++) {
+      const booted = build({ dev: false })
+      await booted.ready()
+      const document = await booted.graphDocument()
+      const parsed = JSON.parse(JSON.stringify(document)) as GraphDocument
+      assert.equal(canonicalJson(parsed), canonicalJson(document))
+      const k = boot % parsed.routes.length
+      const reordered = { ...parsed, routes: [...parsed.routes.slice(k), ...parsed.routes.slice(0, k)], plugins: [...parsed.plugins].reverse() }
+      assert.equal(await graphFingerprint(reordered), document.fingerprint)
+      prints.add(document.fingerprint)
+      await booted.close()
+    }
+    assert.equal(prints.size, 1)
+  })
+
+  it('a wrong-type value in a response is refused, not sent', async () => {
+    const tested = await createTestApp(() => {
+      const made = build({ dev: false })
+      // Seeded: `id` is an integer in the response schema, and here it is not.
+      // `validation.response: 'error'` is development's default (§11.5); the
+      // example builds a production app, so the test asks for it.
+      made.hook('onSerialize', (ctx, payload) => (ctx.path === '/users/1' ? { ...(payload as object), id: 'one' } : payload))
+      return made
+    }, { config: { validation: { response: 'error' } } })
+    const res = await tested.get('/users/1')
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_RESPONSE_INVALID')
+    await tested.close()
   })
 })

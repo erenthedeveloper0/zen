@@ -46,5 +46,5 @@ export type {
 export type {
   TimeoutSpec, TimeoutStage, TimeoutInfo, TimeoutOptions, TimeoutRecord,
 } from './deadline.ts'
-export { SYNC_MARKER } from './middleware.ts'
+export { SYNC_MARKER, CONFIGURED_MIDDLEWARE } from './middleware.ts'
 export { isStandardSchema } from './standard-schema.ts'

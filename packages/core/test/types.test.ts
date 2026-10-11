@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { readdirSync, readFileSync } from 'node:fs'
 import { generateFixture } from '../../../benchmarks/typecheck/generate.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -77,5 +78,29 @@ describe('type-check performance gate (§28.2, M2)', () => {
     const result = typecheck(join(dir, 'tsconfig.json'))
     assert.equal(result.ok, true, result.output.split('\n').slice(0, 20).join('\n'))
     assert.doesNotMatch(result.output, /implicitly has an 'any' type/)
+  })
+})
+
+describe('the published declarations (§3.3 B2)', () => {
+  /**
+   * Core runs where there is no Node, so its declarations may not name Node's
+   * globals: a consumer without `@types/node` — TypeScript 7's default
+   * `types: []`, a workerd project — would fail to compile against them. It
+   * happened: the inferred type of each named HTTP error repeated `Error`'s
+   * static side as `@types/node` augments it, `NodeJS.CallSite` and all,
+   * sixteen times. `check-pack.ts --typescript 7.0` finds this from a tarball
+   * and the network; this finds it from `dist/` in a millisecond.
+   */
+  test("core's declarations name no Node global", () => {
+    const dist = join(repoRoot, 'packages', 'core', 'dist')
+    const offenders: string[] = []
+    for (const entry of readdirSync(dist, { recursive: true, encoding: 'utf8' })) {
+      if (!entry.endsWith('.d.ts')) continue
+      const text = readFileSync(join(dist, entry), 'utf8')
+      // Comments may say the word; declarations may not use it.
+      const code = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+      if (/\bNodeJS\.|\bBuffer\b|reference types="node"/.test(code)) offenders.push(entry)
+    }
+    assert.deepEqual(offenders, [])
   })
 })

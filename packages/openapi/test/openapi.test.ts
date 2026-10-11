@@ -835,6 +835,73 @@ describe('breaking-change detection (§29.5)', () => {
     ])
   })
 
+  it('every constraint is read, in the direction that can break a caller', () => {
+    /** One operation taking `body` and answering `body` — the same field on both sides. */
+    const both = (value: OpenApiSchema): OpenApiDocument => ({
+      openapi: '3.1.0',
+      info: { title: 'x', version: '1' },
+      paths: {
+        '/r': {
+          post: {
+            operationId: 'r',
+            requestBody: { required: true, content: { 'application/json': { schema: field(value) } } },
+            responses: { 200: { description: 'OK', content: { 'application/json': { schema: field(value) } } } },
+          },
+        },
+      },
+    })
+    const classify = (before: OpenApiSchema, after: OpenApiSchema): string[] => {
+      const result = diffDocuments(both(before), both(after))
+      return [
+        ...result.breaking.map((c) => `breaking ${c.code} ${c.location.includes('response') ? 'response' : 'request'}`),
+        ...result.compatible.map((c) => `compatible ${c.code} ${c.location.includes('response') ? 'response' : 'request'}`),
+        ...result.documentation.map((c) => `documentation ${c.code} ${c.location.includes('response') ? 'response' : 'request'}`),
+      ].sort()
+    }
+    const cases: Array<readonly [string, OpenApiSchema, OpenApiSchema, string[]]> = [
+      ['an upper bound tightens', { type: 'string', maxLength: 100 }, { type: 'string', maxLength: 10 },
+        ['breaking OAS_CONSTRAINT_TIGHTENED request', 'compatible OAS_CONSTRAINT_TIGHTENED response']],
+      ['a lower bound appears', { type: 'integer' }, { type: 'integer', minimum: 1 },
+        ['breaking OAS_CONSTRAINT_TIGHTENED request', 'compatible OAS_CONSTRAINT_TIGHTENED response']],
+      ['a bound goes', { type: 'array', items: { type: 'string' }, maxItems: 5 }, { type: 'array', items: { type: 'string' } },
+        ['breaking OAS_CONSTRAINT_LOOSENED response', 'compatible OAS_CONSTRAINT_LOOSENED request']],
+      ['a pattern changes', { type: 'string', pattern: '^[a-z]+$' }, { type: 'string', pattern: '^[a-z0-9]+$' },
+        ['breaking OAS_CONSTRAINT_CHANGED request', 'breaking OAS_CONSTRAINT_CHANGED response']],
+      ['items become unique', { type: 'array', items: { type: 'string' } }, { type: 'array', items: { type: 'string' }, uniqueItems: true },
+        ['breaking OAS_CONSTRAINT_TIGHTENED request', 'compatible OAS_CONSTRAINT_TIGHTENED response']],
+      ['a default changes', { type: 'integer', default: 20 }, { type: 'integer', default: 50 },
+        ['breaking OAS_DEFAULT_CHANGED request', 'documentation OAS_DEFAULT_CHANGED response']],
+      ['a keyword nothing classifies changes', { type: 'string', not: { const: 'a' } }, { type: 'string', not: { const: 'b' } },
+        ['breaking OAS_KEYWORD_CHANGED request', 'breaking OAS_KEYWORD_CHANGED response']],
+      ['a vendor extension changes', { type: 'string', 'x-internal': 1 }, { type: 'string', 'x-internal': 2 }, []],
+      ['a description changes', { type: 'string', description: 'a' }, { type: 'string', description: 'b' }, []],
+    ]
+    for (const [label, before, after, expected] of cases) {
+      assert.deepEqual(classify(before, after), expected, label)
+    }
+  })
+
+  it('additionalProperties: closing breaks a caller either way; opening is read too, and is compatible', () => {
+    const open: OpenApiSchema = { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: true }
+    const closed: OpenApiSchema = { ...open, additionalProperties: false }
+    const closing = diffDocuments(responding(field(open)), responding(field(closed)))
+    assert.deepEqual(closing.breaking.map((c) => c.code), ['OAS_ADDITIONAL_PROPERTIES_CLOSED'])
+    const opening = diffDocuments(responding(field(closed)), responding(field(open)))
+    assert.deepEqual(opening.breaking, [])
+    assert.deepEqual(opening.compatible.map((c) => c.code), ['OAS_ADDITIONAL_PROPERTIES_OPENED'])
+  })
+
+  it('a change inside one branch of a union of objects is reported at the union, conservatively', () => {
+    const union = (extra: Record<string, OpenApiSchema>): OpenApiSchema => ({
+      anyOf: [
+        { type: 'object', properties: { kind: { const: 'a' }, ...extra }, required: ['kind'] },
+        { type: 'object', properties: { kind: { const: 'b' } }, required: ['kind'] },
+      ],
+    })
+    const result = diffDocuments(responding(field(union({ note: { type: 'string' } }))), responding(field(union({}))))
+    assert.deepEqual(result.breaking.map((c) => c.code), ['OAS_UNION_CHANGED'])
+  })
+
   function deepSchema(document: Record<string, never>): Record<string, unknown> {
     const paths = document as never as Record<string, Record<string, Record<string, Record<string, Record<string, Record<string, Record<string, Record<string, unknown>>>>>>>>
     return paths['paths']!['/users/{id}']!['get']!['responses']!['200']!['content']!['application/json']!['schema'] as unknown as Record<string, unknown>
@@ -1047,5 +1114,53 @@ describe('writeOnly is never documented as returned (§13.3)', () => {
 
     const { document } = openapiDocument(forged as typeof graph, INFO)
     assert.deepEqual(Object.keys(responseSchema(document, '/s', 'get', '200')['properties'] as object), ['id'])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §10.2 — app.schema(name, schema)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('named schemas (§10.2)', () => {
+  const Account = schema({
+    title: 'AccountRecord',
+    type: 'object',
+    properties: { id: { type: 'integer' }, plan: { type: 'string' } },
+    required: ['id'],
+  })
+
+  it('a registered name outranks the schema’s own title', async () => {
+    const app = makeApp()
+    app.schema('Account', Account)
+    app.get('/accounts/:id<int>', { response: { 200: Account } }, () => ({ id: 1 }))
+    await app.ready()
+    const { document } = openapiDocument(app.graph(), { title: 't', version: '1' })
+    const content = (operation(document, '/accounts/{id}', 'get')['responses'] as Record<string, Record<string, Record<string, Record<string, unknown>>>>)['200']?.['content']?.['application/json']
+    assert.deepEqual(content?.['schema'], { $ref: '#/components/schemas/Account' })
+    assert.equal(document.components?.schemas?.['AccountRecord'], undefined, 'the title is not a second name')
+  })
+
+  it('a registered schema no route uses is published anyway', async () => {
+    const Problem = schema({ type: 'object', properties: { code: { type: 'string' } }, required: ['code'] })
+    const app = makeApp()
+    app.schema('ApiProblem', Problem)
+    app.get('/ping', () => 'pong')
+    await app.ready()
+    const { document } = openapiDocument(app.graph(), { title: 't', version: '1' })
+    assert.deepEqual(document.components?.schemas?.['ApiProblem'], {
+      type: 'object',
+      properties: { code: { type: 'string' } },
+      required: ['code'],
+      additionalProperties: false,
+    })
+  })
+
+  it('a plugin contributes a shared component through its registrar', async () => {
+    const Envelope = schema({ type: 'object', properties: { next: { type: ['string', 'null'] } } })
+    const app = makeApp()
+    app.use(definePlugin({ name: 'pagination', version: '1.0.0', setup(r) { r.schema('Cursor', Envelope) } }))
+    await app.ready()
+    const { document } = openapiDocument(app.graph(), { title: 't', version: '1' })
+    assert.ok(document.components?.schemas?.['Cursor'] !== undefined)
   })
 })

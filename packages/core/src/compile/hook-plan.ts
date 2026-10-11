@@ -5,6 +5,7 @@ import {
 import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { closest } from '../primitives/nearest.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * Hook resolution — rfcs/0001 §9.3.
@@ -52,6 +53,7 @@ export interface HookScope {
 export function resolveHooks(
   scope: HookScope,
   routeHooks: RouteHooks | undefined,
+  origin?: SourceOrigin,
 ): ReadonlyMap<RequestPhase, readonly HookRecord[]> {
   const chain: HookScope[] = []
   for (let s: HookScope | null = scope; s !== null; s = s.parent) chain.unshift(s)
@@ -65,15 +67,19 @@ export function resolveHooks(
   }
 
   for (const s of chain) for (const record of s.hooks) push(record)
-  for (const record of routeHookRecords(routeHooks)) push(record)
+  for (const record of routeHookRecords(routeHooks, origin)) push(record)
 
   for (const [phase, list] of out) if (POST_FAMILY.has(phase)) list.reverse()
 
   return out
 }
 
-/** Normalise `hooks: { onRequest: fn | [fn, fn] }` into records. */
-export function routeHookRecords(hooks: RouteHooks | undefined): HookRecord[] {
+/**
+ * Normalise `hooks: { onRequest: fn | [fn, fn] }` into records. `origin` is the
+ * owner's — the route or collection whose `hooks:` object this is — since an
+ * object literal has no call site per hook (§5.1).
+ */
+export function routeHookRecords(hooks: RouteHooks | undefined, origin?: SourceOrigin): HookRecord[] {
   if (hooks === undefined) return []
   const out: HookRecord[] = []
   for (const phase of REQUEST_PHASES) {
@@ -81,7 +87,7 @@ export function routeHookRecords(hooks: RouteHooks | undefined): HookRecord[] {
     if (entry === undefined) continue
     const list = Array.isArray(entry) ? entry : [entry]
     for (const fn of list as readonly Function[]) {
-      out.push({ phase, fn, scope: 'route', name: fn.name === '' ? undefined : fn.name })
+      out.push({ phase, fn, scope: 'route', name: fn.name === '' ? undefined : fn.name, origin })
     }
   }
   // Every other key too. They cannot run here — the loop above is the whole of
@@ -95,7 +101,7 @@ export function routeHookRecords(hooks: RouteHooks | undefined): HookRecord[] {
     const list = (Array.isArray(entry) ? entry : [entry]) as readonly unknown[]
     for (const fn of list) {
       const named = typeof fn === 'function' && fn.name !== '' ? fn.name : undefined
-      out.push({ phase: key as RequestPhase, fn: fn as Function, scope: 'route', name: named })
+      out.push({ phase: key as RequestPhase, fn: fn as Function, scope: 'route', name: named, origin })
     }
   }
   return out
@@ -146,6 +152,7 @@ const NONE: readonly Function[] = Object.freeze([])
  */
 export function diagnoseUnavailable(records: Iterable<HookRecord>): Diagnostic[] {
   const seen = new Map<string, string[]>()
+  const where = new Map<string, SourceOrigin[]>()
   for (const record of records) {
     const reason = UNAVAILABLE_PHASES.get(record.phase)
     if (reason === undefined) continue
@@ -153,10 +160,16 @@ export function diagnoseUnavailable(records: Iterable<HookRecord>): Diagnostic[]
     const owner = record.name ?? `an anonymous hook in scope "${record.scope}"`
     if (owners === undefined) seen.set(record.phase, [owner])
     else if (!owners.includes(owner)) owners.push(owner)
+    if (record.origin !== undefined) {
+      const origins = where.get(record.phase)
+      if (origins === undefined) where.set(record.phase, [record.origin])
+      else origins.push(record.origin)
+    }
   }
 
   const out: Diagnostic[] = []
   for (const [phase, owners] of seen) {
+    const origins = where.get(phase)
     out.push({
       severity: 'error',
       code: Codes.HOOK_PHASE_UNAVAILABLE,
@@ -166,6 +179,7 @@ export function diagnoseUnavailable(records: Iterable<HookRecord>): Diagnostic[]
       hint: `Remove the "${phase}" hook until the phase exists. A hook that silently never runs is ` +
         'indistinguishable from one whose condition never occurred.',
       consequence: 'Boot is refused rather than starting an app whose instrumentation is quietly dead.',
+      ...(origins === undefined ? {} : { origins }),
     })
   }
   return out
@@ -200,6 +214,7 @@ export function diagnoseUnknown(records: Iterable<HookRecord>): Diagnostic[] {
         ? `Use one of: ${[...KNOWN_PHASES].join(', ')}.`
         : `Did you mean "${guess}"?`,
       consequence: 'Registered under an unknown name, the hook would have been stored and never called.',
+      ...(record.origin === undefined ? {} : { origins: [record.origin] }),
     })
   }
   return out
@@ -229,6 +244,7 @@ export function diagnoseMisplaced(records: Iterable<HookRecord>): Diagnostic[] {
         (record.name === undefined ? '' : ` (hook: ${record.name})`) + '.',
       hint: `Register it once for the application: app.hook('${phase}', fn).`,
       consequence: 'Declared on a route, the hook would have been stored and never called.',
+      ...(record.origin === undefined ? {} : { origins: [record.origin] }),
     })
   }
   return out

@@ -680,6 +680,36 @@ const statusOf = (reply: string): string => reply.slice(0, reply.indexOf('\r\n')
 const bodyOf = (reply: string): string => reply.slice(reply.indexOf('\r\n\r\n') + 4)
 const get = (target: string, headers = ''): string => `GET ${target} HTTP/1.1\r\nHost: x\r\n${headers}Connection: close\r\n\r\n`
 
+describe('a streamed body over a real socket (§4.2 stage 6)', () => {
+  // `inject()` always declares a length, so only a chunked request reaches the
+  // per-chunk limit: the one a client that never says how much it will send
+  // is held to.
+  const chunked = (chunks: readonly string[]): string =>
+    'POST /up HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n' +
+    chunks.map((c) => `${c.length.toString(16)}\r\n${c}\r\n`).join('') + '0\r\n\r\n'
+
+  it("stops a chunked body the moment it passes the route's limit, and serves one inside it", async () => {
+    let seen = 0
+    const server = await serve((app) => {
+      app.post('/up', { intake: { mode: 'stream', maxSize: 8 } }, async (ctx) => {
+        for await (const chunk of ctx.body as AsyncIterable<Uint8Array>) seen += chunk.length
+        return { total: seen }
+      })
+    })
+    try {
+      const inside = await exchange(server.url, chunked(['abc', 'de']))
+      assert.equal(statusOf(inside), 'HTTP/1.1 200 OK')
+      assert.deepEqual(JSON.parse(bodyOf(inside)), { total: 5 })
+      seen = 0
+      const past = await exchange(server.url, chunked(['abcde', 'fghij', 'klmno']))
+      assert.equal(statusOf(past), 'HTTP/1.1 413 Payload Too Large')
+      assert.ok(seen <= 8, `the handler was handed ${seen} bytes of an 8-byte allowance`)
+    } finally {
+      await server.close()
+    }
+  })
+})
+
 describe('ingress guards (§4.2 stage 2, §19.2)', () => {
   it('answers a target past maxUrlLength with 414 before dispatch, and serves one at the limit', async () => {
     let dispatched = 0

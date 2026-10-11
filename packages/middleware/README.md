@@ -65,6 +65,10 @@ works in the browser and one that works only in Postman.
   headers. The in-memory store evicts a whole window at once, so memory is
   bounded even when the key is attacker-chosen; `Store` is the seam for Redis.
 
+- **`requestLog()`** — one line per request through `ctx.log`, from a global
+  `onResponse` hook, so it costs a route's pipeline nothing: request id, route
+  template, method, status, duration and length, 404s included.
+
 The pack orders itself: register them in any order and they run request id →
 security headers → CORS → rate limit.
 

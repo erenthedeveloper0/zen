@@ -73,6 +73,69 @@ export function makeIntake(parsers: ReadonlyMap<string, BodyParser>, opts: BodyO
 }
 
 /**
+ * `intake: { mode: 'raw' }` — the body's bytes, unparsed (§4.2 stage 6). The
+ * limit is enforced during the read exactly as for a parsed body; an absent
+ * body is zero bytes rather than `undefined`, so `ctx.body` is always what its
+ * type says.
+ */
+export function makeRawIntake(opts: BodyOptions) {
+  return async function rawIntake(raw: unknown): Promise<void> {
+    const ctx = raw as PlainContext
+    const source = ctx.raw.body
+    if (source.kind === 'none') {
+      ctx.$body = EMPTY_BYTES
+      return
+    }
+    const declared = source.length
+    if (declared !== undefined && declared > opts.maxSize) {
+      throw new PayloadTooLarge(`Body of ${declared} bytes exceeds the ${opts.maxSize} byte limit`)
+    }
+    ctx.$body = await source.read(opts.maxSize, ctx.signal)
+  }
+}
+
+/**
+ * `intake: { mode: 'stream' }` — the body as it arrives, for an upload too
+ * large to hold (§4.2 stage 6, §19.3). Nothing is read here: `ctx.body` is an
+ * `AsyncIterable<Uint8Array>` the handler consumes, and the limit is enforced
+ * chunk by chunk as it does, so a body past `maxSize` stops the iteration with
+ * `ZEN_BODY_TOO_LARGE` at the chunk that crossed it rather than after the whole
+ * of it has been accepted. A declared `Content-Length` over the limit is
+ * refused before the handler runs at all.
+ */
+export function makeStreamIntake(opts: BodyOptions) {
+  return async function streamIntake(raw: unknown): Promise<void> {
+    const ctx = raw as PlainContext
+    const source = ctx.raw.body
+    if (source.kind === 'none') {
+      ctx.$body = emptyStream()
+      return
+    }
+    const declared = source.length
+    if (declared !== undefined && declared > opts.maxSize) {
+      throw new PayloadTooLarge(`Body of ${declared} bytes exceeds the ${opts.maxSize} byte limit`)
+    }
+    ctx.$body = limited(source.stream(), opts.maxSize, ctx.signal)
+  }
+}
+
+async function* limited(chunks: AsyncIterable<Uint8Array>, max: number, signal: AbortSignal): AsyncGenerator<Uint8Array> {
+  let total = 0
+  for await (const chunk of chunks) {
+    if (signal.aborted) throw signal.reason
+    total += chunk.length
+    if (total > max) throw new PayloadTooLarge(`Body exceeds the ${max} byte limit`)
+    yield chunk
+  }
+}
+
+async function* emptyStream(): AsyncGenerator<Uint8Array> {
+  // An absent body is a stream that ends at once.
+}
+
+const EMPTY_BYTES = new Uint8Array(0)
+
+/**
  * Compose `onParse` hooks into the intake stage — rfcs/0001 §9.2, phase 3.
  *
  * The first hook to return anything other than `undefined` *is* the parsed

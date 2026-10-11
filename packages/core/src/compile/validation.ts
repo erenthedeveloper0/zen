@@ -5,6 +5,9 @@ import type { Coercer } from './coercion-walk.ts'
 import type { PlainContext } from '../runtime/context.ts'
 import { mediaTypeOf } from '../runtime/body.ts'
 import { ValidationError, type Issue } from '../errors/http-errors.ts'
+import { ZenError } from '../errors/zen-error.ts'
+import { Codes } from '../errors/codes.ts'
+import { classifySync, markSync } from './pipeline-compiler.ts'
 
 export type { ValidationSource }
 
@@ -334,4 +337,59 @@ function inferCode(message: string): string {
   if (m.includes('at least') || m.includes('greater') || m.includes('min')) return 'min'
   if (m.includes('at most') || m.includes('less') || m.includes('max')) return 'max'
   return 'invalid'
+}
+
+/**
+ * A route's `check` — rfcs/0001 §11.7 — as the last validator of stage 7.
+ *
+ * Schema validation answers "is this well-formed"; `check` answers "is it
+ * allowed", with the whole context and its services. What it returns is the
+ * same `Issue` shape a schema failure carries, so a client parses one envelope
+ * for both, and the status tells them apart: a schema failure in the URL is a
+ * 400, a business rule a 422. Every issue is tagged `source: 'check'` unless
+ * it names its own.
+ *
+ * Returned, not thrown, on purpose: a rule that means something other than
+ * "invalid in context" — a 409, a 403 — throws that error instead, and takes
+ * the ordinary error path. A value that is neither an issue nor a list of them
+ * is a bug in the check, and says so rather than being read as a pass.
+ */
+export function compileCheck(check: Function): ValidatorStep {
+  const verdict = (out: unknown): void => {
+    if (out === undefined || out === null) return
+    const listed: readonly unknown[] = Array.isArray(out) ? out : [out]
+    if (listed.length === 0) return
+    const issues: Issue[] = []
+    for (const entry of listed) {
+      if (!isIssue(entry)) {
+        throw new ZenError(
+          Codes.INTERNAL,
+          `A route's check returned ${describeValue(entry)}; it returns nothing, an issue — issue(path, code, message) — or a list of them.`,
+          { status: 500, expose: false },
+        )
+      }
+      issues.push(entry.source === undefined ? { ...entry, source: 'check' } : entry)
+    }
+    throw new ValidationError('check', issues, 422)
+  }
+  const call = check as (ctx: unknown) => unknown
+  const run = (ctx: unknown): void | Promise<void> => {
+    const out = call(ctx)
+    if (isThenable(out)) return (out as Promise<unknown>).then(verdict)
+    verdict(out)
+  }
+  // A check marked synchronous keeps the route's sync path (§8.4).
+  return { source: 'check', run: classifySync(check) === 'sync' ? markSync(run) : run }
+}
+
+function isIssue(value: unknown): value is Issue {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<Issue>
+  return typeof candidate.code === 'string' && typeof candidate.message === 'string' && Array.isArray(candidate.path)
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'a list'
+  return typeof value === 'object' ? 'an object that is not an issue' : `a ${typeof value}`
 }

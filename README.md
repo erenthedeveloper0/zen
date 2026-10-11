@@ -173,7 +173,7 @@ Full reasoning, including the arguments that lost, is in [ARCHITECTURE.md](./ARC
 
 ## Status
 
-**Alpha — `0.1.0-alpha`.** The architecture RFC is complete; the implementation is a
+**Alpha — `0.2.0-alpha`.** The architecture RFC is complete; the implementation is a
 working vertical slice, published on npm's `alpha` tag for feedback. Do not put this in
 production: the API will change, and several subsystems the RFC describes are not built
 (below). What *is* built has been through two pre-release audit passes that reproduced
@@ -182,7 +182,7 @@ each defect before fixing it, and [CHANGELOG.md](./CHANGELOG.md) lists every one
 | Package | |
 | --- | --- |
 | [`@erenthedeveloper0/zen`](./packages/zen) | install this — everything below, wired together |
-| [`@erenthedeveloper0/zen-core`](./packages/core) | registries, compilers, runtime — zero dependencies |
+| [`@erenthedeveloper0/zen-core`](./packages/core) | registries, compilers, runtime, and the testing kit (`/testing`) — zero dependencies |
 | [`@erenthedeveloper0/zen-router`](./packages/router) | compiled radix router |
 | [`@erenthedeveloper0/zen-adapter-node`](./packages/adapter-node) | Node `http` adapter |
 | [`@erenthedeveloper0/zen-middleware`](./packages/middleware) | CORS, security headers, request ids, rate limiting |
@@ -194,33 +194,44 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 
 ### Working today
 
-- Compiled context class — `ctx.ips` and `ctx.protocol` included, as getters, so its shape never changes — per-route compiled pipelines, generated params builders; the generated source is kept after boot only with `inspect: true` or `dev: true` <!-- claim: compiled-units, ctx-ips, unit-retention -->
+- **Every diagnostic points at a line**: each registration — route, middleware, hook, plugin, collection, service, health check, decoration, configuration — records the `file:line:col` that made it, every boot diagnostic prints the lines of what it is about (both, for a conflict), and `explainRoute()` prints one per step <!-- claim: route-origins -->
+- **Development errors with the code in them**: a development 5xx names the route's registration line, the line of application code that raised it with the lines around it, the route's resolved chain, the fix and the docs — rendered to the terminal with clickable locations, and to a browser as an escaped HTML page; production is unchanged <!-- claim: dev-error-facts -->
+- **The graph as a document**: `app.graphDocument()` is the application as canonical JSON with a SHA-256 fingerprint that ignores registration order and file layout, and a contract fingerprint per route that ignores documentation; `fingerprintHeaders: true` sends both on every response <!-- claim: graph-document -->
+- **`explainRequest()`** — EXPLAIN ANALYZE for one request: every step that ran, its outcome and time, the headers it staged and the slots it set, the fields the response schema kept off the wire; served from a copy of the route table, so the application is never changed <!-- claim: explain-request -->
+- Compiled context class — `ctx.ips` and `ctx.protocol` included, as getters, so its shape never changes — per-route compiled pipelines, generated params builders; the generated source is kept after boot only with `inspect: true` or `dev: true`; development seals the context and freezes request data <!-- claim: compiled-units, ctx-ips, unit-retention, dev-seal -->
 - **The sync fast path, for plain functions**: every call that is not `async` is a speculation point, so a route of plain functions compiles with no `async` and no `await`, and `explainRoute()` says which path a route got <!-- claim: sync-fast-path -->
 - **`ctx.log` bound to the request** — a child carrying the request id and route template, made on its first read and remade when `ctx.id` changes, so a request that never logs pays nothing <!-- claim: ctx-log -->
 - Backtracking radix router: static/typed/wildcard/optional params, `app.paramType()` (its `test` checked for backtracking regexes in development), correct 405 with a complete `Allow`, `HEAD`→`GET`; matching is case-sensitive and a trailing slash is normalised <!-- claim: router, router-options, regex-unsafe -->
 - Boot-time conflict analysis with aggregated, rendered diagnostics — duplicate paths *and* names, ambiguous routes, and parameter types that can match the same value; registration order never decides which route answers <!-- claim: boot-conflicts -->
 - `app.get/post/…/all(path, [spec,] handler)` and `app.listen(port)` — the Express spellings — alongside the spec and options forms <!-- claim: express-spellings -->
 - Phase / around / after middleware at app, collection and route scope (`use: [checkOwnership]` on a route), collections — including a collection's `when`, decided once at boot against the validated environment, so a subtree that is off is absent from the router, the graph and the document — and slots <!-- claim: middleware-scopes, route-use, collection-when -->
+- **Configured middleware**: `defineMiddleware({ name, options, setup })` validates its options at boot and runs `setup` once; `use(fn, { when: { env } })` omits a step at boot, and `{ when: { request } }` guards it per request <!-- claim: define-middleware, middleware-when -->
+- **A route spec that carries its rule and its dependencies**: `check` for the business rule, answered as a 422 like a schema's; `inject` for services, resolved once at boot for singletons; `intake` for the route's own body limits, or the body as raw bytes or a stream <!-- claim: route-check, declarative-injection, route-body-policy -->
 - **The hook system**: all twelve phases, three lexical scopes, compiled into the pipeline, with mirror ordering so before/after pairs nest — and `explainRoute()` to print the resolved chain <!-- claim: hooks -->
 - **Request deadlines**: per app / collection / route, `ctx.signal` wired to the timeout as well as to disconnect, `ctx.timeLeft` to propagate the remaining budget downstream, and abandoned work stopped at the stage boundary rather than left running behind an answered request <!-- claim: deadlines -->
 - **Health and readiness**: two endpoints answering two different questions, per-check budgets and cancellation, stampede-safe caching, and a `draining` state that goes red before the server stops accepting <!-- claim: health -->
 - **Plugins**: manifests, semver dependency resolution, topological ordering, cycle/conflict/capability detection — checked against what the adapter says it can do — context decorations with type accumulation, and options validated at boot before any plugin runs, so `rateLimit({ limt: 100 })` fails with *did you mean "limit"?* <!-- claim: plugins, plugin-options, adapter-caps -->
-- **DI**: typed tokens, three lifetimes, request-scoped services stored in the slot array and disposed at the end of the request, boot-time cycle and captive-dependency analysis; a service or slot value implementing `Symbol.dispose` or `Symbol.asyncDispose` is released through it, with no second declaration <!-- claim: di, intrinsic-dispose -->
-- Standard Schema validation with normalised issues — a missing value is `required` whatever the library calls it, and `registerIssueMapper()` reads the rest from the library's own issue codes, not its (translatable) messages — and a `params` schema checked against its path at boot; RFC 9457 error envelopes, every error class with a code of its own, and an abort classified by whose it was — the request's own, an upstream that timed out (503), or the application's (500) <!-- claim: issue-codes, validation-envelopes, params-mismatch, 503-code, abort-classification -->
+- **DI**: typed tokens — optional ones resolve to `undefined` — three lifetimes, request-scoped services stored in the slot array and disposed at the end of the request, boot-time cycle and captive-dependency analysis; a service or slot value implementing `Symbol.dispose` or `Symbol.asyncDispose` is released through it, with no second declaration <!-- claim: di, intrinsic-dispose, optional-tokens -->
+- Standard Schema validation with normalised issues — a missing value is `required` whatever the library calls it, and `registerIssueMapper()` reads the rest from the library's own issue codes, not its (translatable) messages — and a `params` schema checked against its path at boot; RFC 9457 error envelopes, every error class with a code of its own, an abort classified by whose it was — the request's own, an upstream that timed out (503), or the application's (500) — and a formatter that keeps failing answered by a circuit breaker rather than a `fatal` per request <!-- claim: issue-codes, validation-envelopes, params-mismatch, 503-code, abort-classification, formatter-breaker -->
+- **Response validation**: a response of the wrong value is refused with `ZEN_RESPONSE_INVALID` in development, logged under the hardened profile in production, and costs nothing — no emitted code — when off <!-- claim: response-validation -->
 - **Coercion profiles**: `?page=2` is a `number` because the schema says `number` — schema-guided, so `?sku=00713` stays a string, and a source with nothing to convert emits no code <!-- claim: coercion -->
 - **Configuration**: layered resolution that keeps the *provenance* of every value, a schema-validated environment checked before any plugin's `setup` runs, typed `app.config` / `ctx.config`, and secrets that redact themselves when serialised <!-- claim: config -->
+- **Request policy is configuration**: the deadline, body limits, proxy trust, redirect allowlist and ingress limits are read from the configuration with a source each, and `zen({ profile: 'hardened' })` is a named source of production values <!-- claim: request-policy -->
+- **Logs that redact**: the built-in logger masks the `logging.redact` paths (`**.authorization`, `**.cookie`, `**.password` by default) wherever they sit in a line, and `requestLog()` writes one line per request, 404s included <!-- claim: log-redaction -->
 - **First-party middleware**: `cors`, `securityHeaders`, `requestId`, `rateLimit` — each a global hook rather than middleware, so a preflight to a path with no route is answered and a 404 flood counts against the limit; each *staging* its headers, so they are on the 404 and the 429 as well as the 200; and each with an options schema, so a misspelt option fails at boot <!-- claim: middleware-pack -->
 - **Content negotiation**: one route, several representations, chosen from `Accept` before the handler runs — versioned JSON for free through the same compiled serializer, an encoder seam for everything else, `Vary: Accept` on every response including the 406, and *no emitted code at all* on a route that declares one representation <!-- claim: negotiation -->
 - **Compiled response serializers**: undeclared fields cannot be emitted, because the generated function has no key enumeration to emit them *through* — and a declared one its own schema marks `writeOnly` is refused at boot, in every representation and every encoder <!-- claim: serializers, write-only -->
 - **Injection defences**: an `html` template tag that escapes each interpolation for the position it sits in and refuses the positions where no escaping helps, a `ctx.html()` that takes only its `SafeHtml`, and a `ctx.redirect()` that will not leave the origin unless `redirect.allowExternal` says where <!-- claim: injection-defences -->
 - **URL generation**: `app.url(name, params, query)` returns a path its route answers, with the values given — encoded, typed and checked against the router — or refuses; reachable from a collection and from a plugin, and always on the application's origin <!-- claim: url-generation -->
-- **OpenAPI 3.1**: `AppGraph → document` as a pure function, `$ref` deduplication, a dependency-free reference viewer, breaking-change detection, the security schemes plugins declare with `app.meta`, and no `writeOnly` field documented as returned <!-- claim: openapi, plugin-meta -->
+- **OpenAPI 3.1**: `AppGraph → document` as a pure function, `$ref` deduplication, components named with `app.schema(name, schema)`, a dependency-free reference viewer, the security schemes plugins declare with `app.meta`, and no `writeOnly` field documented as returned <!-- claim: openapi, plugin-meta, named-schemas -->
+- **Breaking-change detection that reads every constraint**: bounds, patterns, `additionalProperties`, defaults and any other keyword, each classified by direction — held to the contract fingerprint by an oracle of a thousand seeded schema edits <!-- claim: contract-diff -->
 - Body intake emitted **only** when a route declares a body; prototype-pollution stripping <!-- claim: body-intake -->
 - Node adapter with lazy `RawRequest` (no WHATWG `Request` construction), client disconnects wired to `ctx.signal`, shutdown that drains and then closes keep-alive connections rather than waiting on them, and ingress limits that refuse before any of Zen runs: 8 KB of headers (431, from Node) and an 8 KB URL (414 `ZEN_URI_TOO_LONG`) by default, plus a per-socket request cap <!-- claim: node-adapter, ingress-guards -->
 - **Server-sent events** — `ctx.sse()`, with heartbeats, backpressure, a bound on what a slow client can hold, and a final `shutdown` event on drain <!-- claim: sse -->
 - **File responses** — `ctx.file(path, { root })` with root confinement, `ETag`/`Last-Modified`, 304 revalidation and single-range 206 <!-- claim: files -->
 - **Process lifecycle** — `SIGTERM`/`SIGINT` run the graceful shutdown; an uncaught exception is logged and shuts down with exit code 1; `listen({ signal })` aborts into the same sequence <!-- claim: process-lifecycle -->
 - `inject()` in-process testing — including the peer address a request comes from, and a deadline that answers even when nothing else keeps the process alive; streaming responses; graceful shutdown, which releases singletons only after the server has stopped accepting <!-- claim: inject, graceful-shutdown -->
+- **A testing kit**: `createTestApp(makeApp, { override: [[Db, () => fakeDb]] })` compiles the real application with the fakes — each checked against its token's type — `testContext()` calls a handler with no application at all, and `assertNoLeaks()` fails on a timer or socket left running <!-- claim: testing-kit -->
 - **Interpreted twins** for the pipeline, context, router and serializer, verified by differential suites <!-- claim: twins -->
 
 Every bullet above carries an id that `scripts/claims.ts` maps to a probe against the
@@ -230,7 +241,7 @@ until the docs say so.
 
 ### Designed, not yet built
 
-CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · route and middleware origins in diagnostics · conditional middleware (`use(fn, { when })`) · per-route body limits · a generated matcher (matching walks the trie; params builders are generated) · a returned WHATWG `Response` passing through · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
+CLI (`zen dev`, `routes`, `build`, `doctor`) · typed client, and a test response typed from its route · non-Node adapters and the conformance suite · WebSockets · `app.isolate()` · resource and module routing · a middleware's `provides` and `requires` · a generated matcher (matching walks the trie; params builders are generated) · a returned WHATWG `Response` passing through · compression and static file serving (both need a platform, so they belong to an adapter-coupled package rather than to the middleware one — [§32.6](./ARCHITECTURE.md#326-what-is-not-in-the-pack)) · negotiation of language and encoding, as opposed to media type ([§28.8](./ARCHITECTURE.md#288-smaller-known-gaps)). The roadmap in [§25](./ARCHITECTURE.md#25-roadmap-mvp-to-v10) sequences them.
 
 ## In depth
 
@@ -255,8 +266,10 @@ baseline wherever no I/O hides the difference, where Fastify serves about 1.0×:
 | 5. 10 middleware | 0.80× | **0.80×** | 0.99× | 0.83× | 0.58× |
 | 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 0.94× | **0.98×** | 1.01× | 1.05× | 0.95× |
 
-The POST workload was 0.49× until this release stopped running a reviver over every JSON body;
-the same ~20% everywhere else suggests a cost every request pays rather than any one feature.
+The table is `0.1.0-alpha.5`'s. The POST workload was 0.49× until that release stopped running a
+reviver over every JSON body; the same ~20% everywhere else suggests a cost every request pays
+rather than any one feature. `0.2.0-alpha` added nothing to the request path, and its release
+run measured the same: 0.79–0.83× without I/O, Fastify 0.97–1.03×.
 [`benchmarks/results/competitors.md`](./benchmarks/results/competitors.md) has every cell, the
 run after each fix, and what the method is not — one laptop, 10-second runs, the load
 generator on the same machine. (Fastify's 0.82× on workload 2 is that run's outlier; re-run
@@ -318,6 +331,54 @@ Once, at boot. The per-request difference between an app with the plugin and the
 `$ref` deduplication removes **77%** of the document. Naming your schemas is worth a further 8%, which is less than expected and is [published as such](./ARCHITECTURE.md#298-measured-cost); the reason to name them is stable client type names, not bytes.
 
 Breaking-change detection ships with it: `diffDocuments(before, after)` classifies each change as breaking, compatible or documentation-only, using the rule that requests are contravariant and responses are covariant. `npm run openapi:check` is a working gate.
+
+### Every diagnostic points at a line
+
+Each registration records the `file:line:col` that made it, so a boot failure names
+both lines it is about, relative to the working directory:
+
+```
+Boot failed: 1 problem
+
+  1. ZEN_ROUTE_AMBIGUOUS  Ambiguous routes: GET /:org/settings and GET /admin/:page can both match the same request, and no priority rule separates them.
+     at GET /:org/settings  src/routes.ts:6:12   ⇄   GET /admin/:page  src/routes.ts:7:12
+     fix: Make one segment static, or narrow one parameter with a type (e.g. ":id<int>") so the matcher can tell them apart.
+     docs: https://github.com/erenthedeveloper0/zen/blob/main/docs/errors.md#zen_route_ambiguous
+```
+
+Every suite in the repository boots its applications through a check that fails the test
+when a boot diagnostic has no line, so a new diagnostic cannot ship without one. The same
+origins reach a development 5xx — the route's registration line and the application line
+that raised the error, with the code around it — and `explainRequest()` shows what one
+request did at each step of the chain `explainRoute()` prints:
+
+```
+POST /api/orders → orders.create                          2.499 ms   budget 2000 ms · 1997.5 left
+  onRequest   [global]    rateLimit           0.014 ms   continue
+  phase       [root/api]  authenticate        0.007 ms   continue
+  intake                  read the body       0.146 ms   ok · application/json · 14 B
+  validate                body                0.742 ms   ok
+  handler                 createOrder         0.041 ms   ran · async
+  serialize               201                 0.024 ms   ok · 8 B · dropped undeclared: costCents
+  wire                    201                            2 headers · 8 B
+```
+
+The explained request runs on a copy of the route table compiled with observers, so
+the application serving other requests at the same time is never changed.
+
+### The application as data
+
+`app.graphDocument()` serialises the whole application — routes with their schemas as
+JSON Schema, hooks, plugins, services, health checks, the redacted configuration —
+to canonical JSON, with two kinds of SHA-256 fingerprint
+([§2.4](./ARCHITECTURE.md#24-the-three-artefact-tiers)). The application's ignores
+registration order, file layout and configuration; each route's `contract` covers only
+what crosses the wire, normalised, so a reworded description or a converter's other
+spelling of the same schema changes nothing and a tightened `maxLength` changes it.
+`diffDocuments()` reads the same constraints, and a seeded suite of a thousand schema
+edits holds the two to each other: the fingerprint moves exactly when the diff reports a
+non-documentation change. Each example's tests boot it ten times and check the document
+round-trips with one fingerprint.
 
 ### Hooks that cost nothing when unused
 
@@ -1047,6 +1108,14 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `issue-codes.test.ts` | A vendor's issue mapper deciding `issues[].code` from the issue's own fields whatever the message's language — on async validators and combined sources too, looked up when a request fails so a late registration still applies — and a missing value `required` before any mapper is asked, an inherited key not counted as present |
 | `validation.test.ts` | A bad query and a bad body are reported in **one** response, each issue tagged with its source; 422 only when the body alone failed; async validators collected too; and a one-source route compiles exactly as before |
 | `registration.test.ts` | Registrations that could never take effect are boot errors: a typo'd hook phase (with the phase you meant), an application phase on a route, a decoration that would shadow `ctx.json`, two routes sharing a name, a `params` schema its path cannot satisfy — one test per case of §5.2's table — and a collection `when` that answers with something other than a boolean; a subtree `when` turned off absent from router, graph and hooks; route-scoped `use` in the right place in the chain; `app.paramType()`; one boot per application however many callers race for it, and a failed boot that stays failed; and a shutdown that completes when an `onClose` hook throws |
+| `origins.test.ts` | Every registration surface records the line that made it — every verb, collections and their options, middleware and hooks at each scope, services, checks, decorations, plugins and `defineConfig` — and a catalogue provoking every boot diagnostic core can raise, each required to print the lines of what it is about; `scripts/placed-boot.ts`, loaded before every suite, fails any test whose boot error has a diagnostic with no line |
+| `error-engine.test.ts` + `dev-errors.test.ts` | The formatter circuit breaker opening once and closing on the first success; a development 5xx naming its route's registration line, the application line that raised it and the code around it, the chain and the docs; the HTML page escaping every value and keeping the error's own headers; production carrying none of it; and the terminal rendering, with OSC 8 links, written only to a terminal |
+| `graph-document.test.ts` + `contract-oracle.test.ts` | The graph round-tripping to canonical JSON with one fingerprint across ten shuffled boots, unmoved by where code sits, by re-ordered lists or by slots another module declared, and moved by a swapped pair of hooks; and the oracle — a thousand seeded schema edits on which the contract fingerprint and `diffDocuments` must agree about what changed |
+| `explain-request.test.ts` | Every step that ran, in order, with what it did — a refusal showing where the request stopped, a short-circuit, an unmatched request — and the instrumented pipeline never installed: concurrent and later requests run the production one, and nothing is compiled into the application |
+| `route-spec.test.ts` + `middleware-definitions.test.ts` | `check` answering as a 422 with its source, `inject` resolving singletons once at boot and request-scoped services per request, per-route body limits and the raw and streamed body modes; `defineMiddleware` options validated at boot with `setup` run once, and `when: { env }` omitting a step from the pipeline while `when: { request }` guards it |
+| `policy.test.ts` + `response-validation.test.ts` | Request policy read from configuration with a source per value, `zen()` options as its sugar and the hardened profile as a named source; a wrong response value refused under `'error'`, logged under `'log'`, sampled, and — when off — no emitted code at all |
+| `testing.test.ts` | The testing kit as an application uses it: a fake winning over a provider a plugin registers at boot, configuration at the override layer, a booted factory refused, a timer left running named by `assertNoLeaks`, and a handler called on `testContext()`; the type fixture holds a fake of the wrong shape to a compile error |
+| `examples/*` | Each of the ten examples boots ten times to one graph fingerprint, and refuses a seeded wrong-type value in a response |
 | `leaks.test.ts` | §20.7's first two properties, which no other suite checked: a real port served — SSE, a deadline kept and one blown, a file, a health probe — and closed with nothing left holding the process open, and 500 interleaved requests that each read back only the slot values, hook state and scoped instance they wrote |
 | `generated-source.test.ts` | Everything the compilers emit for one fixture application — context class, params builders, pipelines with every hook phase, coercer, serializers — against a committed snapshot, so a compiler change is a reviewable diff of code; and that an app keeps none of it after boot unless built with `inspect` or `dev`, and says so instead of answering with an empty list |
 | `regex-safety.test.ts` | The analyser behind §19.3's lint, against the shapes that backtrack (`(a+)+`, `(a\|aa)+`, `(-?[a-z]+)*`) and the idioms that must not be refused (`[a-z0-9]+(?:-[a-z0-9]+)*`); and `app.paramType()` warning about a test that can backtrack, in development only |
@@ -1076,7 +1145,7 @@ packages/
   middleware/      cors · securityHeaders · requestId · rateLimit + the Store seam
   zen/             meta-package: wires core + router + adapter + middleware
 examples/
-  hello-world/     routing, slots, the three middleware forms, streaming
+  hello-world/     routing, slots, the three middleware forms, a response schema, streaming
   rest-api/        response contracts, plugins, DI, validation — the full tour
   openapi/         Zod, OAS 3.1, the API diff gate — and the RFC's recommended layout
   observability/   the hook system running: metrics, request log, Server-Timing

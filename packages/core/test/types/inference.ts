@@ -9,6 +9,7 @@
 import type { StandardSchemaV1 } from '@erenthedeveloper0/zen-core'
 import { createApp, slot, token, definePlugin, defineConfig, type Context, type ExtractParams } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
+import { createTestApp, testContext } from '@erenthedeveloper0/zen-core/testing'
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -118,6 +119,18 @@ app.get('/rows', async (ctx) => {
   expectType<Database>(ctx.resolve(Db))
   const rows = await ctx.resolve(Db).query('select 1')
   expectType<unknown[]>(rows)
+  return 'ok'
+})
+
+// An optional token's value may be absent, and the type makes the reader decide (§15.2).
+const Tracer = token<{ span(name: string): void }>('types.tracer', { optional: true })
+
+app.get('/traced', (ctx) => {
+  const tracer = ctx.resolve(Tracer)
+  expectType<{ span(name: string): void } | undefined>(tracer)
+  // @ts-expect-error — possibly undefined
+  tracer.span('x')
+  tracer?.span('x')
   return 'ok'
 })
 
@@ -368,5 +381,94 @@ import type { RouterOptions } from '@erenthedeveloper0/zen-core'
 // @ts-expect-error — matching is always case-sensitive (§5.3).
 const caseless: RouterOptions = { caseSensitive: false }
 void caseless
+
+// ── 0.2.0-alpha: check, inject, intake, defineMiddleware, when ───────────────
+
+import { defineMiddleware, issue } from '@erenthedeveloper0/zen-core'
+
+const Signup = typed<{ email: string; age?: number }>()
+
+// §11.7 — `check` sees the route's validated input, typed by the schemas beside it.
+app.post('/signup', {
+  body: Signup,
+  check: async (ctx) => {
+    expectType<string>(ctx.body.email)
+    // @ts-expect-error — not a field of the body
+    void ctx.body.nickname
+    if (ctx.body.email.endsWith('@spam.io')) return issue('email', 'blocked', 'Blocked domain')
+    // §8.2.1's wrinkle, for a check as for phase middleware: under
+    // `noImplicitReturns` the path that finds nothing returns explicitly.
+    return
+  },
+}, (ctx) => {
+  expectType<string>(ctx.body.email)
+  return 'ok'
+})
+
+// A check answers with issues or nothing — not with anything else.
+app.post('/signup2', {
+  body: Signup,
+  // @ts-expect-error — a boolean is not an answer
+  check: () => true,
+}, () => 'ok')
+
+// §15.1 — the handler's second argument is typed from `inject`.
+interface Mailer { send(to: string): Promise<void> }
+const MailerToken = token<Mailer>('types.mailer')
+const OptionalCache = token<Map<string, string>>('types.cache', { optional: true })
+app.post('/invite', { body: Signup, inject: { mailer: MailerToken, cache: OptionalCache } }, async (ctx, deps) => {
+  await deps.mailer.send(ctx.body.email)
+  expectType<Map<string, string> | undefined>(deps.cache)
+  // @ts-expect-error — not injected
+  void deps.db
+  return 'ok'
+})
+
+// A route that injects nothing hands the handler no services.
+app.get('/no-deps', {}, (_ctx, deps) => {
+  expectExactly<never>()<typeof deps>(true)
+  return 'ok'
+})
+
+// §4.2 stage 6 — a body read without a schema is typed by its intake mode.
+app.post('/raw', { intake: { mode: 'raw' } }, (ctx) => {
+  expectType<Uint8Array>(ctx.body)
+  return 'ok'
+})
+app.post('/stream', { intake: { mode: 'stream', maxSize: 10_000_000 } }, async (ctx) => {
+  for await (const chunk of ctx.body) expectType<Uint8Array>(chunk)
+  return 'ok'
+})
+app.post('/parsed', { intake: { maxSize: 1000 } }, (ctx) => {
+  expectExactly<unknown>()<typeof ctx.body>(true)
+  return 'ok'
+})
+
+// §8.6 — a factory takes its schema's input, and its options are optional only when every one is.
+const LimitOptions = typed<{ limit: number }>()
+const limiter = defineMiddleware({ name: 'limiter', options: LimitOptions, setup: (opts) => { expectType<number>(opts.limit); return () => undefined } })
+app.use(limiter({ limit: 5 }))
+const plain = defineMiddleware({ name: 'plain', setup: () => () => undefined })
+app.use(plain())
+
+// §8.7 — the two explicit forms of `when`, and not a bare function.
+app.use(() => undefined, { when: { env: (env) => env['MODE'] === 'dev' } })
+app.use(() => undefined, { when: { request: (ctx) => ctx.method === 'GET' } })
+// @ts-expect-error — which kind of condition is it?
+app.use(() => undefined, { when: () => true })
+
+// §15.5 — each replacement is checked against its own token.
+const Repo = token<{ find(id: number): string }>('types.repo')
+const Clock = token<{ now(): number }>('types.clock')
+const makeTested = () => createApp({
+  router: new ZenRouter(),
+  pathParser: { parse: (p: string) => ({ path: parsePath(p).path, segments: parsePath(p).segments }) },
+})
+void createTestApp(makeTested, { override: [[Repo, () => ({ find: (id: number) => String(id) })], [Clock, async () => ({ now: () => 0 })]] })
+void createTestApp(makeTested, { override: [[Repo, { factory: () => ({ find: () => 'x' }) }]] })
+// @ts-expect-error — a fake of the wrong shape is a compile error, not a passing test of something else
+void createTestApp(makeTested, { override: [[Repo, () => ({ find: (id: number) => id })]] })
+expectType<Context>(testContext())
+expectExactly<{ readonly id: number }>()<ReturnType<typeof testContext<{ readonly id: number }>>>(true)
 
 export {}

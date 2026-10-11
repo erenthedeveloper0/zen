@@ -5,6 +5,7 @@ import type { BodySource, ServerHandle } from './adapter.ts'
 import type { AppGraph } from './graph.ts'
 import type { TimeoutInfo } from './deadline.ts'
 import type { MaybePromise } from './route.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * The twelve request phases — rfcs/0001 §9.2.
@@ -204,4 +205,10 @@ export interface HookRecord {
   readonly fn: Function
   readonly scope: string
   readonly name: string | undefined
+  /**
+   * Where it was registered (§5.1). A hook written in a route's or a
+   * collection's `hooks: { … }` object has none of its own — the object has no
+   * call site per hook — and is read as its owner's.
+   */
+  readonly origin?: SourceOrigin | undefined
 }

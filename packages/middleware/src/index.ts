@@ -4,7 +4,9 @@
  * Four plugins, one shape: **a global `onRequest` hook that stages response
  * metadata**. Both halves of that sentence are load-bearing and both were
  * decided by measurement rather than by taste — see §32.1 and §32.2, or the
- * header comment on `cors.ts`, which carries the numbers.
+ * header comment on `cors.ts`, which carries the numbers. A fifth,
+ * `requestLog`, is the same shape at the other end of the request: a global
+ * `onResponse` hook that reports it, after the last byte (§31.1).
  *
  * What is *not* here, named rather than left as a silent gap:
  *
@@ -26,6 +28,7 @@ export {
   securityHeaders, type SecurityHeadersOptions, type ReferrerPolicy,
 } from './security.ts'
 export { requestId, type RequestIdOptions } from './request-id.ts'
+export { requestLog, type RequestLogOptions, type RequestLogContext } from './request-log.ts'
 export {
   rateLimit, type RateLimitOptions, type RateLimitContext,
 } from './rate-limit.ts'

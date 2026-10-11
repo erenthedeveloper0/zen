@@ -2,7 +2,7 @@ import type { Capabilities } from '../contracts/capabilities.ts'
 import type {
   Connection, HostLifecycle, RawRequest, RuntimeAdapter, ListenOptions, ServerHandle,
 } from '../contracts/adapter.ts'
-import type { AppGraph, DecorationRecord } from '../contracts/graph.ts'
+import type { AppGraph, DecorationRecord, SchemaRecord } from '../contracts/graph.ts'
 import type { HookFn, HookPlan, HookRecord, Phase, RequestPhase, RouteHooks } from '../contracts/hook.ts'
 import type { TimeoutInfo, TimeoutOptions, TimeoutSpec } from '../contracts/deadline.ts'
 import type { CheckOptions, HealthProbe, HealthReport, ProbeKind } from '../contracts/health.ts'
@@ -11,7 +11,9 @@ import type {
   ConfigDefinition, ConfigOverlay, ConfigSnapshot, EnvSource,
 } from '../contracts/config.ts'
 import type { Logger } from '../contracts/logger.ts'
-import type { AfterMiddleware, AroundMiddleware, PhaseMiddleware } from '../contracts/middleware.ts'
+import type {
+  AfterMiddleware, AroundMiddleware, ConfiguredMiddleware, MiddlewareOptions, MiddlewareSetup, PhaseMiddleware,
+} from '../contracts/middleware.ts'
 import type { Reply } from '../contracts/reply.ts'
 import type { CompiledRouter, PathParser, Router } from '../contracts/router.ts'
 import type { Slot, SlotOptions } from '../contracts/slot.ts'
@@ -21,7 +23,7 @@ import type { Prettify } from '../contracts/route.ts'
 import type { HttpMethod, RemoteInfo } from '../contracts/http.ts'
 import type { ParamType } from '../contracts/route.ts'
 import type {
-  CollectionId, MiddlewareRef, RouteId, RouteRecord, RouteSchema, RouteSpec,
+  CollectionId, DepsOf, MiddlewareRef, RouteId, RouteRecord, RouteSchema, RouteSpec, RouteSpecOf, SpecWithoutCheck,
   HandlerResult, MaybePromise,
 } from '../contracts/route.ts'
 import type { Context } from '../contracts/context.ts'
@@ -34,7 +36,7 @@ import { generateRequestId as makeRequestId } from '../primitives/id.ts'
 import { CodeGen } from '../compile/codegen.ts'
 import { compileContext, type ContextClass, type Decoration } from '../compile/context-compiler.ts'
 import {
-  compilePipeline, simplePipeline, NO_HOOKS, type CompiledPipeline, type PipelineStep,
+  compilePipeline, simplePipeline, NO_HOOKS, type CompiledPipeline, type PipelineSpec, type PipelineStep,
 } from '../compile/pipeline-compiler.ts'
 import {
   diagnoseMisplaced, diagnoseUnavailable, diagnoseUnknown, functionsFor, pipelinePlan, resolveHooks,
@@ -45,21 +47,27 @@ import { VALIDATION_SOURCES } from '../contracts/coercion.ts'
 import { Deadline, EXPIRED, budgetFor, timeoutError } from '../runtime/deadline.ts'
 import { HealthRegistry, type HealthRegistryOptions } from '../runtime/health.ts'
 import { isRequestPhase } from '../contracts/hook.ts'
-import { combineValidators, compileValidator } from '../compile/validation.ts'
+import { combineValidators, compileCheck, compileValidator } from '../compile/validation.ts'
 import { describeField, planRoute, resolveCoercion } from '../compile/coercion-plan.ts'
 import { compileCoercer } from '../compile/coercion-compiler.ts'
-import { buildSerializerTable, type SerializerMode, type SerializerTable } from '../compile/serializer.ts'
+import {
+  buildSerializerTable, createSerializerMemo, type SerializerMode, type SerializerTable,
+} from '../compile/serializer.ts'
 import { buildNegotiation } from '../compile/negotiation.ts'
 import { makeNegotiationStep, makeNegotiator } from '../runtime/negotiation.ts'
 import type { Representation } from '../contracts/negotiation.ts'
 import { isDescribeOnly } from '../compile/json-schema.ts'
 import {
-  BODY_DEFAULTS, DEFAULT_PARSERS, makeIntake, withParseHooks, type BodyOptions, type BodyParser,
+  BODY_DEFAULTS, DEFAULT_PARSERS, makeIntake, makeRawIntake, makeStreamIntake, withParseHooks,
+  type BodyOptions, type BodyParser,
 } from '../runtime/body.ts'
 import { ConsoleLogger } from '../runtime/logger.ts'
-import { compileRedirectPolicy, type RedirectOptions, type RedirectPolicy } from '../runtime/redirect.ts'
+import { compileResponseValidator, type ResponseValidator } from '../runtime/response-validation.ts'
+import { SAME_ORIGIN_ONLY, compileRedirectPolicy, type RedirectOptions, type RedirectPolicy } from '../runtime/redirect.ts'
 import { UrlTable } from '../runtime/url.ts'
-import { ErrorEngine, type ErrorContextInfo } from '../runtime/error-engine.ts'
+import { ErrorEngine, type DevFacts, type ErrorContextInfo } from '../runtime/error-engine.ts'
+import { steps as explainedSteps } from './explain.ts'
+import { parseAccept, qualityFor } from '../compile/media-type.ts'
 import { prepareForWire, stripBodyIfNeeded } from '../runtime/egress.ts'
 import { encodeBody, finalize } from '../runtime/response-engine.ts'
 import { MutableReply } from '../runtime/reply.ts'
@@ -71,13 +79,26 @@ import { NotFound, MethodNotAllowed } from '../errors/http-errors.ts'
 import { declareSlot, slotCount, declaredSlots } from '../registry/slot-registry.ts'
 import { ZenContainer } from '../di/container.ts'
 import { resolvePlugins, type PendingPlugin } from '../registry/plugin-registry.ts'
-import { validatePluginOptions } from '../compile/plugin-options.ts'
+import { validateMiddlewareOptions, validatePluginOptions, type OptionsVerdict } from '../compile/plugin-options.ts'
+import { conditionOf, pipelineSteps } from '../compile/middleware-plan.ts'
+import { isConfiguredMiddleware } from './define-middleware.ts'
+import { serializeGraph } from './graph-document.ts'
+import { Trace, instrumentRoute, type TraceEvent } from './explain-request.ts'
+import type { GraphDocument } from '../contracts/graph-document.ts'
+import {
+  PROFILES, devDefaults, optionsOverlay, profileDefaults, readPolicy,
+  type Policy, type Profile, type ResponseValidation,
+} from './policy.ts'
 import { checkParamsSchema } from '../compile/params-check.ts'
 import { resolveConfig, type ResolvedConfigResult } from '../registry/config-store.ts'
 import { EMPTY_SNAPSHOT } from '../contracts/config.ts'
 import { SETTLED } from '../primitives/disposal.ts'
 import { regexHazards, regexLiterals } from '../primitives/regex-safety.ts'
+import { closest } from '../primitives/nearest.ts'
 import { toJsonSchema } from '../compile/json-schema.ts'
+import {
+  applicationFrame, captureOrigin, errorOrigin, formatOrigin, relativeOrigin, type CaptureMode, type SourceOrigin,
+} from '../primitives/origin.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -94,6 +115,56 @@ export interface ZenOptions<C = unknown> {
    * which at 10,000 routes is megabytes of strings nothing reads after boot.
    */
   readonly inspect?: boolean | undefined
+  /**
+   * The directory registration origins are written relative to — §5.1.
+   *
+   * Every route, middleware, hook, plugin, service and check records the
+   * `file:line:column` that registered it, and a diagnostic, `explainRoute`
+   * and the graph document print it. Under `root` it is printed as
+   * `src/features/users/routes.ts:31:3`; elsewhere, absolute. The `zen`
+   * meta-package passes `process.cwd()`: core reads no process state (§3.3 B2).
+   */
+  readonly root?: string | undefined
+  /**
+   * A named set of defaults — §19.2. `'hardened'` is the production profile:
+   * a 30 s deadline, 1000 requests per keep-alive connection, thrown probe
+   * errors kept off the wire, and in production response validation that logs
+   * rather than throws. It is configuration, not composition — it registers
+   * nothing — and every value it sets can be beaten by any later layer;
+   * `explainConfig` shows each as `← profile: hardened`. Under it, a
+   * `trustProxy` nobody set is warned about at boot, and the first
+   * `X-Forwarded-For` that arrives is reported once.
+   */
+  readonly profile?: Profile | undefined
+  /**
+   * Response validation — §11.5. `'error'` validates each JSON response against
+   * the schema its status declares and refuses one that does not match with
+   * `ZEN_RESPONSE_INVALID` (a 500, never exposed); `'log'` reports it and
+   * serves the response; `'off'` emits nothing for it; `{ sample: n }` logs
+   * one response in `n`. Defaults to `'error'` with `dev`, `'off'` without.
+   * Sugar for `validation.response` in configuration.
+   */
+  readonly validation?: { readonly response?: ResponseValidation | undefined } | undefined
+  /**
+   * Stamp every response with the application's fingerprint (`Zen-Graph`) and
+   * the matched route's contract fingerprint (`Zen-Contract`) — §2.4. Off by
+   * default: a fingerprint is topology-adjacent, and only a client that pins a
+   * contract has a use for it. On, the document is computed once at boot and
+   * each response pays one global `onSend` hook.
+   */
+  readonly fingerprintHeaders?: boolean | undefined
+  /**
+   * The two halves of development error rendering that need a host — §12.6.
+   * `readSource` reads a file for the code frame around the line an error was
+   * raised at; `report` receives each 5xx's development problem document, to
+   * render where a developer is looking. The `zen` meta-package supplies both
+   * in development: the filesystem, and stderr when it is a terminal. Core
+   * reads no file and writes to no stream (§3.3 B2). Ignored without `dev`.
+   */
+  readonly devErrors?: {
+    readonly readSource?: ((file: string) => string | undefined) | undefined
+    readonly report?: ((problem: Readonly<Record<string, unknown>>) => void) | undefined
+  } | undefined
   readonly logger?: Logger | undefined
   readonly caps?: Capabilities | undefined
   /**
@@ -102,6 +173,10 @@ export interface ZenOptions<C = unknown> {
    * balancer. `ctx.ip` is then the address the outermost trusted proxy saw,
    * which a client cannot forge. `true` reads the leftmost entry and is only
    * safe when every proxy *overwrites* the header rather than appending to it.
+   *
+   * Sugar for `policy.trustProxy` in configuration (§16.1), like `timeout`,
+   * `body`, `redirect` and `maxQueryParams`: each contributes at layer
+   * `config` under the source `zen()`, where a configuration file beats it.
    */
   readonly trustProxy?: boolean | number | undefined
   /**
@@ -232,7 +307,7 @@ export interface SerializationOptions {
 
 export interface CollectionOptions {
   readonly name?: string | undefined
-  readonly use?: readonly PhaseMiddleware<never, never>[] | undefined
+  readonly use?: readonly (PhaseMiddleware<never, never> | ConfiguredMiddleware)[] | undefined
   /** Hooks for every route in this subtree — the middle scope of §9.3. */
   readonly hooks?: RouteHooks | undefined
   /**
@@ -278,14 +353,16 @@ interface Scope {
   readonly middleware: MiddlewareRef[]
   /** Request-phase hooks registered on this scope, in registration order (§9.3). */
   readonly hooks: HookRecord[]
-  /** This scope's declared deadline; the root scope holds the app default. */
-  readonly timeout: TimeoutSpec | undefined
+  /** This scope's declared deadline; the root scope holds the app default, set at boot from `policy.timeout`. */
+  timeout: TimeoutSpec | undefined
   /** This scope's coercion profiles; the root scope holds the app default. */
   readonly coercion: CoercionSpec | undefined
   readonly tags: string[]
   readonly meta: Map<string, unknown>
   /** §6.2's boot-time condition; `undefined` means the subtree always exists. */
   readonly when: ((env: Readonly<Record<string, unknown>>) => boolean) | undefined
+  /** Where the collection was opened — or, for the root scope, where the app was built (§5.1). */
+  readonly origin: SourceOrigin | undefined
 }
 
 interface PendingRoute {
@@ -297,6 +374,8 @@ interface PendingRoute {
   readonly meta: Map<string, unknown>
   readonly scope: Scope
   readonly middleware: MiddlewareRef[]
+  /** Where `app.get(…)` — or a plugin's `route()` — was called (§5.1). */
+  readonly origin: SourceOrigin | undefined
 }
 
 /**
@@ -311,8 +390,30 @@ interface PendingRoute {
 interface CompiledRoute extends GlobalHooks {
   readonly record: RouteRecord
   readonly pipeline: CompiledPipeline
+  /**
+   * What the pipeline was compiled from — kept so `explainRequest` (§8.5) can
+   * compile an instrumented copy of it, on demand, without compiling a second
+   * coercer or serializer for the route.
+   */
+  readonly spec: PipelineSpec
   /** Resolved budget in ms; `0` means this route runs without a deadline. */
   readonly timeoutMs: number
+}
+
+/** Everything `ready()` compiled, which the dispatcher serves from. */
+interface CompiledApp {
+  readonly router: CompiledRouter
+  readonly Ctx: ContextClass
+  readonly byId: ReadonlyMap<RouteId, CompiledRoute>
+  readonly graph: AppGraph
+  readonly globalHooks: GlobalHooks
+  readonly unmatchedOnRequest: readonly Function[]
+  /** The app default, applied to 404/405 too — global `onRequest` runs there. */
+  readonly unmatchedTimeoutMs: number
+  readonly env: ContextEnv
+  readonly errors: ErrorEngine
+  /** §5.7 — every named route, planned for `url()`. Off the request path entirely. */
+  readonly urls: UrlTable
 }
 
 /** The same lists for requests that never matched a route (404/405). */
@@ -332,7 +433,7 @@ interface GlobalHooks {
  * added with only half the surface.
  */
 export type RouteHandler<S extends RouteSpec, X, P extends string> =
-  (ctx: Context<S, X, P>) => MaybePromise<HandlerResult<S>>
+  (ctx: Context<S, X, P>, deps: DepsOf<S>) => MaybePromise<HandlerResult<S>>
 
 export type BareHandler<X, P extends string> =
   (ctx: Context<{}, X, P>) => unknown
@@ -352,8 +453,15 @@ export class ZenApp<X = {}> {
   readonly #log: Logger
   readonly #caps: Capabilities
   readonly #codegen: CodeGen
-  readonly #bodyOptions: BodyOptions
+  /** §16.1 — `policy.body`, read at boot; the app's intake limits. */
+  #bodyOptions: BodyOptions = BODY_DEFAULTS
   readonly #parsers: ReadonlyMap<string, BodyParser>
+  /** The request policy configuration resolved to, read once at boot. */
+  #policy: Policy | null = null
+  /** `ZenOptions.root` — what origins are written relative to (§5.1). */
+  readonly #root: string | undefined
+  /** Where this application was built: the `zen()` or `createApp()` call. */
+  readonly #origin: SourceOrigin | undefined
 
   readonly #routes: PendingRoute[] = []
   readonly #scopes: Scope[] = []
@@ -364,7 +472,10 @@ export class ZenApp<X = {}> {
   /** Deferred so a bad check joins every other boot problem, not its own restart. */
   readonly #healthDiagnostics: Diagnostic[] = []
   /** §19.5 — compiled once; its diagnostics are reported by `ready()` with the rest. */
-  readonly #redirect: { readonly policy: RedirectPolicy; readonly diagnostics: readonly Diagnostic[] }
+  #redirect: { readonly policy: RedirectPolicy; readonly diagnostics: readonly Diagnostic[] } = {
+    policy: SAME_ORIGIN_ONLY,
+    diagnostics: [],
+  }
   /**
    * The resolved configuration — §16.
    *
@@ -380,27 +491,22 @@ export class ZenApp<X = {}> {
   /** §5.2 — application param types, merged over the router's builtins. */
   readonly #paramTypes = new Map<string, ParamType>()
   readonly #decorations: Decoration[] = []
+  /** Layer-8 values `overrideConfig` added — the testing kit's seam (§15.5). */
+  readonly #testOverrides: Array<Readonly<Record<string, unknown>>> = []
+  /** §10.2 — `app.schema(name, schema)`, in registration order; checked at boot. */
+  readonly #schemas: SchemaRecord[] = []
   readonly #errorMappers: Array<{ ctor: Function; map: (e: unknown, c: unknown) => unknown }> = []
   #rootScope: Scope
 
   #frozen = false
-  #compiled: {
-    router: CompiledRouter
-    Ctx: ContextClass
-    byId: Map<RouteId, CompiledRoute>
-    graph: AppGraph
-    globalHooks: GlobalHooks
-    unmatchedOnRequest: readonly Function[]
-    /** The app default, applied to 404/405 too — global `onRequest` runs there. */
-    unmatchedTimeoutMs: number
-    env: ContextEnv
-    errors: ErrorEngine
-    /** §5.7 — every named route, planned for `url()`. Off the request path entirely. */
-    urls: UrlTable
-  } | null = null
+  /** §2.4 — the graph as a document, computed once, on first request for it or at boot. */
+  #document: Promise<GraphDocument> | null = null
+  /** `fingerprintHeaders` — what the hook stamps, filled once the document exists. */
+  #fingerprints: { readonly app: string; readonly contracts: ReadonlyMap<string, string> } | null = null
+  #compiled: CompiledApp | null = null
 
   /** Lowercased once at construction; `undefined` disables inbound propagation. */
-  readonly #timeoutHeader: string | undefined
+  #timeoutHeader: string | undefined = undefined
 
   #handle: ServerHandle | null = null
   /** Removes whatever `lifecycle.install` put on the host process. */
@@ -414,10 +520,19 @@ export class ZenApp<X = {}> {
 
   constructor(opts: ZenOptions<unknown>) {
     this.#opts = opts
+    this.#root = opts.root
+    this.#origin = this.#here()
     if (typeof opts.trustProxy === 'number' && !(Number.isInteger(opts.trustProxy) && opts.trustProxy >= 0)) {
       throw new ZenError(
         Codes.CONFIG_INVALID,
         `trustProxy must be true, false, or the number of proxies in front of the app; got ${opts.trustProxy}.`,
+        { status: 500, expose: false },
+      )
+    }
+    if (opts.profile !== undefined && !(PROFILES as readonly string[]).includes(opts.profile)) {
+      throw new ZenError(
+        Codes.CONFIG_INVALID,
+        `profile ${JSON.stringify(opts.profile)} is not one Zen has; the profiles are ${PROFILES.join(', ')}.`,
         { status: 500, expose: false },
       )
     }
@@ -434,12 +549,8 @@ export class ZenApp<X = {}> {
       readable: opts.dev === true,
       retain: opts.dev === true || opts.inspect === true,
     })
-    this.#bodyOptions = { ...BODY_DEFAULTS, ...opts.body }
     this.#parsers = opts.parsers ?? DEFAULT_PARSERS
-    const timeout = timeoutOptions(opts.timeout)
-    this.#timeoutHeader = timeout.header
     this.#health = new HealthRegistry({ logger: this.#log, ...opts.health })
-    this.#redirect = compileRedirectPolicy(opts.redirect)
     this.#rootScope = {
       id: 'root' as CollectionId,
       prefix: '/',
@@ -448,14 +559,30 @@ export class ZenApp<X = {}> {
       middleware: [],
       hooks: [],
       // The root scope *is* the app default, so deadline resolution walks one
-      // uniform chain rather than special-casing the outermost level.
-      timeout: timeout.default,
+      // uniform chain rather than special-casing the outermost level. Read
+      // from `policy.timeout` at boot (§16.1).
+      timeout: undefined,
       coercion: opts.coercion,
       tags: [],
       meta: new Map(),
       when: undefined,
+      origin: this.#origin,
     }
     this.#scopes.push(this.#rootScope)
+  }
+
+  /**
+   * Where the application's caller is — the first frame outside Zen, relative
+   * to `root` (§5.1). `'setup'` is a plugin's `Registrar` asking: see
+   * `captureOrigin`. Boot-only; nothing on the request path calls it.
+   */
+  #here(mode: CaptureMode = 'call'): SourceOrigin | undefined {
+    return relativeOrigin(captureOrigin(mode), this.#root)
+  }
+
+  /** @internal — for `Collection`, whose registrations are the app's (§5.1). */
+  originHere(): SourceOrigin | undefined {
+    return this.#here()
   }
 
   // ── configuration (§16) ──────────────────────────────────────────────────
@@ -496,7 +623,11 @@ export class ZenApp<X = {}> {
     if (cached !== null) return cached
 
     const definition = this.#opts.config
-    const overlays: ConfigOverlay[] = []
+    // Layer 1 holds the framework's own defaults (`CONFIG_DEFAULTS`), the ones
+    // that depend on `dev`, and then the profile's (§19.2).
+    const dev = this.#opts.dev === true
+    const overlays: ConfigOverlay[] = [devDefaults(dev)]
+    if (this.#opts.profile !== undefined) overlays.push(profileDefaults(this.#opts.profile, dev))
 
     // Layer 2 — plugin defaults, read off the *manifest*. Available here
     // because a manifest is data: no plugin has run yet, and §16.2 requires
@@ -513,10 +644,17 @@ export class ZenApp<X = {}> {
       })
     }
 
+    // `zen({ timeout, body, … })` — layer `config`, ahead of the configuration
+    // file in the same layer, so the file wins (see `api/policy.ts`).
+    const sugar = optionsOverlay(this.#opts)
+    if (sugar !== null) overlays.push(sugar)
+
     overlays.push(...(this.#opts.overlays ?? []))
     if (this.#opts.overrides !== undefined) {
       overlays.push({ layer: 'override', name: 'overrides', values: this.#opts.overrides })
     }
+    // The testing kit's, last of all (§15.5).
+    for (const values of this.#testOverrides) overlays.push({ layer: 'override', name: 'test overrides', values })
 
     const usedBy = new Map<string, readonly string[]>()
     for (const pending of this.#plugins) {
@@ -537,6 +675,19 @@ export class ZenApp<X = {}> {
     return result
   }
 
+  /**
+   * @internal — `createTestApp(make, { config })` (§15.5): configuration that
+   * beats every other source, given to an application before it boots. Layer
+   * 8, where a test's values belong — a test that cannot beat the developer's
+   * own `.env.local` passes on one machine.
+   */
+  overrideConfig(values: Readonly<Record<string, unknown>>): this {
+    this.#assertOpen()
+    this.#testOverrides.push(values)
+    this.#config = null
+    return this
+  }
+
   // ── registration ─────────────────────────────────────────────────────────
 
   #assertOpen(): void {
@@ -550,7 +701,14 @@ export class ZenApp<X = {}> {
     }
   }
 
-  #register(scope: Scope, method: HttpMethod, path: string, a: unknown, b: unknown): this {
+  #register(
+    scope: Scope,
+    method: HttpMethod,
+    path: string,
+    a: unknown,
+    b: unknown,
+    origin: SourceOrigin | undefined,
+  ): this {
     this.#assertOpen()
     const hasSpec = typeof a === 'object' && a !== null
     const schema = (hasSpec ? a : {}) as RouteSpec
@@ -572,53 +730,56 @@ export class ZenApp<X = {}> {
       name: schema.name ?? undefined,
       meta: new Map(Object.entries(schema.meta ?? {})),
       scope,
+      origin,
       // §8.3's `route.use(checkOwnership)` — the innermost of the three
       // middleware scopes, appended last by `flattenMiddleware`, so it runs
       // after the app's and every enclosing collection's, and `explainRoute`
       // labels it `[route]`. Always an empty list until `0.1.0-alpha.4`: the
       // README called middleware "route-scoped" and nothing could put one there.
-      middleware: (schema.use ?? []).map((fn) => ({
-        kind: 'phase' as const,
-        name: fn.name || 'anonymous',
-        fn,
-        scope: 'route',
-        origin: undefined,
-      })),
+      // Listed in the route's own spec, so the route's call site is theirs.
+      middleware: (schema.use ?? []).map((fn) => middlewareRef('phase', fn, undefined, 'route', origin, 'anonymous')),
     })
     return this
   }
 
-  get<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  get<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  get<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   get<P extends string>(path: P, handler: BareHandler<X, P>): this
   get(path: string, a: unknown, b?: unknown): this {
-    return this.#register(this.#rootScope, 'GET', path, a, b)
+    return this.#register(this.#rootScope, 'GET', path, a, b, this.#here())
   }
 
-  post<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  post<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  post<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   post<P extends string>(path: P, handler: BareHandler<X, P>): this
   post(path: string, a: unknown, b?: unknown): this {
-    return this.#register(this.#rootScope, 'POST', path, a, b)
+    return this.#register(this.#rootScope, 'POST', path, a, b, this.#here())
   }
 
-  put<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  put<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  put<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   put<P extends string>(path: P, handler: BareHandler<X, P>): this
-  put(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'PUT', path, a, b) }
+  put(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'PUT', path, a, b, this.#here()) }
 
-  patch<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  patch<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  patch<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   patch<P extends string>(path: P, handler: BareHandler<X, P>): this
-  patch(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'PATCH', path, a, b) }
+  patch(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'PATCH', path, a, b, this.#here()) }
 
-  delete<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  delete<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  delete<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   delete<P extends string>(path: P, handler: BareHandler<X, P>): this
-  delete(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'DELETE', path, a, b) }
+  delete(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'DELETE', path, a, b, this.#here()) }
 
-  head<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  head<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  head<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   head<P extends string>(path: P, handler: BareHandler<X, P>): this
-  head(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'HEAD', path, a, b) }
+  head(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'HEAD', path, a, b, this.#here()) }
 
-  options<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  options<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  options<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   options<P extends string>(path: P, handler: BareHandler<X, P>): this
-  options(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'OPTIONS', path, a, b) }
+  options(path: string, a: unknown, b?: unknown): this { return this.#register(this.#rootScope, 'OPTIONS', path, a, b, this.#here()) }
 
   /**
    * One handler for every method — §22.1.
@@ -631,10 +792,12 @@ export class ZenApp<X = {}> {
    * A `name` gets the method appended — `proxy.get`, `proxy.post` — because a
    * name identifies one route.
    */
-  all<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  all<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  all<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   all<P extends string>(path: P, handler: BareHandler<X, P>): this
   all(path: string, a: unknown, b?: unknown): this {
-    registerAll((method, spec, handler) => this.#register(this.#rootScope, method, path, spec, handler), a, b)
+    const origin = this.#here()
+    registerAll((method, spec, handler) => this.#register(this.#rootScope, method, path, spec, handler, origin), a, b)
     return this
   }
 
@@ -652,8 +815,12 @@ export class ZenApp<X = {}> {
    * detection instead.
    */
   use<P extends Plugin<never, object>>(plugin: P, options?: OptionsOf<P>): ZenApp<X & ProvidesOf<P>>
-  /** Phase middleware — free. No `next`, no closure. */
-  use(middleware: PhaseMiddleware<never, X>, opts?: { name?: string }): this
+  /**
+   * Phase middleware — free. No `next`, no closure. A `defineMiddleware`
+   * factory's result is phase middleware too, set up once at boot (§8.6), and
+   * `when` makes either conditional (§8.7).
+   */
+  use(middleware: PhaseMiddleware<never, X> | ConfiguredMiddleware, opts?: MiddlewareOptions<X>): this
   use(target: unknown, second?: unknown): unknown {
     this.#assertOpen()
 
@@ -662,6 +829,7 @@ export class ZenApp<X = {}> {
         plugin: target as Plugin<never, object>,
         options: second,
         order: this.#plugins.length,
+        origin: this.#here(),
       })
       // A manifest may carry layer-2 config defaults (§16.1), so anything
       // resolved before this registration is now one layer out of date.
@@ -669,22 +837,28 @@ export class ZenApp<X = {}> {
       return this as unknown as ZenApp<X>
     }
 
-    const middleware = target as PhaseMiddleware<never, X>
-    const opts = second as { name?: string } | undefined
-    this.#rootScope.middleware.push({
-      kind: 'phase',
-      name: opts?.name ?? (middleware.name || 'anonymous'),
-      fn: middleware,
-      scope: this.#rootScope.id,
-      origin: undefined,
-    })
+    this.#rootScope.middleware.push(middlewareRef(
+      'phase', target, second as MiddlewareOptions<never> | undefined, this.#rootScope.id, this.#here(), 'anonymous',
+    ))
     return this
   }
 
   /** Register a service provider (§15.2). */
   provide<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T)): this {
     this.#assertOpen()
-    this.#container.provide(token, spec)
+    this.#container.provide(token, spec, this.#here())
+    return this
+  }
+
+  /**
+   * @internal — `createTestApp(make, { override })` (§15.5): a replacement
+   * that wins over every `provide()` of the token, before or after it, the
+   * ones a plugin makes as the application boots included. Before `ready()`,
+   * so the application is compiled with it.
+   */
+  overrideProvider<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T)): this {
+    this.#assertOpen()
+    this.#container.override(token, spec, this.#here())
     return this
   }
 
@@ -710,7 +884,7 @@ export class ZenApp<X = {}> {
    */
   health(name: string, probe: HealthProbe, options?: CheckOptions): this {
     this.#assertOpen()
-    const diagnostic = this.#health.register(name, probe, options, 'app')
+    const diagnostic = this.#health.register(name, probe, options, 'app', this.#here())
     if (diagnostic !== null) this.#healthDiagnostics.push(diagnostic)
     return this
   }
@@ -745,27 +919,19 @@ export class ZenApp<X = {}> {
   }
 
   /** Around middleware — one closure per request. Named differently on purpose. */
-  around(middleware: AroundMiddleware<never, X>, opts?: { name?: string }): this {
+  around(middleware: AroundMiddleware<never, X>, opts?: MiddlewareOptions<X>): this {
     this.#assertOpen()
-    this.#rootScope.middleware.push({
-      kind: 'around',
-      name: opts?.name ?? (middleware.name || 'anonymous'),
-      fn: middleware,
-      scope: this.#rootScope.id,
-      origin: undefined,
-    })
+    this.#rootScope.middleware.push(middlewareRef(
+      'around', middleware, opts as MiddlewareOptions<never> | undefined, this.#rootScope.id, this.#here(), 'anonymous',
+    ))
     return this
   }
 
-  after(middleware: AfterMiddleware<never, X>, opts?: { name?: string }): this {
+  after(middleware: AfterMiddleware<never, X>, opts?: MiddlewareOptions<X>): this {
     this.#assertOpen()
-    this.#rootScope.middleware.push({
-      kind: 'after',
-      name: opts?.name ?? (middleware.name || 'anonymous'),
-      fn: middleware,
-      scope: this.#rootScope.id,
-      origin: undefined,
-    })
+    this.#rootScope.middleware.push(middlewareRef(
+      'after', middleware, opts as MiddlewareOptions<never> | undefined, this.#rootScope.id, this.#here(), 'anonymous',
+    ))
     return this
   }
 
@@ -796,19 +962,16 @@ export class ZenApp<X = {}> {
     const build = (typeof a === 'function' ? a : b) as (c: Collection<X>) => void
 
     const id = `${parent.id}${normalizePath(prefix)}` as CollectionId
+    const origin = this.#here()
     const scope: Scope = {
       id,
       prefix: joinPath(parent.prefix, prefix),
       name: opts.name,
       parent,
-      middleware: (opts.use ?? []).map((fn) => ({
-        kind: 'phase' as const,
-        name: fn.name || 'anonymous',
-        fn,
-        scope: id,
-        origin: undefined,
-      })),
-      hooks: routeHookRecords(opts.hooks).map((h) => ({ ...h, scope: id })),
+      origin,
+      // Listed in the collection's options, so the collection's call site is theirs.
+      middleware: (opts.use ?? []).map((fn) => middlewareRef('phase', fn, undefined, id, origin, 'anonymous')),
+      hooks: routeHookRecords(opts.hooks, origin).map((h) => ({ ...h, scope: id })),
       timeout: opts.timeout,
       coercion: opts.coercion,
       tags: [...(opts.tags ?? [])],
@@ -831,12 +994,12 @@ export class ZenApp<X = {}> {
   /** @internal — used by Collection#hook. */
   hookScoped(scope: Scope, phase: Phase, fn: Function, name?: string): void {
     this.#assertOpen()
-    addHook(scope, this.#hooks, phase, fn, name)
+    addHook(scope, this.#hooks, phase, fn, name, this.#here())
   }
 
   /** @internal — used by Collection. */
   registerScoped(scope: Scope, method: HttpMethod, path: string, a: unknown, b: unknown): void {
-    this.#register(scope, method, path, a, b)
+    this.#register(scope, method, path, a, b, this.#here())
   }
 
   /**
@@ -849,7 +1012,7 @@ export class ZenApp<X = {}> {
    */
   hook<P extends Phase>(phase: P, fn: HookFn<P, X>, name?: string): this {
     this.#assertOpen()
-    addHook(this.#rootScope, this.#hooks, phase, fn as Function, name)
+    addHook(this.#rootScope, this.#hooks, phase, fn as Function, name, this.#here())
     return this
   }
 
@@ -859,6 +1022,15 @@ export class ZenApp<X = {}> {
    * contributors, rather than last-write-wins.
    */
   decorate<K extends string, T>(name: K, slotOrAccessor: Slot<T> | ((ctx: unknown) => T), source = 'app'): ZenApp<X & { [k in K]: T }> {
+    return this.#decorate(name, slotOrAccessor, source, this.#here())
+  }
+
+  #decorate<K extends string, T>(
+    name: K,
+    slotOrAccessor: Slot<T> | ((ctx: unknown) => T),
+    source: string,
+    origin: SourceOrigin | undefined,
+  ): ZenApp<X & { [k in K]: T }> {
     this.#assertOpen()
     // The name becomes a getter in generated source, so it has to be an
     // identifier — `decorate('bad-name')` used to fail inside the compiler with
@@ -896,6 +1068,7 @@ export class ZenApp<X = {}> {
       slotIndex: isSlot ? (slotOrAccessor as Slot<T>).index : null,
       accessor: isSlot ? null : (slotOrAccessor as (ctx: unknown) => unknown),
       source,
+      origin,
     })
     return this as unknown as ZenApp<X & { [k in K]: T }>
   }
@@ -970,6 +1143,24 @@ export class ZenApp<X = {}> {
     }
   }
 
+  /**
+   * Name a schema — §10.2.
+   *
+   *     app.schema('User', UserSchema)
+   *
+   * `@erenthedeveloper0/zen-openapi` publishes it as the component `User` — ahead of any
+   * `title` or `$id` the schema carries — wherever a route's request or
+   * response *is* that schema, and publishes it even when no route uses it,
+   * which is how a plugin contributes a shared type to a document. A name is
+   * one schema's: two registrations of `User`, or one schema under two names,
+   * are `ZEN_SCHEMA_NAME` at boot, naming both lines.
+   */
+  schema(name: string, schema: AnySchema): this {
+    this.#assertOpen()
+    this.#schemas.push({ name, schema, source: 'app', origin: this.#here() })
+    return this
+  }
+
   onError<E>(ctor: new (...args: never[]) => E, map: (error: E, ctx: unknown) => unknown): this {
     this.#assertOpen()
     this.#errorMappers.push({ ctor: ctor as unknown as Function, map: map as (e: unknown, c: unknown) => unknown })
@@ -1010,9 +1201,28 @@ export class ZenApp<X = {}> {
     // back one problem at a time, and an app with no environment file
     // typically has four.
     const config = this.#resolved()
-    diagnostics.push(...config.diagnostics)
+    // Placed at the `defineConfig()` that declared the environment, or the
+    // `zen()` call when there is none — the two places the fix is written.
+    const declared = relativeOrigin(this.#opts.config?.origin, this.#root) ?? this.#origin
+    diagnostics.push(...config.diagnostics.map((d) => placed(d, declared)))
     for (const warning of config.warnings) {
       this.#log.warn({ code: Codes.CONFIG_INVALID }, warning)
+    }
+
+    // §16.1, §19.2 — request policy, read once from the resolved configuration.
+    // A refusal names the path and the source that set it, and is placed at
+    // the `defineConfig()` when the configuration file set it, at the `zen()`
+    // call otherwise.
+    const read = readPolicy(config)
+    for (const problem of read.diagnostics) {
+      const fromFile = problem.locations?.some((where) => where.endsWith('← zen.config')) === true
+      diagnostics.push(placed(problem, fromFile ? declared : this.#origin))
+    }
+    const policy = read.policy
+    this.#policy = policy
+    this.#applyPolicy(policy)
+    if (this.#opts.fingerprintHeaders === true) {
+      addHook(this.#rootScope, this.#hooks, 'onSend', this.#fingerprintStamp(), 'fingerprint headers', this.#origin)
     }
 
     // ── plugins: they register routes, hooks, slots and services ───────────
@@ -1029,14 +1239,20 @@ export class ZenApp<X = {}> {
       const given = entry.options !== undefined ? entry.options : entry.plugin.boundOptions
       const verdict = await validatePluginOptions(entry.plugin, given)
       if (verdict.diagnostic === null) accepted.set(entry, verdict.value)
-      else diagnostics.push(verdict.diagnostic)
+      else diagnostics.push(placed(verdict.diagnostic, entry.origin))
     }
+
+    // §8.6 — configured middleware's options, in the same pass and for the same
+    // reason: every refusal in one boot, before anything has run. A plugin's
+    // `setup` can register more, so this runs again once plugins have.
+    const configured = new Map<ConfiguredMiddleware, OptionsVerdict>()
+    await this.#checkConfigured(configured, diagnostics)
 
     if (diagnostics.length === 0) {
       for (const entry of resolution.order) {
         try {
           const result = await entry.plugin.setup(
-            this.#registrarFor(entry.plugin.name),
+            this.#registrarFor(entry),
             accepted.get(entry) as never,
           )
           if (result !== undefined && result !== null && result.exports !== undefined) {
@@ -1058,6 +1274,12 @@ export class ZenApp<X = {}> {
           // plugin that says nothing still gets the generic pair, which is why
           // this is a `??` and not a replacement.
           const detailed = isZenError(error) ? error : null
+          // §10.6 with §5.1's two sites: the line that registered the plugin,
+          // and the line in the plugin that threw.
+          const sites = ([
+            [`use(${entry.plugin.name})`, entry.origin],
+            [`${entry.plugin.name} setup`, relativeOrigin(errorOrigin(error), this.#root)],
+          ] as const).filter(([, origin]) => origin !== undefined)
           diagnostics.push({
             severity: 'error',
             code: detailed?.code ?? Codes.PLUGIN_OPTIONS,
@@ -1066,11 +1288,19 @@ export class ZenApp<X = {}> {
               (error instanceof Error ? error.message : String(error)),
             hint: detailed?.hint ?? 'Fix the error reported above inside that plugin\'s setup().',
             consequence: detailed?.consequence ?? skipped,
+            ...(sites.length === 0
+              ? {}
+              : { locations: sites.map(([where]) => where), origins: sites.map(([, origin]) => origin as SourceOrigin) }),
           })
           break
         }
       }
     }
+
+    // §8.6 — every configured middleware set up once, after the plugins whose
+    // services it may resolve, and before anything is compiled from it.
+    await this.#checkConfigured(configured, diagnostics)
+    if (diagnostics.length === 0) await this.#setUpConfigured(configured, config, diagnostics)
 
     // ── service graph: cycles, missing providers, captive dependencies ─────
     for (const issue of this.#container.analyze()) {
@@ -1079,6 +1309,7 @@ export class ZenApp<X = {}> {
         code: issue.code,
         message: issue.message,
         hint: issue.hint,
+        ...(issue.origins === undefined ? {} : { origins: issue.origins }),
       })
     }
 
@@ -1090,7 +1321,14 @@ export class ZenApp<X = {}> {
 
     // §19.5 — an allowlist entry that can never match looks configured, so a
     // malformed one is refused here, with the spelling that would match.
-    diagnostics.push(...this.#redirect.diagnostics)
+    // Placed where the allowlist was written: the configuration file, or the
+    // `zen()` call whose `redirect` option set it.
+    const allowlist = config.snapshot.values.find((v) => v.path === 'policy.redirect.allowExternal')
+    const allowedAt = allowlist?.source === 'zen.config' ? declared : this.#origin
+    diagnostics.push(...this.#redirect.diagnostics.map((d) => placed(d, allowedAt)))
+
+    // §10.2 — named schemas: usable names, one schema per name, one name per schema.
+    const schemas = this.#namedSchemas(diagnostics)
 
     // ── hooks: reject phases this build cannot fire, before anything else ──
     // A hook that silently never runs is indistinguishable from one whose
@@ -1106,6 +1344,8 @@ export class ZenApp<X = {}> {
     // environment. A subtree that is off is absent from everything below: the
     // records, the router, the graph, and so the OpenAPI document.
     const absent = this.#absentScopes(config, diagnostics)
+    // §8.7 — the same decision for a middleware's `when.env`, at the same moment.
+    const omitted = this.#omittedMiddleware(config, diagnostics)
 
     /**
      * Routes reading an `integer` from an untyped path segment — §5.2's
@@ -1116,8 +1356,8 @@ export class ZenApp<X = {}> {
 
     const records: RouteRecord[] = []
     const seen = new Map<string, PendingRoute>()
-    /** Route id → the `METHOD path` that claimed it first. */
-    const ids = new Map<string, string>()
+    /** Route id → the `METHOD path` that claimed it first, and where. */
+    const ids = new Map<string, { readonly key: string; readonly origin: SourceOrigin | undefined }>()
     /**
      * Routes whose request schema could not be read as JSON Schema, so §11.4
      * silently did nothing.
@@ -1141,6 +1381,9 @@ export class ZenApp<X = {}> {
      */
     const negotiationRepresentations = new Map<RouteId, ReadonlyMap<string, Representation>>()
 
+    /** §11.6 — one compiled serializer per distinct response shape, shared by every route that returns it. */
+    const serializerMemo = createSerializerMemo()
+
     for (const pending of this.#routes) {
       if (absent.size > 0 && inScope(pending.scope, absent)) continue
 
@@ -1148,22 +1391,26 @@ export class ZenApp<X = {}> {
       try {
         parsed = this.#opts.pathParser.parse(pending.path)
       } catch (error) {
-        diagnostics.push({
+        diagnostics.push(placed({
           severity: 'error',
           code: error instanceof ZenError ? error.code : Codes.ROUTE_INVALID_PATH,
           message: error instanceof Error ? error.message : String(error),
-        })
+          locations: [`${pending.method} ${pending.path}`],
+        }, pending.origin))
         continue
       }
 
       const key = `${pending.method} ${parsed.path}`
       const duplicate = seen.get(key)
       if (duplicate !== undefined) {
+        // Both registrations, both lines: the message used to name the path
+        // alone, which is the one thing the two have in common (§5.1).
         diagnostics.push({
           severity: 'error',
           code: Codes.ROUTE_DUPLICATE,
           message: `Duplicate route: ${key} is registered twice.`,
           hint: 'Remove one registration, or give them different paths.',
+          ...pairedSites([[key, duplicate.origin], [key, pending.origin]]),
         })
         continue
       }
@@ -1181,13 +1428,14 @@ export class ZenApp<X = {}> {
         diagnostics.push({
           severity: 'error',
           code: Codes.ROUTE_DUPLICATE,
-          message: `Route name "${id}" is used by both ${owner} and ${key}.`,
+          message: `Route name "${id}" is used by both ${owner.key} and ${key}.`,
           hint: 'Give each route its own name. A name identifies one route — to URL generation, the OpenAPI operationId and metrics labels.',
-          locations: [owner, key],
+          locations: [owner.key, key],
+          ...pairedSites([[owner.key, owner.origin], [key, pending.origin]]),
         })
         continue
       }
-      ids.set(id, key)
+      ids.set(id, { key, origin: pending.origin })
 
       // §4.4 — the deadline is resolved from the same scope chain, at the same
       // moment, as the hooks and the middleware. Innermost wins outright; a bad
@@ -1195,7 +1443,10 @@ export class ZenApp<X = {}> {
       // every other registration problem instead of costing a restart (§12.7).
       const timeout = resolveTimeout(timeoutSources(pending))
       if (!timeout.ok) {
-        diagnostics.push(timeoutDiagnostic(key, timeout))
+        diagnostics.push(timeoutDiagnostic(key, timeout, {
+          route: pending.origin,
+          declared: timeout.where === 'route' ? pending.origin : declaringScope(pending.scope, timeout.where)?.origin,
+        }))
         continue
       }
 
@@ -1212,8 +1463,8 @@ export class ZenApp<X = {}> {
       // the router never supplies is a 400 on every request, so it is refused
       // here, with the name that was probably meant.
       const params = checkParamsSchema(key, parsed.segments, pending.schema.params)
-      diagnostics.push(...params.errors)
-      for (const warning of params.warnings) this.#log.warn({ code: warning.code }, warning.message)
+      diagnostics.push(...params.errors.map((d) => placed(d, pending.origin)))
+      for (const warning of params.warnings) this.#log.warn(logged(warning.code, pending.origin), warning.message)
       untypedIntegers.push(...params.untypedIntegers)
 
       // §13.4 — and the same treatment again, for the same reason. What lands
@@ -1223,17 +1474,24 @@ export class ZenApp<X = {}> {
       // stay out of the graph, exactly as the compiled serializers do.
       const negotiated = buildNegotiation(pending.schema.response, {
         routeId: key,
-        strict: this.#opts.serialization?.strict ?? this.#opts.dev === true,
+        strict: policy.strict,
         mode: this.#opts.serialization?.mode ?? 'compiled',
         codegen: this.#codegen,
+        memo: serializerMemo,
       })
       for (const diagnostic of negotiated.diagnostics) {
-        if (diagnostic.severity === 'error') diagnostics.push(diagnostic)
-        else this.#log.warn({ code: diagnostic.code }, diagnostic.message)
+        if (diagnostic.severity === 'error') diagnostics.push(placed(diagnostic, pending.origin))
+        else this.#log.warn(logged(diagnostic.code, pending.origin), diagnostic.message)
       }
       if (negotiated.representations !== null) {
         negotiationRepresentations.set((pending.name ?? key) as RouteId, negotiated.representations)
       }
+
+      // §15.1 and §4.2 stage 6 — what the route injects has to exist, and its
+      // body policy has to be one that can be honoured; both reported here,
+      // with the route's line, beside every other registration problem.
+      diagnostics.push(...this.#injectionProblems(key, pending))
+      diagnostics.push(...intakeProblems(key, pending.schema).map((d) => placed(d, pending.origin)))
 
       records.push({
         id: (pending.name ?? key) as RouteId,
@@ -1243,18 +1501,19 @@ export class ZenApp<X = {}> {
         segments: parsed.segments,
         schema: pending.schema,
         handler: pending.handler as (ctx: never) => unknown,
-        middleware: flattenMiddleware(pending),
+        middleware: flattenMiddleware(pending, omitted),
         // Resolved here, once, from the scope chain plus the route's own
         // `hooks` — for the same reason `middleware` is. Both are functions of
         // static registration, so both belong on the record the compiler and
         // every tool read (§9.3).
-        hooks: resolveHooks(pending.scope, pending.schema.hooks),
+        hooks: resolveHooks(pending.scope, pending.schema.hooks, pending.origin),
         timeout: timeout.record,
         coercion: coercion.record,
         negotiation: negotiated.record,
         meta: pending.meta,
         collection: pending.scope.id === 'root' ? null : pending.scope.id,
-        origin: undefined,
+        origin: pending.origin,
+        dependencies: this.#dependenciesOf(pending.schema.inject),
       })
     }
 
@@ -1292,9 +1551,10 @@ export class ZenApp<X = {}> {
           message: diagnostic.message,
           hint: diagnostic.hint,
           locations: diagnostic.routes.map((r) => `${r.method} ${r.path}`),
+          ...pairedSites(diagnostic.routes.map((r) => [`${r.method} ${r.path}`, r.origin] as const)),
         })
       } else {
-        this.#log.warn({ code: diagnostic.code }, diagnostic.message)
+        this.#log.warn(logged(diagnostic.code, diagnostic.routes[0]?.origin), diagnostic.message)
       }
     }
 
@@ -1311,27 +1571,28 @@ export class ZenApp<X = {}> {
     for (const record of records) {
       for (const source of ['params', 'query', 'headers', 'cookies', 'body'] as const) {
         if (isDescribeOnly(record.schema[source])) {
-          diagnostics.push({
+          diagnostics.push(placed({
             severity: 'error',
             code: Codes.SCHEMA_UNCONVERTIBLE,
             message: `${record.method} ${record.path} uses jsonSchema() to validate "${source}", but jsonSchema() describes a shape and cannot validate.`,
             hint: 'Use a Standard Schema library (Zod, Valibot, ArkType) for request sources. jsonSchema() is for `response` only.',
             locations: [`${record.method} ${record.path}`],
-          })
+          }, record.origin))
         }
       }
 
       const serializerOptions = {
         routeId: `${record.method} ${record.path}`,
-        strict: this.#opts.serialization?.strict ?? this.#opts.dev === true,
+        strict: policy.strict,
         mode: this.#opts.serialization?.mode ?? 'compiled',
         codegen: this.#codegen,
+        memo: serializerMemo,
       } as const
 
       const built = buildSerializerTable(record.schema.response, serializerOptions)
       for (const diagnostic of built.diagnostics) {
-        if (diagnostic.severity === 'error') diagnostics.push(diagnostic)
-        else this.#log.warn({ code: diagnostic.code }, diagnostic.message)
+        if (diagnostic.severity === 'error') diagnostics.push(placed(diagnostic, record.origin))
+        else this.#log.warn(logged(diagnostic.code, record.origin), diagnostic.message)
       }
       if (built.table !== null) serializers.set(record.id, built.table)
 
@@ -1357,24 +1618,33 @@ export class ZenApp<X = {}> {
 
     if (diagnostics.length > 0) throw new BootError(diagnostics)
 
+    // §15.1 — injected singletons, built once, now, so no request pays for them.
+    const injections = await this.#resolveInjections(records)
+
     // ── compile ────────────────────────────────────────────────────────────
     const Ctx = compileContext({
       decorations: this.#decorations,
       slotCount: slotCount(),
       codegen: this.#codegen,
+      // §7.3 — sealed and frozen in development; byte-identical otherwise.
+      dev: this.#opts.dev === true,
     })
 
     const router = this.#opts.router.build(records, { codegen: this.#codegen, paramTypes: this.#paramTypes } as never)
 
     // §5.7 — read from the same records and checked against this router, so a
     // link can only be built to where this application actually routes.
-    const urls = new UrlTable(records, { router, maxQueryParams: this.#opts.maxQueryParams ?? 100 })
+    const urls = new UrlTable(records, { router, maxQueryParams: policy.maxQueryParams })
 
     const byId = new Map<RouteId, CompiledRoute>()
     for (const record of records) {
+      const compiledRoute = this.#compileRoute(
+        record, serializers.get(record.id) ?? null, negotiators.get(record.id) ?? null, injections.get(record.id) ?? null,
+      )
       byId.set(record.id, {
         record,
-        pipeline: this.#compileRoute(record, serializers.get(record.id) ?? null, negotiators.get(record.id) ?? null),
+        pipeline: compiledRoute.pipeline,
+        spec: compiledRoute.spec,
         timeoutMs: record.timeout?.ms ?? 0,
         onError: functionsFor(record.hooks, 'onError'),
         onResponse: functionsFor(record.hooks, 'onResponse'),
@@ -1402,7 +1672,13 @@ export class ZenApp<X = {}> {
     const unmatched = resolveTimeout([{ where: 'app', spec: this.#rootScope.timeout }])
     const unmatchedTimeoutMs = unmatched.ok ? (unmatched.record?.ms ?? 0) : 0
 
-    const errors = new ErrorEngine({ dev: this.#opts.dev === true, logger: this.#log })
+    const dev = this.#opts.dev === true
+    const errors = new ErrorEngine({
+      dev,
+      logger: this.#log,
+      ...(dev ? { explain: (error: ZenError, info: ErrorContextInfo) => this.#devFacts(error, info) } : {}),
+      ...(dev && this.#opts.devErrors?.report !== undefined ? { report: this.#opts.devErrors.report } : {}),
+    })
     for (const mapper of this.#errorMappers) errors.register(mapper.ctor, mapper.map)
 
     const graph: AppGraph = Object.freeze({
@@ -1412,13 +1688,14 @@ export class ZenApp<X = {}> {
         .map((s) => ({
           id: s.id, prefix: s.prefix, name: s.name,
           parent: s.parent === null ? null : s.parent.id,
-          tags: s.tags, meta: s.meta,
+          tags: s.tags, meta: s.meta, origin: s.origin,
         })),
       plugins: resolution.order.map((p) => ({
         name: p.plugin.name,
         version: p.plugin.version,
         dependsOn: p.plugin.dependsOn ?? {},
         scope: 'root',
+        origin: p.origin,
       })),
       hooks: this.#hooksByPhase(absent),
       slots: declaredSlots(),
@@ -1431,6 +1708,8 @@ export class ZenApp<X = {}> {
       // empty map, so every write landed nowhere a reader could look until
       // `0.1.0-alpha.4`. A copy, so nothing reaches it after the freeze.
       meta: new Map(this.#rootScope.meta),
+      schemas,
+      services: this.#container.providers,
       builtAt: Date.now(),
     })
 
@@ -1444,8 +1723,8 @@ export class ZenApp<X = {}> {
       unmatchedTimeoutMs,
       env: {
         log: this.#log,
-        maxQueryParams: this.#opts.maxQueryParams ?? 100,
-        trustProxy: this.#opts.trustProxy ?? false,
+        maxQueryParams: policy.maxQueryParams,
+        trustProxy: policy.trustProxy,
         container: this.#container,
         // Shared by every context in the process — see `ContextEnv.config` for
         // why this is not a field on the context itself.
@@ -1458,6 +1737,15 @@ export class ZenApp<X = {}> {
     }
     this.#frozen = true
 
+    // §2.4 — the fingerprints the headers carry, before the first request can.
+    if (this.#opts.fingerprintHeaders === true) {
+      const document = await this.graphDocument()
+      this.#fingerprints = {
+        app: document.fingerprint,
+        contracts: new Map(document.routes.map((route) => [route.id, route.contract])),
+      }
+    }
+
     // Plugins get a final look at the frozen graph before it is used — this is
     // how OpenAPI generation and the route inspector work (§10.2).
     //
@@ -1468,7 +1756,18 @@ export class ZenApp<X = {}> {
     // `Registrar.onBoot` filled, so the hook never ran (§9.7's failure exactly:
     // accepted, stored, silent). Until `0.1.0-alpha.4`.
     for (const hook of this.#hooks.get('onBoot') ?? []) {
-      await (hook.fn as (graph: AppGraph) => unknown)(graph)
+      try {
+        await (hook.fn as (graph: AppGraph) => unknown)(graph)
+      } catch (error) {
+        // A boot check refused the graph — OpenAPI's strict mode, the health
+        // plugin's required checks. Its diagnostics name what is wrong; the
+        // hook's own origin says which registration asked for the check, for
+        // the ones that carry no line of their own (§5.1).
+        if (error instanceof BootError && hook.origin !== undefined) {
+          throw new BootError(error.diagnostics.map((d) => placed(d, hook.origin)))
+        }
+        throw error
+      }
     }
 
     await this.#container.warm()
@@ -1493,14 +1792,107 @@ export class ZenApp<X = {}> {
   }
 
   /**
+   * §15.1 — every token a route injects must have a provider, unless it is
+   * optional (§15.2): the missing service is named with the route that needs
+   * it and the route's line, and with the closest registered name.
+   */
+  #injectionProblems(key: string, pending: PendingRoute): Diagnostic[] {
+    const inject = pending.schema.inject
+    if (inject === undefined) return []
+    const out: Diagnostic[] = []
+    if (typeof inject !== 'object' || inject === null) {
+      return [placed({
+        severity: 'error',
+        code: Codes.CONFIG_INVALID,
+        message: `${key} declares \`inject\` as ${inject === null ? 'null' : `a ${typeof inject}`}; it maps names to service tokens.`,
+        hint: 'Write `inject: { db: Db }`, with tokens from token<T>(name).',
+      }, pending.origin)]
+    }
+    const names = this.#container.providers.map((p) => p.token.name)
+    for (const [as, value] of Object.entries(inject)) {
+      if (!isToken(value)) {
+        out.push(placed({
+          severity: 'error',
+          code: Codes.CONFIG_INVALID,
+          message: `${key} injects "${as}" from something that is not a service token.`,
+          hint: 'Each value of `inject` is a token from token<T>(name).',
+        }, pending.origin))
+        continue
+      }
+      if (this.#container.has(value) || value.optional === true) continue
+      const close = closest(value.name, names)
+      out.push(placed({
+        severity: 'error',
+        code: Codes.DI_MISSING,
+        message: `${key} injects "${as}" from service "${value.name}", which has no provider.`,
+        hint: close === null
+          ? `Register one with app.provide(${value.name}, …), or declare the token { optional: true }.`
+          : `Did you mean "${close}"?`,
+      }, pending.origin))
+    }
+    return out
+  }
+
+  /** `RouteRecord.dependencies` — the services `inject` reaches, transitively, by name (§15.1). */
+  #dependenciesOf(inject: RouteSpec['inject']): readonly string[] {
+    if (inject === undefined || typeof inject !== 'object' || inject === null) return NO_NAMES
+    const byToken = new Map(this.#container.providers.map((p) => [p.token, p]))
+    const seen = new Set<Token<unknown>>()
+    const names = new Set<string>()
+    const visit = (token: Token<unknown>): void => {
+      if (seen.has(token)) return
+      seen.add(token)
+      names.add(token.name)
+      for (const dep of byToken.get(token)?.deps ?? []) visit(dep)
+    }
+    for (const value of Object.values(inject)) if (isToken(value)) visit(value)
+    return names.size === 0 ? NO_NAMES : Object.freeze([...names].sort())
+  }
+
+  /**
+   * §15.1 — each injecting route's services. Singletons are built now, once,
+   * through the container that would have built them on first use, and a route
+   * that injects nothing else gets one frozen object every request shares. A
+   * scoped or transient service is resolved per request from that request's
+   * scope; the singletons beside it are still resolved here.
+   */
+  async #resolveInjections(records: readonly RouteRecord[]): Promise<ReadonlyMap<RouteId, Injection>> {
+    const out = new Map<RouteId, Injection>()
+    const lifetimes = new Map(this.#container.providers.map((p) => [p.token, p.lifetime]))
+    for (const record of records) {
+      const inject = record.schema.inject
+      if (inject === undefined) continue
+      const fixed: Record<string, unknown> = {}
+      const perRequest: Array<readonly [string, Token<unknown>]> = []
+      for (const [as, token] of Object.entries(inject)) {
+        const lifetime = lifetimes.get(token)
+        if (lifetime === undefined) fixed[as] = undefined // an optional token nobody provided (§15.2)
+        else if (lifetime === 'singleton') fixed[as] = await this.#container.resolveAsync(token)
+        else perRequest.push([as, token])
+      }
+      out.set(record.id, perRequest.length === 0
+        ? { kind: 'static', deps: Object.freeze(fixed) }
+        : { kind: 'request', wrap: (handler) => injectedHandler(handler, this.#container, fixed, perRequest) })
+    }
+    return out
+  }
+
+  /**
    * The bounded capability surface handed to `Plugin.setup` — §10.2.
    *
    * Deliberately not the app object. A plugin cannot mutate another plugin's
    * registrations, read the global registry, or patch `Context.prototype`,
    * because none of those are reachable from here.
    */
-  #registrarFor(pluginName: string): Registrar {
+  #registrarFor(entry: PendingPlugin): Registrar {
     const app = this
+    const pluginName = entry.plugin.name
+    // §5.1 — a registration made from `setup` is placed at the line in the
+    // plugin that made it. A first-party plugin is framework code all the way
+    // down, so its registrations are placed where the application wrote
+    // `app.use(plugin)` instead: the one line in the application that caused
+    // them, and the one a reader can act on.
+    const where = (): SourceOrigin | undefined => app.#here('setup') ?? entry.origin
     return {
       pluginName,
       caps: this.#caps,
@@ -1516,31 +1908,13 @@ export class ZenApp<X = {}> {
       },
 
       use(middleware, opts) {
-        app.#rootScope.middleware.push({
-          kind: 'phase',
-          name: opts?.name ?? (middleware.name || pluginName),
-          fn: middleware,
-          scope: app.#rootScope.id,
-          origin: undefined,
-        })
+        app.#rootScope.middleware.push(middlewareRef('phase', middleware, opts, app.#rootScope.id, where(), pluginName))
       },
       around(middleware, opts) {
-        app.#rootScope.middleware.push({
-          kind: 'around',
-          name: opts?.name ?? (middleware.name || pluginName),
-          fn: middleware,
-          scope: app.#rootScope.id,
-          origin: undefined,
-        })
+        app.#rootScope.middleware.push(middlewareRef('around', middleware, opts, app.#rootScope.id, where(), pluginName))
       },
       after(middleware, opts) {
-        app.#rootScope.middleware.push({
-          kind: 'after',
-          name: opts?.name ?? (middleware.name || pluginName),
-          fn: middleware,
-          scope: app.#rootScope.id,
-          origin: undefined,
-        })
+        app.#rootScope.middleware.push(middlewareRef('after', middleware, opts, app.#rootScope.id, where(), pluginName))
       },
 
       // Plugin routes go through `#register` like every other route: same
@@ -1553,11 +1927,12 @@ export class ZenApp<X = {}> {
           definition.path,
           { ...definition.schema, name: definition.name, meta: definition.meta },
           definition.handler,
+          where(),
         )
       },
 
       hook(phase, fn, name) {
-        addHook(app.#rootScope, app.#hooks, phase, fn, name ?? pluginName)
+        addHook(app.#rootScope, app.#hooks, phase, fn, name ?? pluginName, where())
       },
 
       // Slot names are namespaced by plugin, so two plugins declaring "user"
@@ -1567,18 +1942,18 @@ export class ZenApp<X = {}> {
       },
 
       decorate(name, slotOrAccessor) {
-        app.decorate(name, slotOrAccessor, `plugin "${pluginName}"`)
+        app.#decorate(name, slotOrAccessor, `plugin "${pluginName}"`, where())
       },
 
       provide(token, spec) {
-        app.#container.provide(token, spec)
+        app.#container.provide(token, spec, where())
       },
 
       // Namespaced by owner, like slots: two plugins each registering "cache"
       // is a boot error naming both rather than one of them silently winning
       // and the other's dependency going unprobed (§31.4).
       health(name, probe, opts) {
-        const diagnostic = app.#health.register(name, probe, opts, `plugin "${pluginName}"`)
+        const diagnostic = app.#health.register(name, probe, opts, `plugin "${pluginName}"`, where())
         if (diagnostic !== null) app.#healthDiagnostics.push(diagnostic)
       },
 
@@ -1599,10 +1974,14 @@ export class ZenApp<X = {}> {
         app.#rootScope.meta.set(`${pluginName}.${key}`, value)
       },
 
+      schema(name, schema) {
+        app.#schemas.push({ name, schema, source: `plugin "${pluginName}"`, origin: where() })
+      },
+
       // Sugar for `hook('onBoot', fn)`: one table, so both forms run, in the
       // order they were registered (§9.2).
       onBoot(fn) {
-        addHook(app.#rootScope, app.#hooks, 'onBoot', fn, pluginName)
+        addHook(app.#rootScope, app.#hooks, 'onBoot', fn, pluginName, where())
       },
 
       exportsOf(name) {
@@ -1621,25 +2000,35 @@ export class ZenApp<X = {}> {
     record: RouteRecord,
     serialize: SerializerTable | null,
     negotiate: ((ctx: unknown) => void) | null,
-  ): CompiledPipeline {
+    injection: Injection | null,
+  ): { readonly pipeline: CompiledPipeline; readonly spec: PipelineSpec } {
     // Middleware only. Hooks used to be smuggled in here as pipeline steps,
     // which worked for the four phases that happened to sit next to a
     // middleware position and could not express the other eight — `preHandler`
     // ran before body intake, which is not what §9.2 says it is.
-    const steps: PipelineStep[] = record.middleware.map((middleware) => ({
-      kind: middleware.kind,
-      name: middleware.name,
-      fn: middleware.fn,
-    }))
+    // §8.7 applied: an omitted step is absent, a guarded one is behind its
+    // predicate, and everything else is the function as registered.
+    const steps: PipelineStep[] = pipelineSteps(record.middleware)
 
     // Stage 6 is emitted only when the route declares a body — this is the
     // single biggest divergence from Express, where json() parses every body.
     // `onParse` composes into it rather than being a separate stage, so a parse
     // hook cannot resurrect an intake the route does not have.
-    const declaresBody = record.schema.body !== undefined
-    const intake = declaresBody
-      ? withParseHooks(makeIntake(this.#parsers, this.#bodyOptions), functionsFor(record.hooks, 'onParse'))
-      : null
+    //
+    // §4.2 stage 6, per route: an `intake` declares that the route reads its
+    // body, and its fields override the application's limits for this route's
+    // intake closure alone — compiled in, so no request looks the policy up.
+    const policy = record.schema.intake
+    const declaresBody = record.schema.body !== undefined || policy !== undefined
+    const bodyOptions = policy === undefined ? this.#bodyOptions : { ...this.#bodyOptions, ...definedOf(policy) }
+    const mode = policy?.mode ?? 'parse'
+    const intake = !declaresBody
+      ? null
+      : mode === 'raw'
+        ? makeRawIntake(bodyOptions)
+        : mode === 'stream'
+          ? makeStreamIntake(bodyOptions)
+          : withParseHooks(makeIntake(this.#parsers, bodyOptions), functionsFor(record.hooks, 'onParse'))
 
     // §11.4 — one generated coercer per source that has a plan, and `null`
     // everywhere else. `compileValidator` branches on that once, at boot, so a
@@ -1656,14 +2045,24 @@ export class ZenApp<X = {}> {
         return compileValidator(record.schema[source] as AnySchema, source, coerce)
       })
 
+    // §4.2 stage 7 — two or more sources are validated as one stage, so every
+    // failure reaches the client at once. One source compiles as it always did.
+    const stage = validators.length > 1 ? [combineValidators(validators)] : validators
+    // §11.7 — `check` is the last validator of the stage: it runs only once the
+    // schemas have passed, and before `postValidation` and `preHandler`.
+    const check = record.schema.check
+    if (typeof check === 'function') stage.push(compileCheck(check))
+
     const spec = {
       routeId: `${record.method}_${record.path}`,
       steps,
-      handler: record.handler as Function,
+      // §15.1 — a route whose services are all singletons gets them as a
+      // frozen object passed by the pipeline; one with a per-request service
+      // gets a handler that resolves it from the request's scope first.
+      handler: injection?.kind === 'request' ? injection.wrap(record.handler as Function) : record.handler as Function,
+      deps: injection?.kind === 'static' ? injection.deps : null,
       intake,
-      // §4.2 stage 7 — two or more sources are validated as one stage, so every
-      // failure reaches the client at once. One source compiles as it always did.
-      validators: validators.length > 1 ? [combineValidators(validators)] : validators,
+      validators: stage,
       serialize,
       // §13.4 — `null` unless the route declared the variant form, and the
       // generator emits nothing for it when it is null.
@@ -1671,147 +2070,178 @@ export class ZenApp<X = {}> {
       hooks: pipelinePlan(record.hooks, NO_HOOKS) ?? undefined,
       // §4.4 — three stage marks and three branches, or no emitted text at all.
       deadline: record.timeout !== null,
+      // §11.5 — the response checked against its schema, or nothing emitted.
+      validateResponse: this.#responseValidator(record),
     }
 
-    return this.#opts.pipeline === 'simple'
+    const pipeline = this.#opts.pipeline === 'simple'
       ? simplePipeline(spec)
       : compilePipeline(spec, this.#codegen)
+    return { pipeline, spec }
+  }
+
+  /**
+   * §11.5 — one route's response validator under the configured mode, or
+   * `null`: when the mode is `'off'`, or the route declares nothing that can
+   * validate. Either way a `null` compiles to no text at all.
+   */
+  #responseValidator(record: RouteRecord): ResponseValidator | null {
+    const setting = this.#policy?.responseValidation
+    if (setting === undefined || setting.mode === 'off') return null
+    return compileResponseValidator(record.schema.response as Readonly<Record<number, unknown>> | undefined, {
+      mode: setting.mode,
+      sample: setting.sample,
+      routeId: `${record.method} ${record.path}`,
+      log: this.#log,
+    })
   }
 
   // ── dispatch ─────────────────────────────────────────────────────────────
 
   /** The Dispatcher (§4.2 stages 3-10). Bound once, at boot. */
   get dispatch(): (raw: RawRequest, conn: Connection) => Promise<void> {
-    return async (raw, conn) => {
+    return (raw, conn) => {
       const compiled = this.#compiled
       if (compiled === null) {
-        throw new ZenError(Codes.APP_NOT_READY, 'App.dispatch used before ready()', { status: 500 })
+        return Promise.reject(new ZenError(Codes.APP_NOT_READY, 'App.dispatch used before ready()', { status: 500 }))
       }
+      return this.#serve(raw, conn, compiled)
+    }
+  }
 
-      const path = pathnameOf(raw.url)
-      const match = compiled.router.match(raw.method, path)
+  /**
+   * Stages 3–10 against one compiled table — the production one from
+   * `dispatch`, or a copy holding an instrumented route from `explainRequest`
+   * (§8.5). Taking the table as an argument is what lets an explanation run
+   * without installing anything: the production table is never written.
+   */
+  async #serve(raw: RawRequest, conn: Connection, compiled: CompiledApp): Promise<void> {
+    const path = pathnameOf(raw.url)
+    const match = compiled.router.match(raw.method, path)
 
-      let ctx: PlainContext | null = null
-      let hooks: GlobalHooks = compiled.globalHooks
-      // §4.4 — armed before the context is built, so `ctx.signal` is the
-      // composed one from the very first hook rather than being swapped
-      // underneath code that already captured it.
-      let deadline: Deadline | null = null
-      try {
-        if (match === null || match.route === null) {
-          deadline = this.#arm(compiled.unmatchedTimeoutMs, raw, conn)
-          ctx = new compiled.Ctx(raw, null, EMPTY, compiled.env, signalOf(deadline, conn), deadline)
-          ctx.id = makeRequestId()
-          ctx.startTime = performance.now()
-
-          // Global `onRequest` hooks run even though no route matched — §9.2.
-          //
-          // Not a courtesy. `onRequest` is the documented home for rate
-          // limiting, CORS and auth, and a rate limiter that only sees matched
-          // routes is bypassed by requesting a path that does not exist. Only
-          // the global scope can apply: there is no route, so there is no
-          // collection chain to inherit from.
-          const work = runUnmatched(compiled.unmatchedOnRequest, ctx)
-          const early = deadline === null ? await work : await Promise.race([work, deadline.expiry])
-          if (early !== null) {
-            await this.#send(ctx, conn, early, hooks.onResponse)
-            return
-          }
-
-          // Routine refusals, built without a stack: it could only ever show
-          // these few lines of the dispatcher, and capturing it was most of why
-          // a 404 cost ~6× a served request (§28.8, `withoutStack`).
-          if (match === null) throw withoutStack(() => new NotFound(`No route matches ${raw.method} ${path}`))
-          throw withoutStack(() => new MethodNotAllowed(`${raw.method} is not allowed for ${path}`, {
-            headers: { allow: match.allowed.join(', ') },
-          }))
-        }
-
-        const compiledRoute = compiled.byId.get(match.route.id)
-        if (compiledRoute === undefined) {
-          throw new ZenError(Codes.INTERNAL, `No compiled pipeline for route ${match.route.id}`, { status: 500 })
-        }
-        // Captured before the pipeline runs, so a throw from *inside* it still
-        // reaches this route's error and response hooks rather than only the
-        // global ones (§9.4).
-        hooks = compiledRoute
-        deadline = this.#arm(compiledRoute.timeoutMs, raw, conn)
-
-        ctx = new compiled.Ctx(
-          raw,
-          {
-            id: match.route.id,
-            name: match.route.name,
-            method: match.route.method,
-            path: match.route.path,
-            meta: match.route.meta,
-          },
-          match.params as Record<string, unknown>,
-          compiled.env,
-          signalOf(deadline, conn),
-          deadline,
-        )
+    let ctx: PlainContext | null = null
+    let hooks: GlobalHooks = compiled.globalHooks
+    // §4.4 — armed before the context is built, so `ctx.signal` is the
+    // composed one from the very first hook rather than being swapped
+    // underneath code that already captured it.
+    let deadline: Deadline | null = null
+    try {
+      if (match === null || match.route === null) {
+        deadline = this.#arm(compiled.unmatchedTimeoutMs, raw, conn)
+        ctx = new compiled.Ctx(raw, null, EMPTY, compiled.env, signalOf(deadline, conn), deadline)
         ctx.id = makeRequestId()
         ctx.startTime = performance.now()
 
-        // The race is the *arm*: it guarantees an answer at the deadline even
-        // when the pipeline is stuck on an `await` nothing will ever settle.
-        // The pipeline's own stage checks then stop the abandoned work at the
-        // next boundary — the two together are what make a deadline mean
-        // something, and neither is sufficient alone (§4.4).
+        // Global `onRequest` hooks run even though no route matched — §9.2.
         //
-        // `Promise.race` attaches a handler to both, so a pipeline that rejects
-        // *after* the deadline won already has a listener and cannot surface as
-        // an unhandled rejection.
-        //
-        // A pipeline that returned synchronously skips the race entirely, and
-        // not as a micro-optimisation: a fully synchronous pipeline never
-        // yields, so its deadline provably cannot have fired. §8.4's sync fast
-        // path is un-timeoutable by construction — which is fine, because it is
-        // also incapable of hanging.
-        const running = compiledRoute.pipeline(ctx)
-        const reply = deadline === null || !isThenable(running)
-          ? await running
-          : await Promise.race([running, deadline.expiry])
-
-        // The clock stops before egress on purpose: the deadline bounds stages
-        // 5-9, up to handing the reply to the adapter. It does not bound the
-        // write. Cancelling a 2 GB download halfway is not a timeout, it is a
-        // corrupt response — the status line has already gone out and there is
-        // no way to take it back (§4.4). Only the *timer* stops: the connection
-        // listener stays until the `finally`, so a streamed body still sees
-        // `ctx.signal` abort when its client leaves.
-        deadline?.settle()
-        await this.#send(ctx, conn, reply, hooks.onResponse)
-      } catch (error) {
-        const target = ctx ?? new compiled.Ctx(raw, null, EMPTY, compiled.env, conn.signal)
-        if (target.id === '') target.id = makeRequestId()
-        const info = {
-          requestId: target.id,
-          method: raw.method,
-          path,
-          route: target.route?.path ?? null,
-          // So the error engine can tell this request's own abort from one the
-          // application caused (§12.4) — see `classify`.
-          signal: target.signal,
+        // Not a courtesy. `onRequest` is the documented home for rate
+        // limiting, CORS and auth, and a rate limiter that only sees matched
+        // routes is bypassed by requesting a path that does not exist. Only
+        // the global scope can apply: there is no route, so there is no
+        // collection chain to inherit from.
+        const work = runUnmatched(compiled.unmatchedOnRequest, ctx)
+        const early = deadline === null ? await work : await Promise.race([work, deadline.expiry])
+        if (early !== null) {
+          await this.#send(ctx, conn, early, hooks.onResponse)
+          return
         }
-        const reply = deadline !== null && (error as unknown) === EXPIRED
-          ? await this.#timeoutReply(target, deadline, hooks, info)
-          : await this.#errorReply(target, error, hooks, info)
-        // The error reply is egress too, and §4.4 does not bound egress: a timer
-        // left running here could fire mid-write and publish `timedOut` on a
-        // request that failed for an unrelated reason.
-        deadline?.settle()
-        await this.#send(target, conn, reply, hooks.onResponse)
-      } finally {
-        // In a `finally` because the failure mode of forgetting it is invisible
-        // under test and fatal under load: one leaked timer per request.
-        deadline?.disarm()
-        // Normally already done by `#send`. This covers the exchange whose
-        // error reply could not be written either — a request that failed
-        // twice still has a transaction to roll back.
-        if (ctx !== null && ctx.$disposers !== SETTLED) await this.#release(ctx)
+
+        // Routine refusals, built without a stack: it could only ever show
+        // these few lines of the dispatcher, and capturing it was most of why
+        // a 404 cost ~6× a served request (§28.8, `withoutStack`).
+        if (match === null) throw withoutStack(() => new NotFound(`No route matches ${raw.method} ${path}`))
+        throw withoutStack(() => new MethodNotAllowed(`${raw.method} is not allowed for ${path}`, {
+          headers: { allow: match.allowed.join(', ') },
+        }))
       }
+
+      const compiledRoute = compiled.byId.get(match.route.id)
+      if (compiledRoute === undefined) {
+        throw new ZenError(Codes.INTERNAL, `No compiled pipeline for route ${match.route.id}`, { status: 500 })
+      }
+      // Captured before the pipeline runs, so a throw from *inside* it still
+      // reaches this route's error and response hooks rather than only the
+      // global ones (§9.4).
+      hooks = compiledRoute
+      deadline = this.#arm(compiledRoute.timeoutMs, raw, conn)
+
+      ctx = new compiled.Ctx(
+        raw,
+        {
+          id: match.route.id,
+          name: match.route.name,
+          method: match.route.method,
+          path: match.route.path,
+          meta: match.route.meta,
+        },
+        match.params as Record<string, unknown>,
+        compiled.env,
+        signalOf(deadline, conn),
+        deadline,
+      )
+      ctx.id = makeRequestId()
+      ctx.startTime = performance.now()
+
+      // The race is the *arm*: it guarantees an answer at the deadline even
+      // when the pipeline is stuck on an `await` nothing will ever settle.
+      // The pipeline's own stage checks then stop the abandoned work at the
+      // next boundary — the two together are what make a deadline mean
+      // something, and neither is sufficient alone (§4.4).
+      //
+      // `Promise.race` attaches a handler to both, so a pipeline that rejects
+      // *after* the deadline won already has a listener and cannot surface as
+      // an unhandled rejection.
+      //
+      // A pipeline that returned synchronously skips the race entirely, and
+      // not as a micro-optimisation: a fully synchronous pipeline never
+      // yields, so its deadline provably cannot have fired. §8.4's sync fast
+      // path is un-timeoutable by construction — which is fine, because it is
+      // also incapable of hanging.
+      const running = compiledRoute.pipeline(ctx)
+      const reply = deadline === null || !isThenable(running)
+        ? await running
+        : await Promise.race([running, deadline.expiry])
+
+      // The clock stops before egress on purpose: the deadline bounds stages
+      // 5-9, up to handing the reply to the adapter. It does not bound the
+      // write. Cancelling a 2 GB download halfway is not a timeout, it is a
+      // corrupt response — the status line has already gone out and there is
+      // no way to take it back (§4.4). Only the *timer* stops: the connection
+      // listener stays until the `finally`, so a streamed body still sees
+      // `ctx.signal` abort when its client leaves.
+      deadline?.settle()
+      await this.#send(ctx, conn, reply, hooks.onResponse)
+    } catch (error) {
+      const target = ctx ?? new compiled.Ctx(raw, null, EMPTY, compiled.env, conn.signal)
+      if (target.id === '') target.id = makeRequestId()
+      const info: ErrorContextInfo = {
+        requestId: target.id,
+        method: raw.method,
+        path,
+        route: target.route?.path ?? null,
+        routeId: target.route?.id ?? null,
+        // So the error engine can tell this request's own abort from one the
+        // application caused (§12.4) — see `classify`.
+        signal: target.signal,
+        // §12.6 — read only in development, where a browser gets a page.
+        ...(this.#opts.dev === true ? { html: prefersHtml(raw.header('accept')) } : {}),
+      }
+      const reply = deadline !== null && (error as unknown) === EXPIRED
+        ? await this.#timeoutReply(target, deadline, hooks, info)
+        : await this.#errorReply(target, error, hooks, info)
+      // The error reply is egress too, and §4.4 does not bound egress: a timer
+      // left running here could fire mid-write and publish `timedOut` on a
+      // request that failed for an unrelated reason.
+      deadline?.settle()
+      await this.#send(target, conn, reply, hooks.onResponse)
+    } finally {
+      // In a `finally` because the failure mode of forgetting it is invisible
+      // under test and fatal under load: one leaked timer per request.
+      deadline?.disarm()
+      // Normally already done by `#send`. This covers the exchange whose
+      // error reply could not be written either — a request that failed
+      // twice still has a transaction to roll back.
+      if (ctx !== null && ctx.$disposers !== SETTLED) await this.#release(ctx)
     }
   }
 
@@ -2037,53 +2467,52 @@ export class ZenApp<X = {}> {
     } = {},
   ): Promise<InjectedResponse> {
     await this.ready()
+    // `#serve` is awaited here rather than behind a second `async` method: an
+    // async function returning another's promise costs the request extra
+    // microtask turns, measured at ~60 ns of a ~1.2 µs inject.
+    const exchange = injected(method, url, init)
+    await this.#serve(exchange.raw, exchange.conn, this.#compiled as CompiledApp)
+    return exchange.response()
+  }
 
-    const headers: Record<string, string> = {}
-    for (const [k, v] of Object.entries(init.headers ?? {})) headers[k.toLowerCase()] = v
-
-    let bodyBytes: Uint8Array
-    if (init.body === undefined) {
-      bodyBytes = new Uint8Array(0)
-    } else if (typeof init.body === 'string') {
-      bodyBytes = new TextEncoder().encode(init.body)
-    } else if (init.body instanceof Uint8Array) {
-      bodyBytes = init.body
-    } else {
-      bodyBytes = new TextEncoder().encode(JSON.stringify(init.body))
-      headers['content-type'] ??= 'application/json'
+  /**
+   * @internal — EXPLAIN ANALYZE for HTTP (§8.5); call it through
+   * `explainRequest(app, method, url, init)`, which renders what this returns.
+   *
+   * One request, through an *instrumented copy* of its route's pipeline: every
+   * hook, step, validator, the handler, the serializer and the response check
+   * wrapped with an observer, compiled as the interpreted twin, and served
+   * from a copy of the route table that holds it. The production table is
+   * never written, so the next request to the route — and every concurrent
+   * one — runs the pipeline it always ran.
+   */
+  async explainTrace(method: string, url: string, init: InjectInit = {}): Promise<{
+    readonly route: RouteRecord | null
+    readonly response: InjectedResponse
+    readonly events: readonly TraceEvent[]
+    readonly totalMs: number
+  }> {
+    await this.ready()
+    const compiled = this.#compiled as CompiledApp
+    const trace = new Trace()
+    const match = compiled.router.match(method.toUpperCase(), pathnameOf(url))
+    let state: CompiledApp = { ...compiled, unmatchedOnRequest: observeUnmatched(compiled.unmatchedOnRequest, trace) }
+    let route: RouteRecord | null = null
+    if (match !== null && match.route !== null) {
+      const original = compiled.byId.get(match.route.id)
+      if (original !== undefined) {
+        route = original.record
+        const instrumented = instrumentRoute(original.record, original.spec, original, trace)
+        const byId = new Map(compiled.byId)
+        byId.set(match.route.id, { ...original, ...instrumented.outside, pipeline: simplePipeline(instrumented.spec) })
+        state = { ...compiled, byId }
+      }
     }
-    if (bodyBytes.length > 0) headers['content-length'] ??= String(bodyBytes.length)
-
-    const raw: RawRequest = {
-      method: method.toUpperCase(),
-      url,
-      header: (name) => headers[name as string],
-      headerNames: () => Object.keys(headers),
-      body: {
-        kind: bodyBytes.length === 0 ? 'none' : 'buffer',
-        length: bodyBytes.length,
-        read: async () => bodyBytes,
-        stream: async function* () { yield bodyBytes },
-      },
-      remote: init.remote ?? LOOPBACK,
-      native: null,
-    }
-
-    let captured: Reply | null = null
-    const conn: Connection = {
-      signal: init.signal ?? new AbortController().signal,
-      send: (reply) => { captured = reply },
-      native: null,
-      // No socket holds the process open for this request, so its deadline
-      // has to (§4.4) — the reason a health probe's arm does too.
-      inProcess: true,
-    }
-
-    await this.dispatch(raw, conn)
-
-    const reply = captured as Reply | null
-    if (reply === null) throw new Error('inject: no reply was produced')
-    return new InjectedResponse(reply)
+    const started = performance.now()
+    const exchange = injected(method, url, init)
+    await this.#serve(exchange.raw, exchange.conn, state)
+    const response = exchange.response()
+    return { route, response, events: trace.events, totalMs: performance.now() - started }
   }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
@@ -2131,7 +2560,10 @@ export class ZenApp<X = {}> {
       ...(opts.port === undefined && typeof server.port === 'number' ? { port: server.port } : {}),
       ...(opts.host === undefined && typeof server.host === 'string' ? { host: server.host } : {}),
     }
-    this.#handle = await this.#opts.adapter.listen(this.dispatch, address)
+    // §16.1 — `policy.http`, for the adapter to apply where its own options
+    // are silent. Limits passed to `listen()` itself win.
+    const limits = opts.limits ?? this.#policy?.http
+    this.#handle = await this.#opts.adapter.listen(this.dispatch, limits === undefined ? address : { ...address, limits })
     // §4.5, §12.8 — only once there is a server to drain; an app that is only
     // ever `inject()`ed never touches the host process.
     this.#uninstall ??= this.#opts.lifecycle?.install({ close: (reason) => this.close(reason), log: this.#log }) ?? null
@@ -2250,9 +2682,171 @@ export class ZenApp<X = {}> {
     for (const list of this.#hooks.values()) for (const record of list) push(record)
     for (const pending of this.#routes) {
       if (inScope(pending.scope, absent)) continue
-      for (const record of routeHookRecords(pending.schema.hooks)) push(record)
+      for (const record of routeHookRecords(pending.schema.hooks, pending.origin)) push(record)
     }
     return out
+  }
+
+  /**
+   * Put the request policy where the boot reads it (§16.1): the intake limits,
+   * the app-wide deadline and the header that may shorten it, the redirect
+   * allowlist, health's `details`, and the built-in logger's level and
+   * redaction. Under the hardened profile, a `trustProxy` nobody set is warned
+   * about here and watched for at runtime (§19.2, §19.4).
+   */
+  #applyPolicy(policy: Policy): void {
+    this.#bodyOptions = policy.body
+    this.#rootScope.timeout = policy.timeout
+    this.#timeoutHeader = policy.timeoutHeader
+    this.#redirect = compileRedirectPolicy(policy.redirect)
+    this.#health.disclose(policy.healthDetails)
+    if (this.#log instanceof ConsoleLogger) this.#log.configure({ level: policy.logging.level, redact: policy.logging.redact })
+
+    if (this.#opts.profile === 'hardened' && !policy.trustProxyExplicit) {
+      this.#log.warn(
+        { code: Codes.CONFIG_INVALID },
+        'The hardened profile expects policy.trustProxy to be set explicitly, and it is not, so X-Forwarded-For is ' +
+          'ignored. fix: set trustProxy to the number of proxies in front of the app — 1 for one load balancer — or ' +
+          'false to say there are none. also: the first X-Forwarded-For that arrives will be reported once.',
+      )
+      addHook(this.#rootScope, this.#hooks, 'onRequest', forwardedWatch(), 'hardened: trustProxy', this.#origin)
+    }
+  }
+
+  /** Every middleware ref the application holds, wherever it was registered. */
+  *#middlewareRefs(): Generator<{ readonly list: MiddlewareRef[]; readonly index: number; readonly ref: MiddlewareRef }> {
+    for (const scope of this.#scopes) {
+      for (let i = 0; i < scope.middleware.length; i++) yield { list: scope.middleware, index: i, ref: scope.middleware[i] as MiddlewareRef }
+    }
+    for (const pending of this.#routes) {
+      for (let i = 0; i < pending.middleware.length; i++) yield { list: pending.middleware, index: i, ref: pending.middleware[i] as MiddlewareRef }
+    }
+  }
+
+  /**
+   * §8.6 — each configured middleware's options, against its definition's
+   * schema, once per configured instance however many places list it. A
+   * refusal is placed at the first registration that used it.
+   */
+  async #checkConfigured(verdicts: Map<ConfiguredMiddleware, OptionsVerdict>, diagnostics: Diagnostic[]): Promise<void> {
+    for (const { ref } of this.#middlewareRefs()) {
+      const target = UNCONFIGURED.get(ref.fn)
+      if (target === undefined || verdicts.has(target)) continue
+      const verdict = await validateMiddlewareOptions(target.definition, target.options)
+      verdicts.set(target, verdict)
+      if (verdict.diagnostic !== null) diagnostics.push(placed(verdict.diagnostic, ref.origin))
+    }
+  }
+
+  /**
+   * §8.6 — run each configured middleware's `setup` once, with its options'
+   * validated output, and put what it returns where the registration was.
+   * A `setup` that throws, or returns something that is not a function, is a
+   * boot diagnostic naming the middleware and the line that registered it,
+   * reported with everything else (§12.7).
+   */
+  async #setUpConfigured(
+    verdicts: ReadonlyMap<ConfiguredMiddleware, OptionsVerdict>,
+    config: ResolvedConfigResult,
+    diagnostics: Diagnostic[],
+  ): Promise<void> {
+    const produced = new Map<ConfiguredMiddleware, Function>()
+    const failed = new Set<ConfiguredMiddleware>()
+    for (const { list, index, ref } of [...this.#middlewareRefs()]) {
+      const target = UNCONFIGURED.get(ref.fn)
+      if (target === undefined || failed.has(target)) continue
+      let fn = produced.get(target)
+      if (fn === undefined) {
+        const name = target.definition.name
+        const container = this.#container
+        const setup: MiddlewareSetup = {
+          name,
+          config: config.config,
+          caps: this.#caps,
+          log: this.#log,
+          resolve: (token) => container.resolve(token),
+          resolveAsync: (token) => container.resolveAsync(token),
+        }
+        let result: unknown
+        try {
+          result = await target.definition.setup((verdicts.get(target)?.value) as never, setup)
+        } catch (error) {
+          failed.add(target)
+          const detailed = isZenError(error) ? error : null
+          const sites = ([
+            [`use(${name}(…))`, ref.origin],
+            [`${name} setup`, relativeOrigin(errorOrigin(error), this.#root)],
+          ] as const).filter(([, origin]) => origin !== undefined)
+          diagnostics.push({
+            severity: 'error',
+            code: detailed?.code ?? Codes.MIDDLEWARE_OPTIONS,
+            message: `Middleware "${name}" threw during setup: ${error instanceof Error ? error.message : String(error)}`,
+            hint: detailed?.hint ?? `Fix the error inside ${name}'s setup(); it runs once, at boot, with the validated options.`,
+            consequence: detailed?.consequence,
+            ...(sites.length === 0
+              ? {}
+              : { locations: sites.map(([where]) => where), origins: sites.map(([, origin]) => origin as SourceOrigin) }),
+          })
+          continue
+        }
+        if (typeof result !== 'function') {
+          failed.add(target)
+          diagnostics.push(placed({
+            severity: 'error',
+            code: Codes.MIDDLEWARE_OPTIONS,
+            message: `Middleware "${name}"'s setup returned ${result === null ? 'null' : `a ${typeof result}`}, not a middleware function.`,
+            hint: 'setup(options, app) returns the phase middleware — `(ctx) => …` — that every pipeline listing it calls.',
+          }, ref.origin))
+          continue
+        }
+        fn = result
+        produced.set(target, fn)
+      }
+      list[index] = { ...ref, fn }
+    }
+  }
+
+  /**
+   * §8.7 — every middleware's `when.env`, decided once against the validated
+   * environment: the refs it turned off. Not evaluated while the environment
+   * is itself invalid, for the reason `#absentScopes` gives.
+   */
+  #omittedMiddleware(config: ResolvedConfigResult, diagnostics: Diagnostic[]): ReadonlySet<MiddlewareRef> {
+    if (config.diagnostics.length > 0) return NO_REFS
+    let omitted: Set<MiddlewareRef> | null = null
+    for (const { ref } of this.#middlewareRefs()) {
+      const decide = ref.when?.env
+      if (decide === undefined) continue
+      let decided: unknown
+      try {
+        decided = decide(config.env)
+      } catch (error) {
+        diagnostics.push(placed({
+          severity: 'error',
+          code: Codes.CONFIG_INVALID,
+          message:
+            `The \`when.env\` of middleware "${ref.name}" threw while deciding whether it runs: ` +
+            (error instanceof Error ? error.message : String(error)),
+          hint: 'A `when.env` is a pure function of the validated environment; read what it needs from the env schema.',
+        }, ref.origin))
+        continue
+      }
+      if (typeof decided !== 'boolean') {
+        const promise = typeof decided === 'object' && decided !== null && typeof (decided as { then?: unknown }).then === 'function'
+        diagnostics.push(placed({
+          severity: 'error',
+          code: Codes.CONFIG_INVALID,
+          message: `The \`when.env\` of middleware "${ref.name}" answered with ${promise ? 'a promise' : `a ${typeof decided}`}, not a boolean.`,
+          hint: promise
+            ? 'Decide synchronously: `when.env` runs once, at boot, against the validated environment, and a promise is always truthy.'
+            : "Return a boolean — `when: { env: (env) => env['FEATURE_X'] === 'on' }` — rather than a value that is merely truthy.",
+          consequence: `Read as truthy, "${ref.name}" would run on a deployment that meant to turn it off.`,
+        }, ref.origin))
+        continue
+      }
+      if (!decided) (omitted ??= new Set()).add(ref)
+    }
+    return omitted ?? NO_REFS
   }
 
   /**
@@ -2279,6 +2873,7 @@ export class ZenApp<X = {}> {
             (error instanceof Error ? error.message : String(error)),
           hint: 'A `when` is a pure function of the validated environment; read what it needs from the env schema.',
           locations: [scope.prefix],
+          ...(scope.origin === undefined ? {} : { origins: [scope.origin] }),
         })
         continue
       }
@@ -2293,12 +2888,61 @@ export class ZenApp<X = {}> {
             : "Return a boolean — `when: (env) => env['FEATURE_X'] === 'on'` — rather than a value that is merely truthy.",
           consequence: `Read as truthy, ${scope.prefix} would exist on a deployment that meant to turn it off.`,
           locations: [scope.prefix],
+          ...(scope.origin === undefined ? {} : { origins: [scope.origin] }),
         })
         continue
       }
       if (!decided) (absent ??= new Set()).add(scope.id)
     }
     return absent ?? NO_SCOPES
+  }
+
+  /**
+   * `app.schema()` registrations, checked — §10.2. A name OpenAPI cannot use as
+   * a component key, a name two schemas claim, and one schema under two names
+   * are each `ZEN_SCHEMA_NAME`, with both lines when two registrations are
+   * involved. The first registration of a name is the one kept.
+   */
+  #namedSchemas(diagnostics: Diagnostic[]): ReadonlyMap<string, SchemaRecord> {
+    const byName = new Map<string, SchemaRecord>()
+    const bySchema = new Map<object, SchemaRecord>()
+    for (const record of this.#schemas) {
+      if (!SCHEMA_NAME.test(record.name)) {
+        diagnostics.push(placed({
+          severity: 'error',
+          code: Codes.SCHEMA_NAME,
+          message: `Schema name ${JSON.stringify(record.name)} (from ${record.source}) cannot be an OpenAPI component name.`,
+          hint: 'Use letters, digits, ".", "-" and "_" — e.g. "User" or "billing.Invoice".',
+        }, record.origin))
+        continue
+      }
+      const taken = byName.get(record.name)
+      if (taken !== undefined) {
+        if (taken.schema === record.schema) continue
+        diagnostics.push({
+          severity: 'error',
+          code: Codes.SCHEMA_NAME,
+          message: `Schema name "${record.name}" is registered by both ${taken.source} and ${record.source}, for different schemas.`,
+          hint: 'A name is one component in the document and one type in every generated client. Rename one of them.',
+          ...pairedSites([[`schema("${record.name}")`, taken.origin], [`schema("${record.name}")`, record.origin]]),
+        })
+        continue
+      }
+      const named = bySchema.get(record.schema as object)
+      if (named !== undefined) {
+        diagnostics.push({
+          severity: 'error',
+          code: Codes.SCHEMA_NAME,
+          message: `One schema is registered under two names, "${named.name}" and "${record.name}".`,
+          hint: 'A generated client would have two names for one type. Keep one registration.',
+          ...pairedSites([[`schema("${named.name}")`, named.origin], [`schema("${record.name}")`, record.origin]]),
+        })
+        continue
+      }
+      byName.set(record.name, record)
+      bySchema.set(record.schema as object, record)
+    }
+    return byName
   }
 
   /**
@@ -2316,6 +2960,7 @@ export class ZenApp<X = {}> {
       slot: d.slotIndex === null ? null : (slots.find((s) => s.index === d.slotIndex) ?? null),
       accessor: d.accessor,
       source: d.source,
+      origin: d.origin,
     }))
   }
 
@@ -2334,8 +2979,64 @@ export class ZenApp<X = {}> {
   #scopedHookRecords(): HookRecord[] {
     const out: HookRecord[] = []
     for (const scope of this.#scopes) out.push(...scope.hooks.filter((h) => !isRequestPhase(h.phase)))
-    for (const pending of this.#routes) out.push(...routeHookRecords(pending.schema.hooks))
+    for (const pending of this.#routes) out.push(...routeHookRecords(pending.schema.hooks, pending.origin))
     return out
+  }
+
+  /**
+   * The application graph as a document — §2.4: plain JSON with sorted keys,
+   * the same graph `graph()` returns with every function reduced to its name
+   * and origin, every schema to JSON Schema, the configuration already
+   * redacted, and two kinds of SHA-256 fingerprint — the application's, and
+   * each route's contract. Computed once and kept: the graph is frozen.
+   *
+   * What reads it: a tool that diffs two builds, a client that pins a
+   * contract, a cache that keys on the application. None of them has to boot
+   * this application to do it.
+   */
+  graphDocument(): Promise<GraphDocument> {
+    if (this.#compiled === null) {
+      throw new ZenError(Codes.APP_NOT_READY, 'graphDocument() requires ready()', { status: 500, expose: false })
+    }
+    return (this.#document ??= serializeGraph(this.#compiled.graph))
+  }
+
+  /**
+   * §12.6 — what the application knows about an error that the error engine
+   * does not: the failing route's registration line and resolved chain, and
+   * where in the application's own code the error was raised, with the lines
+   * around it when the host can read the file. Development only.
+   */
+  #devFacts(error: ZenError, info: ErrorContextInfo): DevFacts {
+    const facts: { origin?: string; thrown?: string; frame?: DevFacts['frame']; chain?: readonly string[] } = {}
+    const route = info.routeId === null || info.routeId === undefined
+      ? undefined
+      : this.#compiled?.byId.get(info.routeId as RouteId)?.record
+    if (route?.origin !== undefined) facts.origin = formatOrigin(route.origin)
+    if (route !== undefined) {
+      facts.chain = explainedSteps(route).map((step) => [step.kind, step.scope, step.name].filter((part) => part !== '').join(' '))
+    }
+    // The original throw: a wrapped error's cause, when there is one.
+    const raised = applicationFrame(error.cause instanceof Error ? error.cause : error)
+    if (raised !== undefined) {
+      const shown = relativeOrigin(raised, this.#root) ?? raised
+      facts.thrown = formatOrigin(shown)
+      const source = this.#opts.devErrors?.readSource?.(raised.file)
+      if (source !== undefined) facts.frame = codeFrame(shown.file, source, raised.line)
+    }
+    return facts
+  }
+
+  /** The `onSend` hook `fingerprintHeaders` registers — §2.4. */
+  #fingerprintStamp(): (ctx: PlainContext, reply: Reply) => undefined {
+    return (ctx, reply) => {
+      const known = this.#fingerprints
+      if (known === null) return undefined
+      reply.headers.set('zen-graph', known.app)
+      const contract = ctx.route === null ? undefined : known.contracts.get(ctx.route.id)
+      if (contract !== undefined) reply.headers.set('zen-contract', contract)
+      return undefined
+    }
   }
 
   /** The frozen AppGraph — the input to every tool (§2.4). */
@@ -2424,29 +3125,34 @@ export class Collection<X = {}> {
     this.#scope = scope
   }
 
-  get<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  get<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  get<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   get<P extends string>(path: P, handler: BareHandler<X, P>): this
   get(path: string, a: unknown, b?: unknown): this {
     this.#app.registerScoped(this.#scope, 'GET', path, a, b)
     return this
   }
 
-  post<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  post<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  post<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   post<P extends string>(path: P, handler: BareHandler<X, P>): this
   post(path: string, a: unknown, b?: unknown): this {
     this.#app.registerScoped(this.#scope, 'POST', path, a, b)
     return this
   }
 
-  put<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  put<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  put<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   put<P extends string>(path: P, handler: BareHandler<X, P>): this
   put(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'PUT', path, a, b); return this }
 
-  patch<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  patch<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  patch<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   patch<P extends string>(path: P, handler: BareHandler<X, P>): this
   patch(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'PATCH', path, a, b); return this }
 
-  delete<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  delete<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  delete<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   delete<P extends string>(path: P, handler: BareHandler<X, P>): this
   delete(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'DELETE', path, a, b); return this }
 
@@ -2454,45 +3160,44 @@ export class Collection<X = {}> {
   // collection is the same registration surface one scope down (§6.1). Their
   // absence here meant a `HEAD`-only or `OPTIONS` route, or wrapping middleware,
   // could not be written inside a collection at all.
-  head<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  head<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  head<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   head<P extends string>(path: P, handler: BareHandler<X, P>): this
   head(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'HEAD', path, a, b); return this }
 
-  options<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  options<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  options<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   options<P extends string>(path: P, handler: BareHandler<X, P>): this
   options(path: string, a: unknown, b?: unknown): this { this.#app.registerScoped(this.#scope, 'OPTIONS', path, a, b); return this }
 
   /** One handler for every method — see {@link ZenApp.all}. */
-  all<P extends string, S extends RouteSpec>(path: P, spec: S, handler: RouteHandler<S, X, P>): this
+  all<P extends string, S extends RouteSpec>(path: P, spec: S & SpecWithoutCheck, handler: RouteHandler<S, X, P>): this
+  all<P extends string, S extends RouteSpec>(path: P, spec: RouteSpecOf<S, X, P>, handler: RouteHandler<S, X, P>): this
   all<P extends string>(path: P, handler: BareHandler<X, P>): this
   all(path: string, a: unknown, b?: unknown): this {
     registerAll((method, spec, handler) => this.#app.registerScoped(this.#scope, method, path, spec, handler), a, b)
     return this
   }
 
-  use(middleware: PhaseMiddleware<never, X>, opts?: { name?: string }): this {
+  use(middleware: PhaseMiddleware<never, X> | ConfiguredMiddleware, opts?: MiddlewareOptions<X>): this {
     return this.#push('phase', middleware, opts)
   }
 
   /** Around middleware for every route in this subtree — one closure per request (§8.2). */
-  around(middleware: AroundMiddleware<never, X>, opts?: { name?: string }): this {
+  around(middleware: AroundMiddleware<never, X>, opts?: MiddlewareOptions<X>): this {
     return this.#push('around', middleware, opts)
   }
 
   /** After middleware for every route in this subtree (§8.2). */
-  after(middleware: AfterMiddleware<never, X>, opts?: { name?: string }): this {
+  after(middleware: AfterMiddleware<never, X>, opts?: MiddlewareOptions<X>): this {
     return this.#push('after', middleware, opts)
   }
 
-  #push(kind: MiddlewareRef['kind'], fn: Function, opts: { name?: string } | undefined): this {
+  #push(kind: MiddlewareRef['kind'], fn: unknown, opts: MiddlewareOptions<X> | undefined): this {
     this.#app.assertOpen()
-    this.#scope.middleware.push({
-      kind,
-      name: opts?.name ?? (fn.name || 'anonymous'),
-      fn,
-      scope: this.#scope.id,
-      origin: undefined,
-    })
+    this.#scope.middleware.push(middlewareRef(
+      kind, fn, opts as MiddlewareOptions<never> | undefined, this.#scope.id, this.#app.originHere(), 'anonymous',
+    ))
     return this
   }
 
@@ -2607,6 +3312,234 @@ const EMPTY: Record<string, unknown> = Object.freeze({})
 
 const NO_SCOPES: ReadonlySet<string> = Object.freeze(new Set<string>())
 
+const NO_REFS: ReadonlySet<MiddlewareRef> = Object.freeze(new Set<MiddlewareRef>())
+
+const NO_NAMES: readonly string[] = Object.freeze([])
+
+/**
+ * §19.2's hardened profile, for an application that never said whether a proxy
+ * is in front of it: the first request that carries `X-Forwarded-For` proves
+ * one is — and that every client looks like that proxy to anything keyed on
+ * `ctx.ip` — so it is reported, once, at the moment it is provably real. After
+ * that the hook is one boolean test. Promoted from `rateLimit()`'s own check.
+ */
+function forwardedWatch(): (ctx: PlainContext) => undefined {
+  let reported = false
+  return function trustProxyWatch(ctx: PlainContext): undefined {
+    if (reported) return undefined
+    const forwarded = ctx.raw.header('x-forwarded-for')
+    if (forwarded === undefined) return undefined
+    reported = true
+    ctx.log.warn(
+      { code: Codes.CONFIG_INVALID },
+      `A request arrived through a proxy (X-Forwarded-For) and trustProxy is not set, so ctx.ip is the proxy's ` +
+        `address (${ctx.ip}) for every client. fix: set trustProxy to the number of proxies in front of the app.`,
+    )
+    return undefined
+  }
+}
+
+/**
+ * §12.6 — whether a request's `Accept` prefers HTML to JSON: a browser
+ * navigating, not an API client. Read only on a development build's error path.
+ */
+function prefersHtml(accept: string | undefined): boolean {
+  const ranges = parseAccept(accept)
+  if (ranges === null) return false
+  const page = qualityFor(ranges, 'text', 'html')
+  return page > 0 && page > qualityFor(ranges, 'application', 'json')
+}
+
+/** The lines around `line` — two before, two after — for the development error page and terminal. */
+function codeFrame(file: string, source: string, line: number): NonNullable<DevFacts['frame']> {
+  const all = source.split('\n')
+  const first = Math.max(1, line - 2)
+  const last = Math.min(all.length, line + 2)
+  const lines: Array<{ line: number; text: string }> = []
+  for (let n = first; n <= last; n++) lines.push({ line: n, text: (all[n - 1] ?? '').replace(/\r$/, '') })
+  return { file, line, lines }
+}
+
+/** What `inject()` takes. */
+interface InjectInit {
+  readonly headers?: Record<string, string> | undefined
+  readonly body?: unknown
+  readonly signal?: AbortSignal | undefined
+  readonly remote?: RemoteInfo | undefined
+}
+
+/**
+ * The request and the connection `inject()` serves — no socket, the body in
+ * memory, the reply captured instead of written — and the response read off
+ * it once served. Synchronous, so the caller awaits the dispatch itself.
+ */
+function injected(method: string, url: string, init: InjectInit): {
+  readonly raw: RawRequest
+  readonly conn: Connection
+  response(): InjectedResponse
+} {
+  const headers: Record<string, string> = {}
+  for (const [k, v] of Object.entries(init.headers ?? {})) headers[k.toLowerCase()] = v
+
+  let bodyBytes: Uint8Array
+  if (init.body === undefined) {
+    bodyBytes = new Uint8Array(0)
+  } else if (typeof init.body === 'string') {
+    bodyBytes = new TextEncoder().encode(init.body)
+  } else if (init.body instanceof Uint8Array) {
+    bodyBytes = init.body
+  } else {
+    bodyBytes = new TextEncoder().encode(JSON.stringify(init.body))
+    headers['content-type'] ??= 'application/json'
+  }
+  if (bodyBytes.length > 0) headers['content-length'] ??= String(bodyBytes.length)
+
+  const raw: RawRequest = {
+    method: method.toUpperCase(),
+    url,
+    header: (name) => headers[name as string],
+    headerNames: () => Object.keys(headers),
+    body: {
+      kind: bodyBytes.length === 0 ? 'none' : 'buffer',
+      length: bodyBytes.length,
+      read: async () => bodyBytes,
+      stream: async function* () { yield bodyBytes },
+    },
+    remote: init.remote ?? LOOPBACK,
+    native: null,
+  }
+
+  let captured: Reply | null = null
+  const conn: Connection = {
+    signal: init.signal ?? new AbortController().signal,
+    send: (reply) => { captured = reply },
+    native: null,
+    // No socket holds the process open for this request, so its deadline
+    // has to (§4.4) — the reason a health probe's arm does too.
+    inProcess: true,
+  }
+
+  return {
+    raw,
+    conn,
+    response() {
+      const reply = captured as Reply | null
+      if (reply === null) throw new Error('inject: no reply was produced')
+      return new InjectedResponse(reply)
+    },
+  }
+}
+
+/** The global `onRequest` hooks a request that matched no route runs, observed for `explainTrace`. */
+function observeUnmatched(hooks: readonly Function[], trace: Trace): readonly Function[] {
+  return hooks.map((hook) => function observedUnmatched(ctx: unknown): unknown {
+    const event = trace.begin('onRequest', '[global]', hook.name === '' ? 'anonymous' : hook.name)
+    const started = performance.now()
+    const settle = (value: unknown): unknown => {
+      event.ms = performance.now() - started
+      event.outcome = value === undefined ? 'continue' : 'short-circuit'
+      return value
+    }
+    const result = (hook as (c: unknown) => unknown)(ctx)
+    return isThenable(result) ? result.then(settle) : settle(result)
+  })
+}
+
+/** What a route's `inject` compiled to — see `#resolveInjections`. */
+type Injection =
+  | { readonly kind: 'static'; readonly deps: Readonly<Record<string, unknown>> }
+  | { readonly kind: 'request'; readonly wrap: (handler: Function) => Function }
+
+function isToken(value: unknown): value is Token<unknown> {
+  return typeof value === 'object' && value !== null &&
+    typeof (value as Token<unknown>).name === 'string' && typeof (value as Token<unknown>).index === 'number'
+}
+
+/**
+ * The handler of a route that injects a per-request service: resolve what the
+ * request's scope holds, then call the handler with every service. A service
+ * whose build is synchronous costs no promise; one that is not is awaited
+ * before the handler runs, so the handler never sees a pending value.
+ */
+function injectedHandler(
+  handler: Function,
+  container: ZenContainer,
+  fixed: Readonly<Record<string, unknown>>,
+  perRequest: ReadonlyArray<readonly [string, Token<unknown>]>,
+): Function {
+  const call = handler as (ctx: unknown, deps: object) => unknown
+  return function injected(ctx: unknown): unknown {
+    const deps: Record<string, unknown> = { ...fixed }
+    let pending: Promise<unknown>[] | null = null
+    for (const [as, token] of perRequest) {
+      const value = container.resolveEither(token, ctx as PlainContext)
+      if (isThenable(value)) (pending ??= []).push(value.then((settled) => { deps[as] = settled }))
+      else deps[as] = value
+    }
+    if (pending === null) return call(ctx, Object.freeze(deps))
+    return Promise.all(pending).then(() => call(ctx, Object.freeze(deps)))
+  }
+}
+
+/** The fields of an `intake` that were written — so an absent one inherits the app's. */
+function definedOf(policy: NonNullable<RouteSpec['intake']>): Partial<BodyOptions> {
+  const out: { maxSize?: number; maxDepth?: number; maxFields?: number } = {}
+  if (policy.maxSize !== undefined) out.maxSize = policy.maxSize
+  if (policy.maxDepth !== undefined) out.maxDepth = policy.maxDepth
+  if (policy.maxFields !== undefined) out.maxFields = policy.maxFields
+  return out
+}
+
+/**
+ * §4.2 stage 6 — a route's `intake`, checked at boot: limits are positive
+ * whole numbers, the mode is one there is an intake for, and a stream is not
+ * also handed to a `body` schema it could never be validated by.
+ */
+function intakeProblems(key: string, schema: RouteSpec): Diagnostic[] {
+  const policy = schema.intake
+  if (policy === undefined) return []
+  if (typeof policy !== 'object' || policy === null) {
+    return [{
+      severity: 'error',
+      code: Codes.CONFIG_INVALID,
+      message: `${key} declares \`intake\` as ${policy === null ? 'null' : `a ${typeof policy}`}.`,
+      hint: "Write `intake: { maxSize: 10_000, mode: 'raw' }` — every field optional.",
+    }]
+  }
+  const out: Diagnostic[] = []
+  for (const field of ['maxSize', 'maxDepth', 'maxFields'] as const) {
+    const value = policy[field]
+    if (value === undefined) continue
+    const floor = field === 'maxDepth' ? 0 : 1
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < floor) {
+      out.push({
+        severity: 'error',
+        code: Codes.CONFIG_INVALID,
+        message: `${key} sets intake.${field} to ${JSON.stringify(value)}; it is a whole number of ${field === 'maxSize' ? 'bytes' : field === 'maxDepth' ? 'levels' : 'fields'}, at least ${floor}.`,
+        hint: field === 'maxSize' ? 'Write the limit in bytes — `5 * 1024 * 1024` for 5 MB.' : `Give ${field} a whole number.`,
+      })
+    }
+  }
+  const mode = policy.mode
+  if (mode !== undefined && mode !== 'parse' && mode !== 'raw' && mode !== 'stream') {
+    out.push({
+      severity: 'error',
+      code: Codes.CONFIG_INVALID,
+      message: `${key} sets intake.mode to ${JSON.stringify(mode)}.`,
+      hint: "The modes are 'parse' (the default), 'raw' and 'stream'.",
+    })
+  }
+  if (mode === 'stream' && schema.body !== undefined) {
+    out.push({
+      severity: 'error',
+      code: Codes.CONFIG_INVALID,
+      message: `${key} streams its body and also declares a \`body\` schema, which a stream cannot be validated against.`,
+      hint: "Drop the `body` schema and validate what the stream carries in the handler — or read the whole body with mode 'raw' and validate that.",
+    })
+  }
+  return out
+}
+
 /** Where an `inject()`ed request comes from unless it says otherwise. */
 const LOOPBACK: RemoteInfo = Object.freeze({ address: '127.0.0.1', port: 0, family: 'IPv4' })
 
@@ -2618,6 +3551,99 @@ function inScope(scope: Scope, absent: ReadonlySet<string>): boolean {
   }
   return false
 }
+
+/**
+ * A configured middleware waiting for boot (§8.6): the function a ref holds
+ * until `ready()` has validated its options and run its `setup`, mapped to the
+ * configuration it stands for. If one is ever called, a ref escaped boot —
+ * which is a framework bug, and it says so rather than doing nothing.
+ */
+const UNCONFIGURED = new WeakMap<Function, ConfiguredMiddleware>()
+
+/**
+ * One middleware registration, as a record — every surface builds its refs
+ * here, so a configured middleware (§8.6) and a condition (§8.7) mean the same
+ * thing wherever they are written: `app.use`, a collection, a route's `use`, a
+ * plugin's registrar.
+ */
+function middlewareRef(
+  kind: MiddlewareRef['kind'],
+  target: unknown,
+  opts: MiddlewareOptions<never> | undefined,
+  scope: string,
+  origin: SourceOrigin | undefined,
+  fallback: string,
+): MiddlewareRef {
+  const configured = isConfiguredMiddleware(target)
+  if (configured && kind !== 'phase') {
+    throw new ZenError(
+      Codes.MIDDLEWARE_OPTIONS,
+      `Middleware "${target.definition.name}" is phase middleware; register it with use(), not ${kind}().`,
+      { status: 500, expose: false },
+    )
+  }
+  if (!configured && typeof target !== 'function') {
+    throw new ZenError(
+      Codes.MIDDLEWARE_OPTIONS,
+      `${kind === 'phase' ? 'use' : kind}() was given ${target === null ? 'null' : `a ${typeof target}`}; ` +
+        'it takes a middleware function, a configured middleware, or (use only) a plugin.',
+      { status: 500, expose: false },
+    )
+  }
+  const name = opts?.name ?? (configured ? target.definition.name : ((target as Function).name || fallback))
+  const when = conditionOf(opts?.when, `middleware "${name}"`)
+  let fn = target as Function
+  if (configured) {
+    fn = function unconfigured(): never {
+      throw new ZenError(Codes.INTERNAL, `Middleware "${name}" was called before ready() set it up.`, { status: 500, expose: false })
+    }
+    UNCONFIGURED.set(fn, target)
+  }
+  return { kind, name, fn, scope, origin, ...(when === undefined ? {} : { when }) }
+}
+
+/**
+ * A diagnostic with `origin` as its origin, unless it already names its own —
+ * §5.1's rule for every boot diagnostic: the line that registered the thing it
+ * is about.
+ */
+function placed(diagnostic: Diagnostic, origin: SourceOrigin | undefined): Diagnostic {
+  if (origin === undefined || diagnostic.origins !== undefined) return diagnostic
+  return { ...diagnostic, origins: [origin] }
+}
+
+/**
+ * `locations` and `origins` for a diagnostic about several registrations, when
+ * every one of them has an origin — rendered pairwise, `GET /a  src/a.ts:3:1`.
+ * When one does not, the known ones are given without locations rather than
+ * paired with the wrong line.
+ */
+function pairedSites(
+  sites: ReadonlyArray<readonly [string, SourceOrigin | undefined]>,
+): { locations?: string[]; origins?: SourceOrigin[] } {
+  const known = sites.filter(([, origin]) => origin !== undefined)
+  if (known.length === 0) return {}
+  if (known.length === sites.length) {
+    return { locations: sites.map(([where]) => where), origins: sites.map(([, origin]) => origin as SourceOrigin) }
+  }
+  return { origins: known.map(([, origin]) => origin as SourceOrigin) }
+}
+
+/** The payload of a boot warning: its code, and the line it is about when known. */
+function logged(code: string, origin: SourceOrigin | undefined): Record<string, unknown> {
+  return origin === undefined ? { code } : { code, origin: formatOrigin(origin) }
+}
+
+/** The scope in `scope`'s chain whose id is `id` — where an inherited value was declared. */
+function declaringScope(scope: Scope, id: string): Scope | undefined {
+  for (let s: Scope | null = scope; s !== null; s = s.parent) {
+    if (s.id === id || (id === 'app' && s.parent === null)) return s
+  }
+  return undefined
+}
+
+/** What OpenAPI 3.1 accepts as a `components.schemas` key (§4.8.7.1). */
+const SCHEMA_NAME = /^[A-Za-z0-9._-]+$/
 
 /** An identifier the generated class can use as a getter name; `$` is reserved for internals. */
 const DECORATION_NAME = /^[A-Za-z_][A-Za-z0-9_$]*$/
@@ -2701,12 +3727,14 @@ function addHook(
   phase: Phase,
   fn: Function,
   name: string | undefined,
+  origin: SourceOrigin | undefined,
 ): void {
   const record: HookRecord = {
     phase,
     fn,
     scope: scope.id,
     name: name ?? (fn.name === '' ? undefined : fn.name),
+    origin,
   }
   if (isRequestPhase(phase)) {
     scope.hooks.push(record)
@@ -2780,7 +3808,7 @@ function isThenable(value: unknown): value is Promise<unknown> {
  * means global middleware added *after* a route still applies to it. Express's
  * position-dependent behaviour is why large apps there fear reordering imports.
  */
-function flattenMiddleware(pending: PendingRoute): MiddlewareRef[] {
+function flattenMiddleware(pending: PendingRoute, omitted: ReadonlySet<MiddlewareRef>): MiddlewareRef[] {
   const chain: MiddlewareRef[][] = []
   let scope: Scope | null = pending.scope
   while (scope !== null) {
@@ -2788,7 +3816,10 @@ function flattenMiddleware(pending: PendingRoute): MiddlewareRef[] {
     scope = scope.parent
   }
   chain.push(pending.middleware)
-  return chain.flat()
+  const flat = chain.flat()
+  // §8.7 — a step `when.env` turned off stays on the record, marked, so the
+  // tools can say so; the compiler reads the mark and emits nothing for it.
+  return omitted.size === 0 ? flat : flat.map((ref) => (omitted.has(ref) ? { ...ref, omitted: true } : ref))
 }
 
 /**

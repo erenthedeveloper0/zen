@@ -57,68 +57,6 @@ function f$0(v) {
 
 return f$0
 
-// ─── serializer:POST /users#201 ────────────────────────────────────────────
-function f$1(v) {
-  let t0
-  if (!Array.isArray(v)) return $notArray(v, "$.tags")
-  let s = '['
-  for (let i = 0; i < v.length; i++) {
-    if (i !== 0) s += ','
-    t0 = v[i]
-    s += (typeof t0 === 'string' ? $esc(t0) : $str(t0, "$.tags[]"))
-  }
-  return s + ']'
-}
-
-function f$0(v) {
-  let t0, t1, t2
-  if (v === null || typeof v !== 'object') return $notObject(v, "$")
-  let s = '{'
-  t0 = v.id
-  if (t0 === undefined) $missing("$.id")
-  s += "\"id\":" + (typeof t0 === 'number' && (t0 | 0) === t0 ? '' + t0 : $int(t0, "$.id"))
-  t1 = v.email
-  if (t1 === undefined) $missing("$.email")
-  s += ",\"email\":" + (typeof t1 === 'string' ? $esc(t1) : $str(t1, "$.email"))
-  t2 = v.tags
-  if (t2 === undefined) $missing("$.tags")
-  s += ",\"tags\":" + f$1(t2)
-  return s + '}'
-}
-
-return f$0
-
-// ─── serializer:POST /hooked/echo#200 ──────────────────────────────────────
-function f$1(v) {
-  let t0
-  if (!Array.isArray(v)) return $notArray(v, "$.tags")
-  let s = '['
-  for (let i = 0; i < v.length; i++) {
-    if (i !== 0) s += ','
-    t0 = v[i]
-    s += (typeof t0 === 'string' ? $esc(t0) : $str(t0, "$.tags[]"))
-  }
-  return s + ']'
-}
-
-function f$0(v) {
-  let t0, t1, t2
-  if (v === null || typeof v !== 'object') return $notObject(v, "$")
-  let s = '{'
-  t0 = v.id
-  if (t0 === undefined) $missing("$.id")
-  s += "\"id\":" + (typeof t0 === 'number' && (t0 | 0) === t0 ? '' + t0 : $int(t0, "$.id"))
-  t1 = v.email
-  if (t1 === undefined) $missing("$.email")
-  s += ",\"email\":" + (typeof t1 === 'string' ? $esc(t1) : $str(t1, "$.email"))
-  t2 = v.tags
-  if (t2 === undefined) $missing("$.tags")
-  s += ",\"tags\":" + f$1(t2)
-  return s + '}'
-}
-
-return f$0
-
 // ─── context ───────────────────────────────────────────────────────────────
 return class Ctx {
   constructor(raw, route, params, env, signal, deadline) {

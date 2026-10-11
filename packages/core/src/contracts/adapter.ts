@@ -53,6 +53,24 @@ export interface ListenOptions {
   readonly port?: number | undefined
   readonly host?: string | undefined
   readonly signal?: AbortSignal | undefined
+  /**
+   * The ingress limits configuration set — `policy.http` (§16.1, §19.2),
+   * handed over by `listen()`. An adapter applies each where its own option
+   * for it was not given: an explicit adapter argument wins, and configuration
+   * wins over the adapter's default — the precedence `app.listen(3000)` has
+   * over `server.port`.
+   */
+  readonly limits?: HttpLimits | undefined
+}
+
+/** Ingress limits an adapter enforces before dispatch — §4.2 stage 2, §19.2. */
+export interface HttpLimits {
+  /** The longest request target; past it, 414 before dispatch. */
+  readonly maxUrlLength?: number | undefined
+  /** Requests one keep-alive connection may carry; `0` is no limit. */
+  readonly maxRequestsPerSocket?: number | undefined
+  /** Bytes the request line and headers may take together. */
+  readonly maxHeaderSize?: number | undefined
 }
 
 export interface ServerHandle {

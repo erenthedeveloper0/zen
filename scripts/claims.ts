@@ -113,6 +113,13 @@ function http(url: string, init: { method?: string; headers?: Record<string, str
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** The line of this file the caller is on — read from the stack text, not through the capture under test. */
+function callerLine(): number {
+  const frame = (new Error().stack ?? '').split('\n')[2] ?? ''
+  const parts = frame.replace(/\)$/, '').split(':')
+  return Number(parts[parts.length - 2])
+}
+
 /** One request over a bare socket, so no client adds headers or retries; resolves with the raw reply. */
 function exchange(url: string, text: string): Promise<string> {
   return new Promise((resolve) => {
@@ -741,6 +748,289 @@ const CLAIMS: Readonly<Record<string, Probe>> = {
     }
   },
 
+  // (alpha.3 audit, probe 4 — the gap 0.2.0-alpha closed) Every registration
+  // records the line that wrote it, and every boot diagnostic prints it.
+  'route-origins': async () => {
+    const a = app()
+    a.get('/users/:id<int>', () => 'ok'); const line = callerLine()
+    a.get('/users/:id<int>', () => 'again')
+    let rendered = ''
+    try { await a.ready() } catch (error) { rendered = (error as Error).message }
+    const ok = rendered.includes(`scripts/claims.ts:${line}:`) && rendered.includes(`scripts/claims.ts:${line + 1}:`)
+    const b = app()
+    b.get('/n', () => 'ok'); const at = callerLine()
+    await b.ready()
+    const origin = b.graph().routes[0].origin
+    return verdict(
+      ok && origin?.file === 'scripts/claims.ts' && origin.line === at,
+      `route at ${origin?.file}:${origin?.line}; duplicate rendered ${ok ? 'both lines' : JSON.stringify(rendered.slice(0, 160))}`,
+    )
+  },
+
+  // (alpha.3 audit, probe 7 — the gap 0.2.0-alpha closed) A boot-time `when`
+  // omits the step; a request-time one guards it.
+  'middleware-when': async () => {
+    let gated = 0
+    let guarded = 0
+    const a = app({ env: { MODE: 'prod' } })
+    a.use(() => { gated++ }, { name: 'gated', when: { env: (env: any) => env.MODE === 'dev' } })
+    a.use(() => { guarded++ }, { name: 'guarded', when: { request: (ctx: any) => ctx.headers['x-on'] === '1' } })
+    a.get('/', () => 'ok')
+    await a.inject('GET', '/')
+    await a.inject('GET', '/', { headers: { 'x-on': '1' } })
+    const text = explainRoute(a.graph().routes[0])
+    const ok = gated === 0 && guarded === 1 && text.includes('[omitted at boot]') && text.includes('[guarded]')
+    return verdict(ok, `env-gated ran ${gated}×, request-guarded ran ${guarded}× in 2 requests`)
+  },
+
+  // §8.6 — a configured middleware's options are refused at boot with the key that was meant.
+  'define-middleware': async () => {
+    const { defineMiddleware } = Z as Record<string, any>
+    const limited = defineMiddleware({
+      name: 'limited',
+      options: shaped({ type: 'object', properties: { limit: { type: 'number' } }, required: ['limit'] }),
+      setup: (opts: any) => (ctx: any) => { ctx.res.header('x-limit', String(opts.limit)) },
+    })
+    const bad = app()
+    bad.use(limited({ limt: 5 }))
+    bad.get('/', () => 'ok')
+    const codes = await bootCodes(bad)
+    const good = app()
+    good.use(limited({ limit: 5 }))
+    good.get('/', () => 'ok')
+    const header = (await good.inject('GET', '/')).header('x-limit')
+    return verdict(codes.includes('ZEN_MIDDLEWARE_OPTIONS') && header === '5', `typo → ${codes.join(',')}; configured → x-limit ${header}`)
+  },
+
+  // (alpha.3 audit, probe 14 — the gap 0.2.0-alpha closed) A route's own body
+  // limit is compiled into its intake; the app's applies everywhere else.
+  'route-body-policy': async () => {
+    const a = app()
+    a.post('/upload', { body: schema(() => true), intake: { maxSize: 10 } }, () => 'ok')
+    a.post('/other', { body: schema(() => true) }, () => 'ok')
+    const limited = (await a.inject('POST', '/upload', { body: { big: 'x'.repeat(200) } })).status
+    const other = (await a.inject('POST', '/other', { body: { big: 'x'.repeat(200) } })).status
+    return verdict(limited === 413 && other === 200, `10-byte route limit → ${limited}; app default elsewhere → ${other}`)
+  },
+
+  // §11.7 — a business rule's issue is a 422 in the schema envelope, tagged source: check.
+  'route-check': async () => {
+    const { issue } = Z as Record<string, any>
+    const a = app()
+    a.post('/users', { body: shaped({ type: 'object', properties: { email: { type: 'string' } }, required: ['email'] }),
+      check: (ctx: any) => (ctx.body.email === 'taken@x.io' ? issue('email', 'taken', 'Email already registered') : undefined),
+    }, () => 'created')
+    const refused = await a.inject('POST', '/users', { body: { email: 'taken@x.io' } })
+    const accepted = await a.inject('POST', '/users', { body: { email: 'new@x.io' } })
+    const source = refused.json().errors?.[0]?.source
+    return verdict(refused.status === 422 && source === 'check' && accepted.status === 200, `taken → ${refused.status} (${source}); new → ${accepted.status}`)
+  },
+
+  // §15.1 — injected singletons are resolved once, at boot, and handed to the handler.
+  'declarative-injection': async () => {
+    let built = 0
+    const Db = token(`claims.db.${Math.random()}`)
+    const a = app()
+    a.provide(Db, () => { built++; return { name: 'db' } })
+    a.get('/x', { inject: { db: Db } }, (_ctx: any, deps: any) => deps.db.name)
+    await a.ready()
+    const before = built
+    const text = (await a.inject('GET', '/x')).text()
+    await a.inject('GET', '/x')
+    return verdict(before === 1 && built === 1 && text === 'db', `built ${before}× at boot, ${built}× after two requests; handler saw ${text}`)
+  },
+
+  // §15.2 — an optional token with no provider is undefined, and boots.
+  'optional-tokens': async () => {
+    const Tracer = token(`claims.tracer.${Math.random()}`, { optional: true })
+    const a = app()
+    a.get('/x', (ctx: any) => ({ traced: ctx.resolve(Tracer) !== undefined }))
+    const res = await a.inject('GET', '/x')
+    return verdict(res.status === 200 && res.json().traced === false, `status ${res.status}, body ${res.text()}`)
+  },
+
+  // §10.2 — a named schema is published under its name, used or not.
+  'named-schemas': async () => {
+    const a = app()
+    a.schema('ApiProblem', jsonSchema({ type: 'object', properties: { code: { type: 'string' } } }))
+    a.get('/x', () => 'ok')
+    await a.ready()
+    const document = OAS.openapiDocument(a.graph(), { title: 't', version: '1' }).document as any
+    const published = document.components?.schemas?.ApiProblem !== undefined
+    const b = app()
+    b.schema('User', jsonSchema({ type: 'object' }))
+    b.schema('User', jsonSchema({ type: 'string' }))
+    const codes = await bootCodes(b)
+    return verdict(published && codes.includes('ZEN_SCHEMA_NAME'), `published: ${published}; two schemas under one name → ${codes.join(',')}`)
+  },
+
+  // §12.8 — a broken formatter logs one fatal per episode, not one per request.
+  'formatter-breaker': async () => {
+    const { ZenError } = Z as Record<string, any>
+    let fatals = 0
+    const logger = { ...new NoopLogger(), level: 'trace', child() { return logger }, fatal() { fatals++ }, error() {}, warn() {}, info() {}, debug() {}, trace() {} }
+    class Unformattable extends ZenError { toProblem(): never { throw new Error('broken formatter') } }
+    const a = app({ logger })
+    a.get('/x', () => { throw new Unformattable('ZEN_INTERNAL', 'x') })
+    const statuses: number[] = []
+    for (let i = 0; i < 12; i++) statuses.push((await a.inject('GET', '/x')).status)
+    return verdict(fatals === 1 && statuses.every((st) => st === 500), `12 failures → ${fatals} fatal line(s)`)
+  },
+
+  // §11.5 — a wrong value is refused under 'error' and served under 'off'.
+  'response-validation': async () => {
+    const User = shaped({ type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] })
+    const strict = app({ validation: { response: 'error' } })
+    strict.get('/u', { response: { 200: User } }, () => ({ id: 'seven' }))
+    const off = app()
+    off.get('/u', { response: { 200: User } }, () => ({ id: 'seven' }))
+    const refused = await strict.inject('GET', '/u')
+    const served = await off.inject('GET', '/u')
+    const pipeline = (a: any) => a.generatedSource().find((u: any) => u.name === 'pipeline:GET_/u')?.source ?? ''
+    return verdict(
+      refused.json().code === 'ZEN_RESPONSE_INVALID' && served.status === 200 && !pipeline(off).includes('validateResponse'),
+      `'error' → ${refused.json().code}; 'off' → ${served.status}, nothing emitted`,
+    )
+  },
+
+  // §16.1, §19.2 — request policy has a source, and the hardened profile is one.
+  'request-policy': async () => {
+    const a = app({ timeout: '5s' })
+    a.get('/', () => 'ok')
+    await a.ready()
+    const timeout = a.graph().config.values.find((v: any) => v.path === 'policy.timeout.default')
+    const b = app({ profile: 'hardened', trustProxy: 1 })
+    b.get('/', () => 'ok')
+    await b.ready()
+    const hardened = b.graph().config.values.find((v: any) => v.path === 'policy.timeout.default')
+    return verdict(
+      timeout?.source === 'zen()' && hardened?.source === 'profile: hardened' && b.graph().routes[0].timeout?.ms === 30_000,
+      `zen({ timeout }) ← ${timeout?.source}; hardened deadline ${b.graph().routes[0].timeout?.ms} ms ← ${hardened?.source}`,
+    )
+  },
+
+  // §31.1 — the built-in logger hides credentials by default, wherever they are.
+  'log-redaction': async () => {
+    const written: string[] = []
+    const original = console.log
+    console.log = (line: string) => { written.push(line) }
+    try {
+      const a = zen({ lifecycle: false, env: {}, logger: undefined })
+      a.get('/', (ctx: any) => { ctx.log.info({ headers: { authorization: 'Bearer abc' }, user: { password: 'p' } }, 'probe'); return 'ok' })
+      await a.inject('GET', '/')
+    } finally {
+      console.log = original
+    }
+    const line = written.map((l) => JSON.parse(l)).find((l: any) => l.msg === 'probe')
+    const hidden = line?.headers?.authorization === '********' && line?.user?.password === '********'
+    return verdict(hidden, `authorization → ${line?.headers?.authorization}, password → ${line?.user?.password}`)
+  },
+
+  // §7.3 — development seals the context; production is unchanged.
+  'dev-seal': async () => {
+    const statuses: number[] = []
+    for (const dev of [true, false]) {
+      const a = app({ dev })
+      a.get('/', (ctx: any) => { ctx.user = { id: 1 }; return 'ok' })
+      statuses.push((await a.inject('GET', '/')).status)
+    }
+    return verdict(statuses[0] === 500 && statuses[1] === 200, `ctx.user = x → ${statuses[0]} in dev, ${statuses[1]} in production`)
+  },
+
+  // §12.6 — a development error says where, and a browser gets a page; production says neither.
+  'dev-error-facts': async () => {
+    const results: Array<{ debug: any; page: boolean }> = []
+    for (const dev of [true, false]) {
+      const a = app({ dev, devErrors: { readSource: () => undefined, report: () => undefined } })
+      a.get('/users/:id', function showUser() { throw new Error('gone') })
+      const res = await a.inject('GET', '/users/1')
+      const page = await a.inject('GET', '/users/1', { headers: { accept: 'text/html' } })
+      results.push({ debug: res.json().debug, page: (page.header('content-type') ?? '').startsWith('text/html') })
+    }
+    const [dev, prod] = results
+    const placed = /claims\.ts:\d+:\d+$/.test(String(dev?.debug?.thrown)) && /claims\.ts:\d+:\d+$/.test(String(dev?.debug?.origin))
+    const chained = Array.isArray(dev?.debug?.chain) && dev.debug.chain.includes('handler showUser')
+    return verdict(placed && chained && dev?.page === true && prod?.debug === undefined && prod?.page === false,
+      `dev: raised at ${dev?.debug?.thrown}, registered ${dev?.debug?.origin}, page ${dev?.page}; production: debug ${prod?.debug === undefined ? 'absent' : 'present'}, page ${prod?.page}`)
+  },
+
+  // §2.4, §29.7 — the graph as a document, with fingerprints that ignore registration order.
+  'graph-document': async () => {
+    const build = async (order: string[]) => {
+      const a = app()
+      for (const path of order) a.get(path, { response: { 200: shaped({ type: 'object', properties: { id: { type: 'integer' } } }) } }, () => ({ id: 1 }))
+      await a.ready()
+      return a.graphDocument()
+    }
+    const one = await build(['/a', '/b', '/c'])
+    const two = await build(['/c', '/a', '/b'])
+    const round = JSON.parse(JSON.stringify(one))
+    const same = one.fingerprint === two.fingerprint && round.fingerprint === one.fingerprint
+    return verdict(same && /^sha256-[0-9a-f]{64}$/.test(one.fingerprint) && one.routes.length === 3,
+      `fingerprint ${one.fingerprint.slice(0, 12)}… for both registration orders; ${one.routes.length} routes`)
+  },
+
+  // §8.5 — EXPLAIN ANALYZE: what one request did at each step, without changing the application.
+  'explain-request': async () => {
+    const { explainRequest } = Z as Record<string, any>
+    const a = app()
+    a.hook('onRequest', function rateLimit() { return undefined })
+    a.get('/x', function show() { return { ok: true } })
+    await a.ready()
+    const units = a.generatedSource().length
+    const explained = await explainRequest(a, 'GET', '/x')
+    const steps = explained.events.map((e: any) => `${e.kind} ${e.name}`)
+    return verdict(steps.join(',') === 'onRequest rateLimit,handler show' && a.generatedSource().length === units,
+      `steps: ${steps.join(' → ')}; units compiled into the app: ${a.generatedSource().length - units}`)
+  },
+
+  // §29.7 — the diff reads bounds, and agrees with the contract fingerprint about what changed.
+  'contract-diff': async () => {
+    const { contractFingerprint } = Z as Record<string, any>
+    const doc = (body: any) => ({
+      openapi: '3.1.0', info: { title: 't', version: '1' },
+      paths: { '/u': { post: { operationId: 'u', requestBody: { required: true, content: { 'application/json': { schema: body } } }, responses: { '200': { description: 'OK' } } } } },
+    })
+    const name = (extra: any) => ({ type: 'object', properties: { name: { type: 'string', ...extra } }, required: ['name'] })
+    const tightened = OAS.diffDocuments(doc(name({ maxLength: 100 })), doc(name({ maxLength: 10 }))).changes
+    const reworded = OAS.diffDocuments(doc(name({ maxLength: 100 })), doc(name({ maxLength: 100, description: 'Your name' }))).changes
+    const fp = async (body: any): Promise<string> => contractFingerprint({ method: 'POST', path: '/u', request: { body }, responses: { 200: null } })
+    const moved = (await fp(name({ maxLength: 100 }))) !== (await fp(name({ maxLength: 10 })))
+    const kept = (await fp(name({ maxLength: 100 }))) === (await fp(name({ maxLength: 100, description: 'Your name' })))
+    const breaks = tightened.some((c: any) => c.code === 'OAS_CONSTRAINT_TIGHTENED' && c.kind === 'breaking')
+    const doc_only = reworded.every((c: any) => c.kind === 'documentation')
+    return verdict(breaks && doc_only && moved && kept,
+      `maxLength 100 → 10: ${tightened.map((c: any) => `${c.kind} ${c.code}`).join(', ') || 'nothing'}, fingerprint ${moved ? 'changed' : 'kept'}; a description: ${reworded.map((c: any) => c.kind).join(', ') || 'nothing'}, fingerprint ${kept ? 'kept' : 'changed'}`)
+  },
+
+  // §15.5, §20.2, §20.3 — the testing kit, from the meta-package's subpath.
+  'testing-kit': async () => {
+    const T = await import('@erenthedeveloper0/zen/testing') as Record<string, any>
+    const Store = token(`claims.store.${process.pid}`)
+    const storePlugin = definePlugin({ name: `claims-store-${process.pid}`, version: '1.0.0', setup(r: any) { r.provide(Store, () => 'real'); return { provides: {} } } })
+    const t = await T.createTestApp(() => {
+      const a = app()
+      a.use(storePlugin)
+      a.get('/', { inject: { store: Store } }, (_ctx: any, deps: any) => deps.store)
+      return a
+    }, { override: [[Store, () => 'fake']] })
+    const served = (await t.get('/')).text()
+    await T.assertNoLeaks(t)
+    const User = slot(`claims.user.${process.pid}`)
+    const ctx = T.testContext({ params: { id: 1 }, slots: [[User, 'ada']] })
+    const read = `${ctx.params.id}/${ctx.get(User)}`
+    let leaked: any
+    const leaky = await T.createTestApp(() => {
+      const a = app()
+      a.provide(token(`claims.poller.${process.pid}`), { factory: () => ({ handle: (leaked = setInterval(() => {}, 60_000)) }), eager: true })
+      return a
+    })
+    let caught = ''
+    try { await T.assertNoLeaks(leaky, { within: 50 }) } catch (error) { caught = (error as Error).message } finally { clearInterval(leaked) }
+    return verdict(served === 'fake' && read === '1/ada' && /Timeout/.test(caught),
+      `a plugin's provider replaced → "${served}"; testContext → ${read}; a leaked interval → ${caught === '' ? 'passed' : 'refused'}`)
+  },
+
   'unit-retention': async () => {
     const production = zen({ logger: new NoopLogger(), lifecycle: false, env: {} })
     production.get('/a/:b', () => 'ok')
@@ -763,25 +1053,6 @@ const CLAIMS: Readonly<Record<string, Probe>> = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const GAPS: Readonly<Record<string, Probe>> = {
-  // (alpha.3 audit, probe 4)
-  'route-origin': async () => {
-    const a = app()
-    a.get('/users/:id<int>', () => 'ok')
-    await a.ready()
-    const origin = a.graph().routes[0].origin
-    return verdict(origin === undefined, `origin=${JSON.stringify(origin)}`)
-  },
-
-  // (alpha.3 audit, probe 7)
-  'middleware-when': async () => {
-    let ran = 0
-    const a = app()
-    a.use(() => { ran++ }, { name: 'gated', when: () => false })
-    a.get('/', () => 'ok')
-    await a.inject('GET', '/')
-    return verdict(ran === 1, `ran ${ran}× with when: () => false`)
-  },
-
   // (alpha.3 audit, probe 8)
   'router-codegen': async () => {
     const a = app()
@@ -799,13 +1070,6 @@ const GAPS: Readonly<Record<string, Probe>> = {
     return verdict(status !== 201, `status=${status}`)
   },
 
-  // (alpha.3 audit, probe 14)
-  'per-route-body-limit': async () => {
-    const a = app()
-    a.post('/upload', { body: schema(() => true), bodyLimit: 10, maxBodySize: 10 }, () => 'ok')
-    const status = (await a.inject('POST', '/upload', { body: { big: 'x'.repeat(200) } })).status
-    return verdict(status === 200, `10-byte route limit → ${status}`)
-  },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

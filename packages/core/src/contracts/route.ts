@@ -5,7 +5,11 @@ import type { CoercionRecord, CoercionSpec } from './coercion.ts'
 import type { HookRecord, RequestPhase, RouteHooks } from './hook.ts'
 import type { TimeoutRecord, TimeoutSpec } from './deadline.ts'
 import type { NegotiationRecord, ResponseSpec } from './negotiation.ts'
-import type { PhaseMiddleware } from './middleware.ts'
+import type { ConfiguredMiddleware, MiddlewareCondition, PhaseMiddleware } from './middleware.ts'
+import type { Token } from './container.ts'
+import type { Context } from './context.ts'
+import type { Issue } from '../errors/http-errors.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Path syntax — rfcs/0001 §5.2. No regex, ever: regex paths defeat trie
@@ -118,7 +122,7 @@ export interface RouteSpec extends RouteSchema {
    * schema — a middleware is written once and listed on many routes, so no one
    * route's `params` or `body` can be its type.
    */
-  readonly use?: readonly PhaseMiddleware<never>[] | undefined
+  readonly use?: readonly (PhaseMiddleware<never> | ConfiguredMiddleware)[] | undefined
   /** Route-scoped hooks — the innermost scope of §9.3. */
   readonly hooks?: RouteHooks | undefined
   /**
@@ -140,7 +144,109 @@ export interface RouteSpec extends RouteSchema {
    * `?ids=1,2` where the rest of the API repeats the key.
    */
   readonly coercion?: CoercionSpec | undefined
+  /**
+   * Business rules — §11.7. Runs after the route's schemas have validated,
+   * before `postValidation` and `preHandler`, with the whole context and its
+   * services; returns nothing, one issue, or several:
+   *
+   *     check: async (ctx) => {
+   *       if (await users.emailTaken(ctx.body.email)) return issue('email', 'taken', 'Email already registered')
+   *     }
+   *
+   * Issues are a 422 `ZEN_VALIDATION` with `source: 'check'`, in the envelope
+   * schema failures use, so a client parses one format for both classes of
+   * failure while the status tells them apart (400 for malformed, 422 for not
+   * allowed). A rule that means something else — a 409, a 403 — throws that.
+   *
+   * Typed here as `unknown` on purpose: its real type is written by the verb
+   * (`RouteSpecOf`), which is the only place TypeScript can see the schemas
+   * beside it, so `ctx.body` in a `check` is the route's validated body.
+   */
+  readonly check?: unknown
+  /**
+   * Declarative injection — §15.1, L3. The handler receives the services as its
+   * second argument:
+   *
+   *     app.get('/users/:id', { inject: { db: Db } }, (ctx, { db }) => db.find(ctx.params.id))
+   *
+   * When every token is a singleton, the object is resolved once, at boot, and
+   * frozen: the pipeline passes the same reference to every request, so it
+   * costs nothing per request. A scoped or transient token is resolved per
+   * request, from the request's own scope. A token with no provider is a boot
+   * error naming this route; an optional one (§15.2) is `undefined`.
+   */
+  readonly inject?: Readonly<Record<string, Token<unknown>>> | undefined
+  /**
+   * This route's body policy — §4.2 stage 6, §19.2. Each field overrides the
+   * application's `body` option for this route alone:
+   *
+   *     app.post('/avatar', { intake: { maxSize: 5 * 1024 * 1024, mode: 'raw' } }, (ctx) => store(ctx.body))
+   *
+   * `mode: 'parse'` (the default) parses by content type; `'raw'` hands the
+   * handler the bytes; `'stream'` hands it an `AsyncIterable<Uint8Array>` with
+   * `maxSize` enforced chunk by chunk, for uploads too large to hold. A stream
+   * cannot be validated, so `'stream'` with a `body` schema is a boot error.
+   * Declaring an intake declares that the route reads its body: without a
+   * `body` schema, `ctx.body` is the parsed value, unvalidated.
+   */
+  readonly intake?: IntakeSpec | undefined
 }
+
+/** §4.2 stage 6 — what `RouteSpec.intake` may override. */
+export interface IntakeSpec {
+  /** Bytes. Enforced during the read — a larger body is aborted at `maxSize + 1`. */
+  readonly maxSize?: number | undefined
+  readonly maxDepth?: number | undefined
+  readonly maxFields?: number | undefined
+  readonly mode?: 'parse' | 'raw' | 'stream' | undefined
+}
+
+/** What a `check` may answer — §11.7: nothing, one issue, or several. */
+export type CheckResult = Issue | readonly Issue[] | void | undefined | null
+
+/** A route's `check`, typed by the route — see {@link RouteSpecOf}. */
+export type RouteCheck<S extends RouteSpec, X, P extends string> =
+  (ctx: Context<S, X, P>) => MaybePromise<CheckResult>
+
+/**
+ * The spec argument of `app.get(path, spec, handler)` — `S` itself, with
+ * `check` typed by the route it belongs to.
+ *
+ * A homomorphic mapped type, and that is the whole trick: TypeScript infers `S`
+ * from it property by property, so the schemas beside `check` are known by the
+ * time `check`'s own parameter is typed, and `ctx.body` inside it is the
+ * route's validated body. Written as `spec: S & { check?: … }` the inference
+ * fails — `check` mentions `S`, so `S` falls back to its constraint and every
+ * source becomes `never`.
+ */
+export type RouteSpecOf<S extends RouteSpec, X, P extends string> = {
+  readonly [K in keyof S]: K extends 'check' ? RouteCheck<S, X, P> : S[K]
+}
+
+/**
+ * A spec with no `check` — what the first overload of every verb takes.
+ *
+ * Two overloads rather than one because each form of inference loses
+ * something the other keeps. Inferring `S` directly keeps every literal — a
+ * nested `intake: { mode: 'stream', maxSize }` stays `'stream'`, which is what
+ * types `ctx.body` as a stream — but cannot type a `check` written beside the
+ * schemas it reads. {@link RouteSpecOf} types the `check` and widens such
+ * literals. So a spec without a `check` takes the first, and one with a
+ * `check` the second.
+ */
+export interface SpecWithoutCheck {
+  readonly check?: undefined
+}
+
+/**
+ * The second argument a handler of an `inject` route receives (§15.1) — each
+ * key's service type. `never` on a route that injects nothing, so a handler
+ * that declares one is a mistake the compiler names.
+ */
+export type DepsOf<S> =
+  S extends { readonly inject: infer I }
+    ? { readonly [K in keyof I]: I[K] extends Token<infer T> ? T : never }
+    : never
 
 export type InferParams<S extends RouteSchema, P extends string> =
   S['params'] extends AnySchema ? InferOutput<S['params']> : ExtractParams<P>
@@ -156,10 +262,18 @@ export type InferCookies<S extends RouteSchema> =
 
 /**
  * `never` when the route declares no body — so *reading* `ctx.body` on a GET is
- * a compile error rather than a runtime `undefined`.
+ * a compile error rather than a runtime `undefined`. A route that declares an
+ * `intake` without a schema reads its body unvalidated: the bytes in `'raw'`
+ * mode, a stream of them in `'stream'` mode, and `unknown` when parsed.
  */
 export type InferBody<S extends RouteSchema> =
-  S['body'] extends AnySchema ? InferOutput<S['body']> : never
+  S['body'] extends AnySchema ? InferOutput<S['body']> : IntakeBody<S>
+
+type IntakeBody<S> =
+  S extends { readonly intake: { readonly mode: 'stream' } } ? AsyncIterable<Uint8Array>
+  : S extends { readonly intake: { readonly mode: 'raw' } } ? Uint8Array
+  : S extends { readonly intake: object } ? unknown
+  : never
 
 /**
  * What one status's declaration permits the handler to return.
@@ -192,11 +306,11 @@ export type HandlerResult<S extends RouteSchema> =
 // Records
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface SourceOrigin {
-  readonly file: string
-  readonly line: number
-  readonly column: number
-}
+/**
+ * Where a registration was written — `src/features/users/routes.ts:31:3`.
+ * Declared beside its capture in `primitives/origin.ts`, which stratum 0 needs.
+ */
+export type { SourceOrigin } from '../primitives/origin.ts'
 
 export type RouteId = string & { readonly __routeId?: unique symbol }
 export type CollectionId = string & { readonly __collectionId?: unique symbol }
@@ -212,7 +326,8 @@ export interface RouteRecord {
   /** Fully composed, including all ancestor prefixes. Normalised. */
   readonly path: string
   readonly segments: readonly PathSegment[]
-  readonly schema: RouteSchema
+  /** The spec as registered — schemas, and `check`, `inject` and `intake` beside them. */
+  readonly schema: RouteSpec
   readonly handler: (ctx: never) => unknown
   readonly middleware: readonly MiddlewareRef[]
   /**
@@ -269,6 +384,13 @@ export interface RouteRecord {
   readonly meta: ReadonlyMap<string, unknown>
   readonly collection: CollectionId | null
   readonly origin: SourceOrigin | undefined
+  /**
+   * Every service this route can reach through `inject` (§15.1), transitively
+   * through the providers' declared `deps`, by token name, sorted. Empty for a
+   * route that injects nothing. What a dependency blast-radius tool reads: the
+   * routes that stop working when a service does.
+   */
+  readonly dependencies: readonly string[]
 }
 
 export interface MiddlewareRef {
@@ -277,6 +399,14 @@ export interface MiddlewareRef {
   readonly fn: Function
   readonly scope: string
   readonly origin: SourceOrigin | undefined
+  /** §8.7 — the registration's condition, as written. */
+  readonly when?: MiddlewareCondition<never> | undefined
+  /**
+   * §8.7 — `true` when `when.env` answered `false` at boot. The step stays on
+   * the record, so `explainRoute` and the graph can say it was turned off, and
+   * is never compiled: no pipeline holds a line for it.
+   */
+  readonly omitted?: boolean | undefined
 }
 
 export interface RouteDefinition {

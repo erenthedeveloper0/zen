@@ -740,3 +740,55 @@ describe('serializer: end to end through the app', () => {
     assert.match(error.message, /fix: Give every branch a literal discriminant/)
   })
 })
+
+describe('serializer: one per shape, shared across routes (§11.6)', () => {
+  const units = (app: ReturnType<typeof makeApp>) =>
+    app.generatedSource().filter((u) => u.name.startsWith('serializer:')).map((u) => u.name)
+
+  test('three routes returning one schema compile one serializer, and each still filters', async () => {
+    const User = jsonSchema({ type: 'object', properties: { id: { type: 'integer' }, name: { type: 'string' } }, required: ['id'] })
+    const app = makeApp()
+    app.get('/a', { response: { 200: User } }, () => ({ id: 1, name: 'a', passwordHash: 'x' }))
+    app.get('/b', { response: { 200: User } }, () => ({ id: 2, name: 'b', passwordHash: 'x' }))
+    app.post('/c', { response: { 201: User } }, (ctx) => { ctx.res.status(201); return { id: 3, passwordHash: 'x' } })
+    await app.ready()
+    assert.deepEqual(units(app), ['serializer:GET /a#200'])
+    assert.equal((await app.inject('GET', '/a')).text(), '{"id":1,"name":"a"}')
+    assert.equal((await app.inject('GET', '/b')).text(), '{"id":2,"name":"b"}')
+    assert.equal((await app.inject('POST', '/c')).text(), '{"id":3}')
+  })
+
+  test('two schema objects that write the same bytes share by structure; a different shape does not', async () => {
+    const app = makeApp()
+    const plain = jsonSchema({ type: 'object', properties: { id: { type: 'integer' } } })
+    // Documentation and validation-only keywords write nothing different.
+    const described = jsonSchema({ type: 'object', description: 'a user', properties: { id: { type: 'integer', minimum: 1 } } })
+    const other = jsonSchema({ type: 'object', properties: { id: { type: 'string' } } })
+    app.get('/plain', { response: { 200: plain } }, () => ({ id: 1 }))
+    app.get('/described', { response: { 200: described } }, () => ({ id: 1 }))
+    app.get('/other', { response: { 200: other } }, () => ({ id: 'x' }))
+    await app.ready()
+    assert.deepEqual(units(app), ['serializer:GET /plain#200', 'serializer:GET /other#200'])
+  })
+
+  test('diagnostics stay per route: a shared schema is reported for every route that uses it', async () => {
+    const Leaky = jsonSchema({ type: 'object', properties: { password: { type: 'string', writeOnly: true } } })
+    const app = makeApp()
+    app.get('/one', { response: { 200: Leaky } }, () => ({}))
+    app.get('/two', { response: { 200: Leaky } }, () => ({}))
+    const error = await app.ready().then(() => null, (e: unknown) => e as { diagnostics: Array<{ code: string; message: string }> })
+    const writeOnly = (error?.diagnostics ?? []).filter((d) => d.code === 'ZEN_RESPONSE_WRITE_ONLY')
+    assert.equal(writeOnly.length, 2)
+    assert.ok(writeOnly.some((d) => d.message.includes('GET /one')))
+    assert.ok(writeOnly.some((d) => d.message.includes('GET /two')))
+  })
+
+  test('strict and lenient are different serializers, never shared across that line', async () => {
+    const User = jsonSchema({ type: 'object', properties: { id: { type: 'integer' } } })
+    const strict = makeApp({ serialization: { strict: true } })
+    const lenient = makeApp({ serialization: { strict: false } })
+    for (const app of [strict, lenient]) app.get('/u', { response: { 200: User } }, () => ({ id: 'not a number' }))
+    assert.equal((await strict.inject('GET', '/u')).status, 500)
+    assert.equal((await lenient.inject('GET', '/u')).status, 200)
+  })
+})

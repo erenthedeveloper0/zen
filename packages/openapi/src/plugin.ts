@@ -121,6 +121,9 @@ function toBootDiagnostic(diagnostic: DocDiagnostic): Diagnostic {
     message: diagnostic.message,
     hint: diagnostic.hint,
     locations: [diagnostic.where],
+    // The route's registration line (§5.1); a diagnostic about no route in
+    // particular is placed by the boot at this plugin's `use()` instead.
+    ...(diagnostic.origin === undefined ? {} : { origins: [diagnostic.origin] }),
   }
 }
 

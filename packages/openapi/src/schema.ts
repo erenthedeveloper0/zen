@@ -1,4 +1,4 @@
-import type { JsonSchema, JsonSchemaNode, JsonType } from '@erenthedeveloper0/zen-core'
+import type { JsonSchema, JsonSchemaNode, JsonType, SourceOrigin } from '@erenthedeveloper0/zen-core'
 import { resolveRef } from '@erenthedeveloper0/zen-core'
 import type { OpenApiSchema } from './types.ts'
 
@@ -33,6 +33,11 @@ export interface DocDiagnostic {
   /** Where the problem is, in human terms: `GET /users/:id → response 200`. */
   readonly where: string
   readonly hint?: string | undefined
+  /**
+   * The line that registered the route, or the plugin, the problem is about
+   * (§5.1) — what `strict: true` turns into the boot diagnostic's origin.
+   */
+  readonly origin?: SourceOrigin | undefined
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

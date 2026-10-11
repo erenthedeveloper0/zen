@@ -6,15 +6,24 @@ import { Codes } from '../errors/codes.ts'
 import { allocateCell } from '../registry/slot-registry.ts'
 import { intrinsicDisposer, trackDisposal, type DisposalCarrier } from '../primitives/disposal.ts'
 import { closest } from '../primitives/nearest.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * Declare a typed service identifier.
  *
  * Interfaces are first-class citizens — `token<Logger>('logger')` works, whereas
  * class-based DI cannot inject an interface at all.
+ *
+ * `{ optional: true }` declares a service the application may not provide —
+ * §15.2. Resolving it without a provider is `undefined`, and nothing that
+ * depends on it is refused at boot for its absence. The type says so: the
+ * token's value is `T | undefined`, so the code that reads it has to decide.
  */
-export function token<T>(name: string): Token<T> {
-  return { name, index: allocateCell(`service:${name}`, 'service') }
+export function token<T>(name: string, options: { readonly optional: true }): Token<T | undefined>
+export function token<T>(name: string, options?: { readonly optional?: false | undefined }): Token<T>
+export function token<T>(name: string, options: { readonly optional?: boolean | undefined } = {}): Token<T> {
+  const index = allocateCell(`service:${name}`, 'service')
+  return options.optional === true ? { name, index, optional: true } : { name, index }
 }
 
 interface Entry<T> {
@@ -24,6 +33,7 @@ interface Entry<T> {
   readonly lifetime: Lifetime
   readonly dispose: ((value: T) => void | Promise<void>) | undefined
   readonly eager: boolean
+  readonly origin: SourceOrigin | undefined
   instance: T | undefined
   resolved: boolean
   /**
@@ -44,8 +54,28 @@ export class ZenContainer implements Container {
   /** Singletons to release at shutdown, oldest first, each with how to release it. */
   #disposeOrder: Array<{ readonly entry: Entry<unknown>; readonly dispose: (value: never) => void | Promise<void> }> = []
   #resolving = new Set<Token<unknown>>()
+  /** Tokens a test replaced — see `override`. */
+  #overridden = new Set<Token<unknown>>()
 
-  provide<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T)): void {
+  provide<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T), origin?: SourceOrigin): void {
+    // A test's replacement wins over every provider, whenever it registers —
+    // a plugin's `setup` providing the real service at boot included (§15.5).
+    if (this.#overridden.has(token as Token<unknown>)) return
+    this.#set(token, spec, origin)
+  }
+
+  /**
+   * Replace a service for a test — §15.5. Sticky: a `provide()` of the same
+   * token afterwards, by the application or by a plugin as it boots, is
+   * ignored, so the fake is the one the application is compiled with whatever
+   * order the two were registered in.
+   */
+  override<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T), origin?: SourceOrigin): void {
+    this.#overridden.add(token as Token<unknown>)
+    this.#set(token, spec, origin)
+  }
+
+  #set<T>(token: Token<T>, spec: ProviderSpec<T> | ((...deps: never[]) => T), origin: SourceOrigin | undefined): void {
     const normalised: ProviderSpec<T> = typeof spec === 'function' ? { factory: spec } : spec
     this.#entries.set(token as Token<unknown>, {
       token: token as Token<unknown>,
@@ -54,6 +84,7 @@ export class ZenContainer implements Container {
       lifetime: normalised.lifetime ?? 'singleton',
       dispose: normalised.dispose as ((value: unknown) => void | Promise<void>) | undefined,
       eager: normalised.eager ?? false,
+      origin,
       instance: undefined,
       resolved: false,
       pending: null,
@@ -70,6 +101,7 @@ export class ZenContainer implements Container {
       deps: e.deps,
       lifetime: e.lifetime,
       eager: e.eager,
+      origin: e.origin,
     }))
   }
 
@@ -89,9 +121,19 @@ export class ZenContainer implements Container {
     return (await this.#resolve(token as Token<unknown>, scope, true)) as T
   }
 
+  /**
+   * @internal — `resolve`, except that an asynchronous build comes back as its
+   * promise instead of being refused. What §15.1's per-request injection uses,
+   * so a service that builds synchronously costs no promise to inject.
+   */
+  resolveEither<T>(token: Token<T>, scope?: ScopeCarrier): T | Promise<T> {
+    return this.#resolve(token as Token<unknown>, scope, true) as T | Promise<T>
+  }
+
   #resolve(token: Token<unknown>, scope: ScopeCarrier | undefined, allowAsync: boolean): unknown {
     const entry = this.#entries.get(token)
     if (entry === undefined) {
+      if (token.optional === true) return undefined
       throw new ZenError(
         Codes.DI_MISSING,
         `No provider registered for service "${token.name}". ` +
@@ -226,12 +268,13 @@ export class ZenContainer implements Container {
 
     for (const entry of this.#entries.values()) {
       for (const dep of entry.deps) {
-        if (!this.#entries.has(dep)) {
+        if (!this.#entries.has(dep) && dep.optional !== true) {
           diagnostics.push({
             severity: 'error',
             code: Codes.DI_MISSING,
             message: `Service "${entry.token.name}" depends on "${dep.name}", which has no provider.`,
             hint: this.#suggest(dep.name),
+            ...originsOf(entry),
           })
         }
       }
@@ -254,6 +297,7 @@ export class ZenContainer implements Container {
           code: Codes.DI_CYCLE,
           message: `Circular service dependency: ${cycle.join(' → ')}`,
           hint: 'Break the cycle by introducing an interface token, or resolve one side lazily inside the factory.',
+          ...originsOf(...stack.slice(start === -1 ? 0 : start).map((name) => this.#byName(name)), entry),
         })
         return
       }
@@ -271,6 +315,7 @@ export class ZenContainer implements Container {
               `Singleton "${entry.token.name}" depends on request-scoped "${dep.name}". ` +
               `The singleton would capture the first request's instance forever.`,
             hint: `Make "${entry.token.name}" scoped, or resolve "${dep.name}" per request inside the handler.`,
+            ...originsOf(entry, depEntry),
           })
         }
       }
@@ -326,10 +371,24 @@ export class ZenContainer implements Container {
    * another, so a typo in those four (`bdtoken`) was told nothing, and a
    * missing `cache` was offered whichever token first contained `cach`.
    */
+  #byName(name: string): Entry<unknown> | undefined {
+    for (const entry of this.#entries.values()) if (entry.token.name === name) return entry
+    return undefined
+  }
+
   #suggest(name: string): string | undefined {
     const close = closest(name, [...this.#entries.keys()].map((t) => t.name))
     return close === null ? undefined : `Did you mean "${close}"?`
   }
+}
+
+/** The `provide()` sites of the entries a diagnostic is about, once each. */
+function originsOf(...entries: ReadonlyArray<Entry<unknown> | undefined>): { origins?: SourceOrigin[] } {
+  const origins: SourceOrigin[] = []
+  for (const entry of entries) {
+    if (entry?.origin !== undefined && !origins.includes(entry.origin)) origins.push(entry.origin)
+  }
+  return origins.length === 0 ? {} : { origins }
 }
 
 function isPromise(value: unknown): value is Promise<unknown> {

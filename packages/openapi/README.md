@@ -67,7 +67,17 @@ What is compared is what a schema says, not how a converter spelled it: zod
 4.4's `anyOf: [{ type: 'string' }, { type: 'null' }]` and 4.6's
 `type: ['string', 'null']` are one schema, a field removed from inside a
 nullable object is breaking, and a recursive component is compared down to
-where it repeats.
+where it repeats. Every keyword that constrains a value is read: a bound that
+tightens on a request or loosens on a response (`maxLength`, `minimum`,
+`maxItems`, …), a changed `pattern`, `additionalProperties` opening or
+closing, a request field's changed `default`, and any other assertion keyword,
+reported as breaking because what it means to a client is not classified. A
+seeded suite holds the diff to the route contract fingerprint in
+`@erenthedeveloper0/zen-core` — over a thousand random schema edits, the two
+agree about what changed.
+
+A schema registered with `app.schema('User', User)` is published under that
+component name, and published even when no route uses it yet.
 
 ## Options
 

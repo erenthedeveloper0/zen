@@ -2,6 +2,7 @@ import { createApp, ZenApp, type HostLifecycle, type ZenOptions } from '@erenthe
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 import { nodeAdapter } from '@erenthedeveloper0/zen-adapter-node'
 import { processLifecycle } from './lifecycle.ts'
+import { sourceReader, terminalReporter } from './dev-errors.ts'
 
 /**
  * The meta-package — rfcs/0001 §24.1.
@@ -43,6 +44,21 @@ function processEnv(): Readonly<Record<string, string | undefined>> {
   return global.process?.env ?? {}
 }
 
+/**
+ * The working directory — what registration origins are printed relative to
+ * (§5.1), so a diagnostic reads `src/routes.ts:31:3` rather than a home
+ * directory. Here for the reason `processEnv` is: core reads no process state.
+ */
+function processRoot(): string | undefined {
+  const global = globalThis as { process?: { cwd?: () => string } }
+  try {
+    return global.process?.cwd?.()
+  } catch {
+    // A deleted working directory throws; origins are then printed absolute.
+    return undefined
+  }
+}
+
 const defaultPathParser: ZenOptions['pathParser'] = {
   parse(path: string) {
     const parsed = parsePath(path)
@@ -65,6 +81,7 @@ const defaultPathParser: ZenOptions['pathParser'] = {
 export function zen<X = {}, C = Record<string, never>>(
   options: ZenAppOptions<C> = {},
 ): ZenApp<X & { readonly config: C }> {
+  const root = options.root ?? processRoot()
   return createApp<X, C>({
     ...options,
     router: options.router ?? new ZenRouter(),
@@ -73,6 +90,12 @@ export function zen<X = {}, C = Record<string, never>>(
     // §16.1 layer 6. Explicit `env` — including a list of `.env` sources —
     // always wins; this is only the default nobody should have to write.
     env: options.env ?? processEnv(),
+    root,
+    // §12.6 — in development, code frames read from disk and each 5xx
+    // rendered to the terminal; core can do neither itself (§3.3 B2).
+    ...(options.dev === true && options.devErrors === undefined
+      ? { devErrors: { readSource: sourceReader(), report: terminalReporter({ root }) } }
+      : {}),
     // §4.5, §12.8 — installed at `listen()`, so an app that is only ever
     // `inject()`ed in a test never touches the process.
     lifecycle: options.lifecycle === false ? undefined : (options.lifecycle ?? processLifecycle()),
@@ -86,6 +109,7 @@ export * from '@erenthedeveloper0/zen-core'
 export { ZenRouter, parsePath, renderPath, BUILTIN_PARAM_TYPES, analyzeRoutes } from '@erenthedeveloper0/zen-router'
 export { nodeAdapter, NODE_CAPABILITIES, mediaTypeFor, type NodeAdapterOptions } from '@erenthedeveloper0/zen-adapter-node'
 export { processLifecycle, type ProcessLifecycleOptions } from './lifecycle.ts'
+export { renderError, terminalReporter, sourceReader, type RenderOptions } from './dev-errors.ts'
 
 /**
  * The first-party middleware pack — §24.2's "common middleware" row.

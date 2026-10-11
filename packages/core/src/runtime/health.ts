@@ -9,6 +9,7 @@ import { parseDuration } from '../primitives/time.ts'
 import { Deadline, EXPIRED } from './deadline.ts'
 import { Codes } from '../errors/codes.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * The health registry — rfcs/0001 §31.4.
@@ -81,7 +82,7 @@ export class HealthRegistry {
   readonly #inflight = new Map<string, Promise<ComponentReport>>()
   readonly #defaultTimeoutMs: number
   readonly #defaultTtlMs: number
-  readonly #details: boolean
+  #details: boolean
   readonly #log: Logger | undefined
   #state: ServiceState = 'starting'
 
@@ -94,6 +95,14 @@ export class HealthRegistry {
 
   get state(): ServiceState {
     return this.#state
+  }
+
+  /**
+   * Whether a thrown probe error's text may reach the wire — `health.details`
+   * in configuration (§16.1), read by `ready()` once it is resolved.
+   */
+  disclose(details: boolean): void {
+    this.#details = details
   }
 
   /** Every registered check, in registration order — for the AppGraph (§2.4). */
@@ -114,13 +123,16 @@ export class HealthRegistry {
     probe: HealthProbe,
     options: CheckOptions = {},
     source = 'app',
+    origin?: SourceOrigin,
   ): Diagnostic | null {
+    const at = origin === undefined ? {} : { origins: [origin] }
     if (typeof name !== 'string' || name.trim() === '' || /\s/.test(name)) {
       return {
         severity: 'error',
         code: Codes.HEALTH_CHECK_INVALID,
         message: `Health check name ${JSON.stringify(name)} is not usable.`,
         hint: 'Use a short identifier with no whitespace — it becomes a key in the health document and a metric label.',
+        ...at,
       }
     }
     if (typeof probe !== 'function') {
@@ -129,6 +141,7 @@ export class HealthRegistry {
         code: Codes.HEALTH_CHECK_INVALID,
         message: `Health check "${name}" was registered with a ${typeof probe} instead of a function.`,
         hint: 'A probe is `(signal) => void | boolean | HealthStatus | CheckOutcome`, and may be async.',
+        ...at,
       }
     }
 
@@ -142,6 +155,9 @@ export class HealthRegistry {
         // matters here: the check that vanished is the one nobody notices is
         // gone, because the endpoint still returns 200.
         hint: 'Rename one of them, or namespace it by its owner (e.g. "billing.db").',
+        ...(existing.origin === undefined && origin === undefined
+          ? {}
+          : { origins: [existing.origin, origin].filter((o): o is SourceOrigin => o !== undefined) }),
       }
     }
 
@@ -156,6 +172,7 @@ export class HealthRegistry {
         code: Codes.HEALTH_CHECK_INVALID,
         message: `Health check "${name}": ${error instanceof Error ? error.message : String(error)}`,
         hint: 'Durations are numbers of milliseconds, or strings like "250ms" and "2s".',
+        ...at,
       }
     }
     if (timeoutMs <= 0) {
@@ -164,6 +181,7 @@ export class HealthRegistry {
         code: Codes.HEALTH_CHECK_INVALID,
         message: `Health check "${name}" has a timeout of ${timeoutMs}ms, which expires before the probe can run.`,
         hint: 'Give it a positive budget. There is deliberately no "unbounded" — an unbounded probe is how an endpoint hangs.',
+        ...at,
       }
     }
 
@@ -176,6 +194,7 @@ export class HealthRegistry {
       critical: options.critical ?? true,
       description: options.description,
       source,
+      origin,
     }
     this.#byName.set(name, record)
     ;(record.kind === 'liveness' ? this.#liveness : this.#readiness).push(record)

@@ -5,6 +5,8 @@ import type { ZenApp } from '@erenthedeveloper0/zen'
 import { makeApp, makeLegacyApp } from '../src/app.ts'
 import { z } from '../src/shared/zod.ts'
 import type { CatalogResult, OrderResult } from '../src/features/catalog/index.ts'
+import { canonicalJson, graphFingerprint, type GraphDocument } from '@erenthedeveloper0/zen'
+import { createTestApp } from '@erenthedeveloper0/zen/testing'
 
 /**
  * The example, tested as an application — rfcs/0001 §20.2, §23.4, §11.4.
@@ -282,5 +284,41 @@ describe('issue codes come from Zod\'s own codes, in any language (§11.2)', () 
     } finally {
       z.config(z.locales.en())
     }
+  })
+})
+
+// ── The graph as data, and responses held to their schemas ─────────────────
+
+describe('the graph as data, and responses held to their schemas', () => {
+  test('the graph round-trips to canonical JSON, with one fingerprint across ten shuffled boots', async () => {
+    const prints = new Set<string>()
+    for (let boot = 0; boot < 10; boot++) {
+      const booted = makeApp({ quiet: true })
+      await booted.ready()
+      const document = await booted.graphDocument()
+      const parsed = JSON.parse(JSON.stringify(document)) as GraphDocument
+      assert.equal(canonicalJson(parsed), canonicalJson(document))
+      const k = boot % parsed.routes.length
+      const reordered = { ...parsed, routes: [...parsed.routes.slice(k), ...parsed.routes.slice(0, k)], plugins: [...parsed.plugins].reverse() }
+      assert.equal(await graphFingerprint(reordered), document.fingerprint)
+      prints.add(document.fingerprint)
+      await booted.close()
+    }
+    assert.equal(prints.size, 1)
+  })
+
+  test('a wrong-type value in a response is refused, not sent', async () => {
+    const tested = await createTestApp(() => {
+      const made = makeApp({ quiet: true })
+      // Seeded: `total` is an integer in the response schema, and here it is not.
+      // `validation.response: 'error'` is development's default (§11.5); the
+      // example builds a production app, so the test asks for it.
+      made.hook('onSerialize', (ctx, payload) => (ctx.path === '/catalog' ? { ...(payload as object), total: 'many' } : payload))
+      return made
+    }, { config: { validation: { response: 'error' } } })
+    const res = await tested.get('/catalog')
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_RESPONSE_INVALID')
+    await tested.close()
   })
 })

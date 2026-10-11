@@ -4,7 +4,7 @@ import {
   BootError, HealthRegistry, healthPlugin, definePlugin, token,
   type HealthReport, type Plugin,
 } from '@erenthedeveloper0/zen-core'
-import { makeApp } from './helpers.ts'
+import { here, makeApp } from './helpers.ts'
 
 /**
  * Health and readiness — rfcs/0001 §31.4, §4.5.
@@ -75,18 +75,21 @@ describe('registration (§31.4, §12.7)', () => {
 
   test('the resolved checks are on the frozen graph', async () => {
     const app = makeApp()
-    app.health('db', ok, { description: 'primary postgres', timeout: '250ms' })
+    app.health('db', ok, { description: 'primary postgres', timeout: '250ms' }); const at = here()
     app.health('loop', ok, { kind: 'liveness', critical: false })
     await app.ready()
 
     const byName = new Map(app.graph().checks.map((c) => [c.name, c]))
     assert.deepEqual(
-      { ...byName.get('db'), probe: null },
+      { ...byName.get('db'), probe: null, origin: null },
       {
         name: 'db', probe: null, kind: 'readiness', timeoutMs: 250, ttlMs: 1000,
-        critical: true, description: 'primary postgres', source: 'app',
+        critical: true, description: 'primary postgres', source: 'app', origin: null,
       },
     )
+    // §5.1 — the line that registered it, which is the line above `ready()`.
+    assert.equal(byName.get('db')?.origin?.file, at.file)
+    assert.equal(byName.get('db')?.origin?.line, at.line)
     assert.equal(byName.get('loop')?.kind, 'liveness')
     assert.equal(byName.get('loop')?.critical, false)
   })

@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  REDACTED, LAYER_RANK, explainConfig, resolveConfig,
+  CONFIG_DEFAULTS, REDACTED, LAYER_RANK, explainConfig, resolveConfig,
   type ConfigLayer, type ConfigOverlay, type EnvSource,
 } from '@erenthedeveloper0/zen-core'
 
@@ -169,6 +169,8 @@ function everyObject(node: unknown, visit: (o: object) => void): void {
   for (const key of Object.keys(node)) everyObject((node as Record<string, unknown>)[key], visit)
 }
 
+const DEFAULT_PATHS: ReadonlySet<string> = new Set(leafPaths(CONFIG_DEFAULTS))
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('the fold, over random layer stacks (§16.1)', () => {
@@ -216,7 +218,9 @@ describe('the fold, over random layer stacks (§16.1)', () => {
       // 3. nothing invented.
       for (const path of objectPaths) {
         const known = generated.supplied.some((s) => s.path === path || path.startsWith(`${s.path}.`) || s.path.startsWith(`${path}.`))
-        const isDefault = path.startsWith('server.')
+        // Layer 1 supplies every path `CONFIG_DEFAULTS` holds — `server`, and
+        // since 0.2.0-alpha the request `policy`, `health` and `logging`.
+        const isDefault = DEFAULT_PATHS.has(path)
         assert.ok(known || isDefault, `${where}: ${path} was never supplied by any layer`)
       }
 

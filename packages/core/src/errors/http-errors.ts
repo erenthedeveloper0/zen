@@ -4,7 +4,22 @@ import { ZenError, type ZenErrorInit } from './zen-error.ts'
 /** 4xx/5xx with named constructors — rfcs/0001 §12.2. */
 export class HttpError extends ZenError {}
 
-function http(status: number, code: string, defaultMessage: string) {
+/**
+ * What each named error below is: a constructor of an `HttpError`.
+ *
+ * Stated rather than inferred, because the inferred type of a class
+ * expression carries `Error`'s static side, and `@types/node` augments that
+ * with `prepareStackTrace(err, stackTraces: NodeJS.CallSite[])` — which the
+ * declarations then repeated sixteen times, so a consumer without Node's
+ * global types (TypeScript 7's default `types: []`, a workerd project) could
+ * not compile against core at all.
+ */
+export interface HttpErrorConstructor {
+  new (message?: string, init?: ZenErrorInit): HttpError
+  readonly prototype: HttpError
+}
+
+function http(status: number, code: string, defaultMessage: string): HttpErrorConstructor {
   return class extends HttpError {
     constructor(message: string = defaultMessage, init: ZenErrorInit = {}) {
       super(code, message, { ...init, status, expose: init.expose ?? status < 500 })
@@ -66,9 +81,12 @@ export interface Issue {
 
 /**
  * Normalised across schema libraries (§11.2) — a Zod app and a Valibot app
- * produce envelopes of the same shape. The `code` of each issue is inferred
- * from the library's message text for now, so it is not yet the same across
- * libraries, and a client should not switch on it across them (§28.8).
+ * produce envelopes of the same shape. The `code` of each issue is read from
+ * the library's own issue fields through its registered issue mapper
+ * (`registerIssueMapper`), and inferred from its message text only for a
+ * vendor with none; a missing value is `required` whatever the library calls
+ * it. A route's `check` (§11.7) produces the same shape, tagged
+ * `source: 'check'`.
  */
 export class ValidationError extends HttpError {
   readonly issues: readonly Issue[]

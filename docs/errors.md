@@ -55,7 +55,10 @@ parameter name. Also raised for a handler that is not a function, and for a
 ## ZEN_PARAM_TYPE_UNKNOWN
 
 A path uses a parameter type nobody registered — `/:id<objectId>`. The message
-lists the known types. Register it with `app.paramType('objectId', { test, parse, jsonSchema })`.
+lists the known types, and the hint names the closest one when the type looks
+like a misspelling. Reported at boot with every other routing problem and the
+line that registered the route. Register it with
+`app.paramType('objectId', { test, parse, jsonSchema })`.
 
 ## ZEN_PLUGIN_MISSING
 
@@ -103,6 +106,22 @@ the same way. Values are never quoted: options are where keys and DSNs go.
 When `setup` throws, the plugin's own `hint` and `consequence`, when it
 supplies them, are printed as `fix:` and `also:`; plugins that depend on it are
 named as skipped.
+
+## ZEN_MIDDLEWARE_OPTIONS
+
+A middleware built with `defineMiddleware` (§8.6) cannot be set up: the options
+its factory was given are refused by its `options` schema, its `setup` threw,
+or `setup` returned something that is not a middleware function. Also raised at
+registration when `use()`, `around()` or `after()` is given something that is
+not middleware at all, or a configured middleware is registered with
+`around()`/`after()` — it is phase middleware.
+
+Options are checked the way a plugin's are (`ZEN_PLUGIN_OPTIONS`): the schema's
+verdict, and every undeclared key named with the one it was probably meant to
+be — `rateLimit({ limt: 100 })` is refused at boot, not discovered under load.
+A configured instance listed on many routes is checked, and set up, once. The
+diagnostic points at the line that registered it, and for a `setup` that threw,
+at the line that threw.
 
 ## ZEN_DECORATOR_CONFLICT
 
@@ -152,7 +171,9 @@ is an assertion, not a filter: a dependency nobody probes must not look healthy.
 ## ZEN_DI_MISSING
 
 A service is resolved, or depended on, with no provider registered. The
-diagnostic suggests a similarly named token.
+diagnostic suggests a similarly named token. A route's `inject` naming a token
+with no provider is reported at boot, at the route's line. A token declared
+`token(name, { optional: true })` is never missing: it resolves to `undefined`.
 
 ## ZEN_DI_CYCLE
 
@@ -171,6 +192,16 @@ shape — the response serializer, coercion, OpenAPI — cannot. As an error: a
 `jsonSchema()` shape was used to *validate* a request source. As a warning:
 request schemas coercion could not read. Register a converter with
 `registerSchemaConverter(vendor, fn)`.
+
+## ZEN_SCHEMA_NAME
+
+A schema named with `app.schema(name, schema)` — or a plugin's
+`Registrar.schema` — cannot keep that name: it is not a usable OpenAPI
+component key (letters, digits, `.`, `-` and `_`), another registration already
+gave it to a different schema, or the same schema was registered under a second
+name. A name is one component in the document and one type in every generated
+client, so it is refused rather than resolved by whichever registration ran
+last. Both registration lines are printed.
 
 ## ZEN_MEDIA_TYPE_INVALID
 
@@ -375,6 +406,23 @@ the route. Set it in a middleware or hook that runs earlier, or declare it
 missing, or (in strict mode) a value had the wrong type. Never exposed: the
 client sees a generic 500, and the path is in the logs and, in development, in
 `debug`.
+
+## ZEN_RESPONSE_INVALID
+
+A response's value does not match the schema its status declares, and
+response validation is `'error'` (§11.5) — the default in development. A
+`string` where the schema says `number`, an enum member that is not one, a
+`minLength` the value falls short of. It is a 500 and is never exposed: the
+client is owed a working response, not a description of the bug. The issues are
+in the log line and, in development, in the problem document's `debug.meta`.
+
+Validation runs last in the epilogue, after `after` middleware and the
+`onSerialize`/`onSend` hooks, so it judges what would actually be sent. Under
+`'log'` — the hardened profile's production setting — the mismatch is logged at
+`error` with this code and the response is served; `{ sample: n }` logs one
+response in `n`; `'off'` compiles nothing for it. The compiled serializer keeps
+undeclared fields off the wire whatever the mode: this code is about a value
+being wrong, not about a value leaking.
 
 ## ZEN_HEADER_INVALID
 

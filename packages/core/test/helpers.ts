@@ -1,5 +1,6 @@
-import { createApp, ZenApp, type Logger, type ZenOptions } from '@erenthedeveloper0/zen-core'
+import { BootError, createApp, ZenApp, type Logger, type ZenOptions } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
+import { fileURLToPath } from 'node:url'
 
 export const pathParser = {
   parse(path: string) {
@@ -24,13 +25,46 @@ export function silentLogger(): Logger {
  * app keeps without it is asserted in `generated-source.test.ts`.
  */
 export function makeApp<X = {}>(opts: Partial<ZenOptions> = {}): ZenApp<X> {
-  return createApp<X>({
+  return placedBoot(createApp<X>({
     router: new ZenRouter(),
     pathParser,
     logger: silentLogger(),
     inspect: true,
     ...opts,
+  }))
+}
+
+/**
+ * A gate `0.2.0-alpha` set itself, held where every core suite builds its
+ * apps: **every boot diagnostic carries `file:line`** (§5.1). A
+ * diagnostic added without an origin fails whichever test first provokes it,
+ * with the code and message that has none, instead of waiting for a reader to
+ * notice a line that points nowhere.
+ */
+export function placedBoot<A extends { ready(): Promise<unknown> }>(app: A): A {
+  const ready = app.ready.bind(app)
+  Object.defineProperty(app, 'ready', {
+    value: () => ready().catch((error: unknown) => {
+      assertPlaced(error)
+      throw error
+    }),
   })
+  return app
+}
+
+export function assertPlaced(error: unknown): void {
+  if (!(error instanceof BootError)) return
+  for (const diagnostic of error.diagnostics) {
+    const origins = diagnostic.origins ?? []
+    const usable = origins.length > 0 &&
+      origins.every((o) => typeof o.file === 'string' && o.file !== '' && Number.isInteger(o.line) && o.line > 0)
+    if (!usable) {
+      throw new Error(
+        `Boot diagnostic ${diagnostic.code} has no file:line — "${diagnostic.message}". ` +
+          'Every boot diagnostic names the line that registered what it is about (§5.1).',
+      )
+    }
+  }
 }
 
 /**
@@ -140,4 +174,22 @@ export function schema<T>(validate: (value: unknown) => { value: T } | { issues:
       validate,
     },
   } as unknown as { '~standard': { version: 1; vendor: string; validate: (v: unknown) => { value: T } } }
+}
+
+/**
+ * The file and line this is called from — what a registration's origin should
+ * say (§5.1). Write it on the same line as the registration it is compared
+ * with: `app.get('/a', h); const at = here()`.
+ *
+ * Read from the stack *text*, by its own parsing, rather than through the
+ * framework's capture: an assertion that used the code under test to compute
+ * its expected value would agree with any bug in it.
+ */
+export function here(): { file: string; line: number } {
+  const frame = (new Error().stack ?? '').split('\n')[2]?.trim() ?? ''
+  const location = frame.endsWith(')') ? frame.slice(frame.lastIndexOf('(') + 1, -1) : frame.replace(/^at /, '')
+  const parts = location.split(':')
+  const line = Number(parts[parts.length - 2])
+  const file = parts.slice(0, -2).join(':')
+  return { file: file.startsWith('file:') ? fileURLToPath(file) : file, line }
 }

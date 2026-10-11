@@ -4,7 +4,9 @@ import type { Token, ProviderSpec } from './container.ts'
 import type { CheckOptions, HealthProbe, HealthReport, ProbeKind } from './health.ts'
 import type { Slot, SlotOptions } from './slot.ts'
 import type { Phase } from './hook.ts'
-import type { AfterMiddleware, AroundMiddleware, PhaseMiddleware } from './middleware.ts'
+import type {
+  AfterMiddleware, AroundMiddleware, ConfiguredMiddleware, MiddlewareOptions, PhaseMiddleware,
+} from './middleware.ts'
 import type { RouteDefinition } from './route.ts'
 import type { AnySchema } from './standard-schema.ts'
 import type { UrlParams, UrlQuery } from './url.ts'
@@ -104,9 +106,9 @@ export interface Registrar {
    */
   readonly config: Readonly<Record<string, unknown>>
 
-  use(middleware: PhaseMiddleware<never, never>, opts?: { name?: string }): void
-  around(middleware: AroundMiddleware<never, never>, opts?: { name?: string }): void
-  after(middleware: AfterMiddleware<never, never>, opts?: { name?: string }): void
+  use(middleware: PhaseMiddleware<never, never> | ConfiguredMiddleware, opts?: MiddlewareOptions<never>): void
+  around(middleware: AroundMiddleware<never, never>, opts?: MiddlewareOptions<never>): void
+  after(middleware: AfterMiddleware<never, never>, opts?: MiddlewareOptions<never>): void
 
   /**
    * Register a route from a plugin — how a docs, health or metrics plugin
@@ -152,6 +154,14 @@ export interface Registrar {
   probe(kind: ProbeKind): Promise<HealthReport>
   errorMap<E>(ctor: new (...args: never[]) => E, map: (error: E, ctx: unknown) => unknown): void
   meta(key: string, value: unknown): void
+  /**
+   * Name a schema for the application's document — §10.2. How a plugin
+   * contributes a shared component: an error envelope its routes return, a
+   * type its clients need. Names are the application's, not namespaced by
+   * plugin, because they are what a generated client calls the type; two
+   * registrations of one name are a boot error naming both.
+   */
+  schema(name: string, schema: AnySchema): void
   /** Final look at the frozen AppGraph before compilation — how OpenAPI works. */
   onBoot(fn: (graph: unknown) => void | Promise<void>): void
   /** Values other plugins can consume via `dependsOn`. */

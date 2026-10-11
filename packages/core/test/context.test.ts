@@ -665,3 +665,52 @@ describe('ctx.log is bound to the request (§7.2, §31.1)', () => {
     assert.deepEqual(handled, { requestId: id, route: '/users/:id', event: 'handled' })
   })
 })
+
+describe('development seals the context and freezes what the request carries (§7.3)', () => {
+  const twins = [
+    { name: 'compiled', caps: undefined },
+    { name: 'interpreted (eval: false)', caps: { ...DEFAULT_CAPABILITIES, eval: false } },
+  ] as const
+
+  for (const twin of twins) {
+    test(`${twin.name}: a stray property and a write to request data throw in dev, and work in production`, async () => {
+      const attempts = {
+        expando: (ctx: unknown) => { (ctx as Record<string, unknown>)['user'] = { id: 1 } },
+        body: (ctx: unknown) => { (ctx as { body: Record<string, unknown> }).body['id'] = 7 },
+        nested: (ctx: unknown) => { ((ctx as { body: { items: unknown[] } }).body.items).push('x') },
+        query: (ctx: unknown) => { (ctx as { query: Record<string, unknown> }).query['page'] = '2' },
+        params: (ctx: unknown) => { (ctx as { params: Record<string, unknown> }).params['id'] = 'other' },
+      }
+      for (const dev of [true, false]) {
+        const app = makeApp({ dev, ...(twin.caps === undefined ? {} : { caps: twin.caps }) })
+        for (const [name, attempt] of Object.entries(attempts)) {
+          app.post(`/${name}/:id`, { intake: {} }, (ctx) => { attempt(ctx); return 'wrote' })
+        }
+        for (const name of Object.keys(attempts)) {
+          const res = await app.inject('POST', `/${name}/1?page=1`, { body: { items: [] } })
+          assert.equal(res.status, dev ? 500 : 200, `${twin.name}, dev ${dev}: ${name}`)
+        }
+      }
+    })
+  }
+
+  test('what freezing would break is left alone: a raw body is bytes, not a plain object', async () => {
+    const app = makeApp({ dev: true })
+    app.post('/raw', { intake: { mode: 'raw' } }, (ctx) => ({ first: ctx.body[0] }))
+    const res = await app.inject('POST', '/raw', { body: new Uint8Array([5]), headers: { 'content-type': 'application/octet-stream' } })
+    assert.deepEqual(res.json(), { first: 5 })
+  })
+
+  test('production compiles the class it always did — no seal, no freeze — and dev keeps the field order', async () => {
+    const prod = makeApp()
+    const dev = makeApp({ dev: true })
+    for (const app of [prod, dev]) app.get('/', () => 'ok')
+    await prod.ready()
+    await dev.ready()
+    const source = (app: typeof prod) => app.generatedSource().find((u) => u.name === 'context')?.source ?? ''
+    assert.doesNotMatch(source(prod), /Object\.seal|devFreeze/)
+    assert.match(source(dev), /Object\.seal\(this\)/)
+    const fields = (text: string) => [...text.matchAll(/^\s+this\.(\$?\w+) = /gm)].map((m) => m[1])
+    assert.deepEqual(fields(source(dev)), fields(source(prod)), 'one hidden class shape either way (I2)')
+  })
+})

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { html, type Context, type EnvSource, type ZenApp } from '@erenthedeveloper0/zen'
 import { makeApp } from '../src/app.ts'
 import type { AppConfig } from '../src/config/types.ts'
+import { canonicalJson, graphFingerprint, type GraphDocument } from '@erenthedeveloper0/zen'
+import { createTestApp } from '@erenthedeveloper0/zen/testing'
 
 /**
  * The middleware example — rfcs/0001 §32, §23.4.
@@ -335,5 +337,41 @@ describe('types (§10.4) — these are assertions the compiler makes, not the ru
     assert.equal(token.length, 30)
     assert.equal(mode, 'production')
     assert.equal(port, 3000)
+  })
+})
+
+// ── The graph as data, and responses held to their schemas ─────────────────
+
+describe('the graph as data, and responses held to their schemas', () => {
+  test('the graph round-trips to canonical JSON, with one fingerprint across ten shuffled boots', async () => {
+    const prints = new Set<string>()
+    for (let boot = 0; boot < 10; boot++) {
+      const booted = makeApp({ quiet: true, env: PRODUCTION }).app
+      await booted.ready()
+      const document = await booted.graphDocument()
+      const parsed = JSON.parse(JSON.stringify(document)) as GraphDocument
+      assert.equal(canonicalJson(parsed), canonicalJson(document))
+      const k = boot % parsed.routes.length
+      const reordered = { ...parsed, routes: [...parsed.routes.slice(k), ...parsed.routes.slice(0, k)], plugins: [...parsed.plugins].reverse() }
+      assert.equal(await graphFingerprint(reordered), document.fingerprint)
+      prints.add(document.fingerprint)
+      await booted.close()
+    }
+    assert.equal(prints.size, 1)
+  })
+
+  test('a wrong-type value in a response is refused, not sent', async () => {
+    const tested = await createTestApp(() => {
+      const made = makeApp({ quiet: true, env: PRODUCTION }).app
+      // Seeded: `id` is an integer in the response schema, and here it is not.
+      // `validation.response: 'error'` is development's default (§11.5); the
+      // example builds a production app, so the test asks for it.
+      made.hook('onSerialize', (ctx, payload) => (ctx.path === '/api/notes/1' ? { ...(payload as object), id: 'one' } : payload))
+      return made
+    }, { config: { validation: { response: 'error' } } })
+    const res = await tested.get('/api/notes/1', { headers: { origin: ORIGIN } })
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_RESPONSE_INVALID')
+    await tested.close()
   })
 })

@@ -5,7 +5,8 @@ import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { toJsonSchema } from './json-schema.ts'
 import { exposureDiagnostics } from './exposure.ts'
-import { buildProgram, type SerProgram } from './serializer-ir.ts'
+import { buildProgram, type IrResult, type SerProgram } from './serializer-ir.ts'
+import type { JsonSchema } from '../contracts/json-schema.ts'
 import { compileSerializer, type Serializer } from './serializer-compiler.ts'
 import { walkSerializer } from './serializer-walk.ts'
 import { isVariantRecord } from './media-type.ts'
@@ -28,6 +29,40 @@ export interface SerializerBuildOptions {
   readonly strict: boolean
   readonly mode: SerializerMode
   readonly codegen: CodeGen
+  /**
+   * One application's shared serializers — §11.6. Absent, every call compiles
+   * its own, which is what a caller outside an application gets.
+   */
+  readonly memo?: SerializerMemo | undefined
+}
+
+/**
+ * Serializers shared across an application's routes — rfcs/0001 §11.6.
+ *
+ * §11.6 promised that `Paginated(UserSchema)` used by ten routes is "one
+ * compiled serializer shared by ten routes", and until `0.2.0-alpha` each
+ * route compiled its own: ten units of identical source, ten functions the
+ * JIT warmed separately, ten times the boot work. Two levels, as §11.6 says:
+ *
+ *   - **identity** — the same schema object converts and lowers to the IR
+ *     once (`WeakMap`, so an application's schemas are not kept alive by it);
+ *   - **structure** — two schemas whose IR is the same compile to one
+ *     serializer, keyed by a canonical encoding of the IR. The IR, not the
+ *     JSON Schema: two schemas differing only in a `description` or a
+ *     `minLength` write the same bytes, so they are the same serializer.
+ *
+ * Diagnostics stay per route. What a schema is about — a `writeOnly` field, a
+ * union the serializer cannot discriminate — is reported for every route that
+ * uses it, naming that route, exactly as before; only the compiled function is
+ * shared.
+ */
+export interface SerializerMemo {
+  readonly identity: WeakMap<object, { readonly json: JsonSchema | null; readonly ir: Map<boolean, IrResult> }>
+  readonly compiled: Map<string, Serializer>
+}
+
+export function createSerializerMemo(): SerializerMemo {
+  return { identity: new WeakMap(), compiled: new Map() }
 }
 
 export interface SerializerBuildResult {
@@ -97,7 +132,11 @@ export function compileStatusSerializer(
   options: SerializerBuildOptions,
   media = 'application/json',
 ): StatusSerializerResult {
-  const jsonSchema = toJsonSchema(schema)
+  const memo = options.memo
+  const known = memo?.identity.get(schema as object)
+  const jsonSchema = known !== undefined ? known.json : toJsonSchema(schema)
+  const shared = known ?? (memo === undefined ? undefined : { json: jsonSchema, ir: new Map<boolean, IrResult>() })
+  if (memo !== undefined && known === undefined && shared !== undefined) memo.identity.set(schema as object, shared)
   if (jsonSchema === null) {
     // A *warning*, not an error, and the distinction matters. The route still
     // has a type-level contract — `HandlerResult` is narrowed either way — but
@@ -125,7 +164,12 @@ export function compileStatusSerializer(
   const exposed = exposureDiagnostics(jsonSchema, { routeId: options.routeId, status, media })
   if (exposed.some((d) => d.severity === 'error')) return { serializer: null, diagnostics: exposed }
 
-  const { program, diagnostics: irDiagnostics } = buildProgram(jsonSchema, options.strict)
+  let lowered = shared?.ir.get(options.strict)
+  if (lowered === undefined) {
+    lowered = buildProgram(jsonSchema, options.strict)
+    shared?.ir.set(options.strict, lowered)
+  }
+  const { program, diagnostics: irDiagnostics } = lowered
   if (program === null) {
     return {
       serializer: null,
@@ -139,10 +183,46 @@ export function compileStatusSerializer(
     }
   }
 
-  return {
-    serializer: buildSerializer(program, `${options.routeId}#${status}`, options),
-    diagnostics: exposed,
+  if (memo === undefined) {
+    return { serializer: buildSerializer(program, `${options.routeId}#${status}`, options), diagnostics: exposed }
   }
+  const key = `${options.mode}:${programKey(program)}`
+  let serializer = memo.compiled.get(key)
+  if (serializer === undefined) {
+    // Named after the first route to need it; the others reuse it by structure.
+    serializer = buildSerializer(program, `${options.routeId}#${status}`, options)
+    memo.compiled.set(key, serializer)
+  }
+  return { serializer, diagnostics: exposed }
+}
+
+/**
+ * The IR in one canonical string — the structural key of §11.6's sharing.
+ *
+ * Every field the two engines read is in it, in a fixed order: `Map`s as
+ * sorted entries, `Set`s as sorted lists, object keys sorted. Two programs
+ * with the same key emit the same bytes for every value, which is the only
+ * sense of "the same serializer" that matters.
+ */
+export function programKey(program: SerProgram): string {
+  return stable(program)
+}
+
+function stable(value: unknown): string {
+  if (value instanceof Map) {
+    const entries = [...value.entries()].map(([k, v]) => [String(k), v] as const)
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    return `M{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(',')}}`
+  }
+  if (value instanceof Set) return `S[${[...value].map((v) => stable(v)).sort().join(',')}]`
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`
+  if (typeof value === 'object' && value !== null) {
+    const keys = Object.keys(value).sort()
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${stable((value as Record<string, unknown>)[k])}`).join(',')}}`
+  }
+  if (typeof value === 'bigint') return `${value}n`
+  if (value === undefined) return 'u'
+  return JSON.stringify(value) ?? String(value)
 }
 
 export function buildSerializer(program: SerProgram, name: string, options: { mode: SerializerMode; codegen: CodeGen }): Serializer {

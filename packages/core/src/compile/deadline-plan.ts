@@ -2,6 +2,7 @@ import type { TimeoutRecord, TimeoutSpec } from '../contracts/deadline.ts'
 import type { Diagnostic } from '../errors/zen-error.ts'
 import { Codes } from '../errors/codes.ts'
 import { parseDuration } from '../primitives/time.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 
 /**
  * Deadline resolution — rfcs/0001 §4.4, §6.3.
@@ -86,14 +87,29 @@ export function resolveTimeout(sources: readonly TimeoutSource[]): TimeoutResolu
  * Aggregated with every other registration problem rather than thrown on the
  * spot (§12.7), because a developer wiring up a feature module usually has more
  * than one of these and a fail-fast framework turns that into four restarts.
+ *
+ * `origins.route` is where the route was registered; `origins.declared` where
+ * the scope that wrote the bad value was — the same place for a route's own
+ * `timeout`, a collection or the `zen()` call for an inherited one (§5.1).
  */
-export function timeoutDiagnostic(route: string, failure: { where: string; reason: string }): Diagnostic {
+export function timeoutDiagnostic(
+  route: string,
+  failure: { where: string; reason: string },
+  origins: { readonly route?: SourceOrigin | undefined; readonly declared?: SourceOrigin | undefined } = {},
+): Diagnostic {
+  const pairs: Array<readonly [string, SourceOrigin | undefined]> = failure.where === 'route'
+    ? [[route, origins.route]]
+    : [[route, origins.route], [label(failure.where), origins.declared]]
+  const complete = pairs.every(([, origin]) => origin !== undefined)
   return {
     severity: 'error',
     code: Codes.TIMEOUT_INVALID,
     message: `Invalid timeout declared on ${label(failure.where)} and inherited by ${route}: ${failure.reason}`,
     hint: 'Use a duration — 500, "250ms", "5s", "2m" — or `false` to refuse an inherited deadline.',
-    locations: [route],
+    locations: complete ? pairs.map(([where]) => where) : [route],
+    ...(complete
+      ? { origins: pairs.map(([, origin]) => origin as SourceOrigin) }
+      : origins.route === undefined ? {} : { origins: [origins.route] }),
   }
 }
 

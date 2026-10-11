@@ -1,4 +1,5 @@
 import type { Duration } from '../primitives/time.ts'
+import type { SourceOrigin } from '../primitives/origin.ts'
 import type { MaybePromise } from './route.ts'
 
 /**
@@ -109,6 +110,8 @@ export interface CheckRecord {
   readonly description: string | undefined
   /** Who registered it — a plugin name, or `'app'`. */
   readonly source: string
+  /** Where it was registered (§5.1). */
+  readonly origin?: SourceOrigin | undefined
 }
 
 export interface ComponentReport {
