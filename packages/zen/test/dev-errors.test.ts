@@ -1,5 +1,7 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { NoopLogger, renderError, sourceReader, terminalReporter, zen } from '../src/index.ts'
 
 /**
@@ -98,8 +100,12 @@ describe('renderError — the terminal half', () => {
   })
 
   test('with links, a location is an OSC 8 hyperlink to the file', () => {
-    const text = renderError(problem, { links: true, root: '/work/app' })
-    assert.ok(text.includes('\u001b]8;;file:///work/app/src/users.ts\u001b\\src/users.ts:12:5\u001b]8;;\u001b\\'))
+    // An absolute root on this platform — `C:\work\app` on Windows — and the
+    // URL its file has there, so the expectation is the platform's, not POSIX's.
+    const root = resolve('/work/app')
+    const href = pathToFileURL(join(root, 'src/users.ts')).href
+    const text = renderError(problem, { links: true, root })
+    assert.ok(text.includes(`\u001b]8;;${href}\u001b\\src/users.ts:12:5\u001b]8;;\u001b\\`), JSON.stringify(text))
   })
 
   test('the reporter writes to a terminal, and to nothing else', () => {
