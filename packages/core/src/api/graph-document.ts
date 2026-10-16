@@ -581,16 +581,41 @@ function originOf(origin: SourceOrigin | undefined | null): SourceOrigin | null 
   return origin === undefined || origin === null ? null : { file: origin.file, line: origin.line, column: origin.column }
 }
 
-/** The document with every `origin` removed, for the application fingerprint. */
-function withoutOrigins(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutOrigins)
-  if (typeof value !== 'object' || value === null) return value
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(value)) {
-    if (key === 'origin') continue
-    out[key] = withoutOrigins((value as Record<string, unknown>)[key])
+/**
+ * The document with every registration origin removed, for the application
+ * fingerprint — the `origin` the document itself writes on a route, its
+ * handler, check, hooks and middleware, and on each collection, plugin, hook,
+ * decoration, check, named schema and service.
+ *
+ * Only those. A key spelled `origin` inside a schema, a route's `meta` or a
+ * plugin's metadata is the application's data, and stays: removing every key
+ * of that name at any depth made a route whose `meta.origin` changed, or whose
+ * response schema's `origin` property was reworded, keep its fingerprint while
+ * the same change under any other key moved it.
+ */
+function withoutOrigins(document: Omit<GraphDocument, 'fingerprint' | 'config' | 'slots'>): unknown {
+  return {
+    ...document,
+    routes: document.routes.map((route) => ({
+      ...withoutOrigin(route),
+      handler: withoutOrigin(route.handler),
+      check: route.check === null ? null : withoutOrigin(route.check),
+      hooks: route.hooks.map(withoutOrigin),
+      middleware: route.middleware.map(withoutOrigin),
+    })),
+    collections: document.collections.map(withoutOrigin),
+    plugins: document.plugins.map(withoutOrigin),
+    hooks: document.hooks.map(withoutOrigin),
+    decorations: document.decorations.map(withoutOrigin),
+    checks: document.checks.map(withoutOrigin),
+    schemas: document.schemas.map(withoutOrigin),
+    services: document.services.map(withoutOrigin),
   }
-  return out
+}
+
+function withoutOrigin<T extends { readonly origin: unknown }>(record: T): Omit<T, 'origin'> {
+  const { origin: _origin, ...rest } = record
+  return rest
 }
 
 function functionName(fn: unknown): string | null {

@@ -34,7 +34,7 @@ import { DEFAULT_CAPABILITIES } from '../contracts/capabilities.ts'
 import { joinPath, normalizePath, pathnameOf } from '../primitives/path.ts'
 import { generateRequestId as makeRequestId } from '../primitives/id.ts'
 import { CodeGen } from '../compile/codegen.ts'
-import { compileContext, type ContextClass, type Decoration } from '../compile/context-compiler.ts'
+import { compileContext, thawingCoercer, type ContextClass, type Decoration } from '../compile/context-compiler.ts'
 import {
   compilePipeline, simplePipeline, NO_HOOKS, type CompiledPipeline, type PipelineSpec, type PipelineStep,
 } from '../compile/pipeline-compiler.ts'
@@ -2039,9 +2039,13 @@ export class ZenApp<X = {}> {
       .filter((source): source is ValidationSource => record.schema[source] !== undefined)
       .map((source) => {
         const plan = plans?.get(source)
-        const coerce = plan === undefined
+        const compiled = plan === undefined
           ? null
           : compileCoercer(plan, `${record.method}_${record.path}#${source}`, this.#codegen)
+        // §7.3 — development freezes request data when it is read, and the
+        // validation stage reads it; a coercer converts in place, so there it
+        // converts a thawed copy. Production builds the coercer alone.
+        const coerce = compiled !== null && this.#opts.dev === true ? thawingCoercer(compiled) : compiled
         return compileValidator(record.schema[source] as AnySchema, source, coerce)
       })
 
@@ -2093,6 +2097,7 @@ export class ZenApp<X = {}> {
       sample: setting.sample,
       routeId: `${record.method} ${record.path}`,
       log: this.#log,
+      serialization: this.#opts.serialization?.mode ?? 'compiled',
     })
   }
 

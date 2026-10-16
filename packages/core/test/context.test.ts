@@ -8,7 +8,7 @@ import {
   parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply,
   type RawRequest, type ContextEnv, type Logger,
 } from '@erenthedeveloper0/zen-core'
-import { makeApp, silentLogger, uniqueName } from './helpers.ts'
+import { makeApp, shaped, silentLogger, uniqueName } from './helpers.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -690,6 +690,24 @@ describe('development seals the context and freezes what the request carries (§
           const res = await app.inject('POST', `/${name}/1?page=1`, { body: { items: [] } })
           assert.equal(res.status, dev ? 500 : 200, `${twin.name}, dev ${dev}: ${name}`)
         }
+      }
+    })
+  }
+
+  for (const twin of twins) {
+    test(`${twin.name}: coercion still converts in dev — ?page=2 is a number, the query is frozen once it is read`, async () => {
+      const Query = shaped({ type: 'object', properties: { page: { type: 'integer' }, tags: { type: 'array', items: { type: 'integer' } } } })
+      for (const dev of [true, false]) {
+        const app = makeApp({ dev, ...(twin.caps === undefined ? {} : { caps: twin.caps }) })
+        // A hook that reads the query before validation, as a logging hook does.
+        app.hook('onRequest', (ctx) => { void ctx.query; return undefined })
+        app.get('/items', { query: Query }, (ctx) => {
+          const query = ctx.query as { page: unknown; tags: unknown[] }
+          return { page: query.page, tags: query.tags, frozen: dev ? Object.isFrozen(query) : null }
+        })
+        const res = await app.inject('GET', '/items?page=2&tags=3&tags=4')
+        assert.equal(res.status, 200, `${twin.name}, dev ${dev}: ${res.text()}`)
+        assert.deepEqual(res.json(), { page: 2, tags: [3, 4], frozen: dev ? true : null }, `${twin.name}, dev ${dev}`)
       }
     })
   }

@@ -1,8 +1,9 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   BootError, DEFAULT_CAPABILITIES, defineConfig, definePlugin, explainRoute, healthPlugin, jsonSchema, slot, token,
   type Diagnostic, type RouteRecord, type SourceOrigin,
@@ -186,6 +187,22 @@ describe('every registration records the line that wrote it (§5.1)', () => {
   test('defineConfig records where the configuration was declared', () => {
     const config = defineConfig({ server: { port: 1 } }); const d = here()
     at(config.origin, d, 'defineConfig')
+  })
+
+  test("an application's own packages/core/src is the application's: only the framework's tree is the framework", async () => {
+    // A monorepo that keeps its API in `packages/core/src/` — the commonest
+    // layout there is. Its registrations are the application's lines.
+    const dir = join(realpathSync(mkdtempSync(join(tmpdir(), 'zen-origin-'))), 'acme', 'packages', 'core', 'src')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'routes.mjs')
+    writeFileSync(file, "export function register(app) {\n  app.get('/acme', () => 'ok')\n}\n")
+    const { register } = await import(pathToFileURL(file).href) as { register(app: unknown): void }
+    const app = makeApp()
+    register(app)
+    await app.ready()
+    const origin = route(app.graph().routes, 'GET', '/acme').origin
+    assert.equal(origin?.file, file)
+    assert.equal(origin?.line, 2)
   })
 
   test('relative to root, with forward slashes', async () => {

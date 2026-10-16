@@ -102,6 +102,105 @@ describe("validation.response: 'error' (§11.5)", () => {
   })
 })
 
+/**
+ * `shaped`, as strict as Zod's `.strict()`: wherever an object node says
+ * `additionalProperties: false`, a key it does not declare is refused.
+ */
+function strictShaped(json: Record<string, unknown>) {
+  const base = shaped(json) as unknown as { '~standard': { validate(value: unknown): unknown } }
+  const extra = (value: unknown, node: Record<string, unknown> | undefined, path: PropertyKey[]): Array<{ message: string; path: PropertyKey[] }> => {
+    if (node === undefined || typeof value !== 'object' || value === null) return []
+    if (Array.isArray(value)) return value.flatMap((item, i) => extra(item, node['items'] as Record<string, unknown> | undefined, [...path, i]))
+    const properties = (node['properties'] ?? {}) as Record<string, Record<string, unknown>>
+    const issues: Array<{ message: string; path: PropertyKey[] }> = []
+    if (node['additionalProperties'] === false) {
+      for (const key of Object.keys(value)) if (!(key in properties)) issues.push({ message: `Unrecognized key: "${key}"`, path })
+    }
+    for (const key of Object.keys(properties)) issues.push(...extra((value as Record<string, unknown>)[key], properties[key], [...path, key]))
+    return issues
+  }
+  return {
+    '~standard': {
+      version: 1 as const,
+      vendor: 'zen-test-strict',
+      validate(value: unknown) {
+        const issues = extra(value, json, [])
+        return issues.length > 0 ? { issues } : base['~standard'].validate(value)
+      },
+    },
+    toJSONSchema() {
+      return json
+    },
+  } as never
+}
+
+describe('validation.response judges what the serializer will send, not what the handler returned (§11.5, §13.3)', () => {
+  const ROW = {
+    type: 'object',
+    properties: { id: { type: 'integer' }, name: { type: 'string' } },
+    required: ['id', 'name'],
+    additionalProperties: false,
+  }
+  const Row = strictShaped(ROW)
+
+  test('a whole row, returned for a strict schema, is served with only the declared fields — §13.3\'s promise holds in development', async () => {
+    for (const app of [makeApp({ dev: true }), makeApp({ validation: { response: 'error' } })]) {
+      app.get('/user', { response: { 200: Row } }, () => ({ id: 1, name: 'Ada', passwordHash: '$2b$12$never' }))
+      const res = await app.inject('GET', '/user')
+      assert.equal(res.status, 200, res.text())
+      assert.equal(res.text(), '{"id":1,"name":"Ada"}')
+    }
+  })
+
+  test('…at every depth: inside a nested object and inside an array', async () => {
+    const List = strictShaped({
+      type: 'object',
+      properties: { users: { type: 'array', items: ROW }, owner: ROW },
+      required: ['users', 'owner'],
+      additionalProperties: false,
+    })
+    const app = makeApp({ validation: { response: 'error' } })
+    app.get('/users', { response: { 200: List } }, () => ({
+      users: [{ id: 1, name: 'Ada', passwordHash: 'x' }],
+      owner: { id: 2, name: 'Alan', totpSecret: 'y' },
+      cursor: 'undeclared',
+    }))
+    const res = await app.inject('GET', '/users')
+    assert.equal(res.status, 200, res.text())
+    assert.equal(res.text(), '{"users":[{"id":1,"name":"Ada"}],"owner":{"id":2,"name":"Alan"}}')
+  })
+
+  test('a Date is judged as the ISO text the serializer writes, and a bigint as the number', async () => {
+    const Stamped = shaped({
+      type: 'object',
+      properties: { createdAt: { type: 'string', format: 'date-time' }, day: { type: 'string', format: 'date' }, seen: { type: 'string' }, count: { type: 'integer' } },
+      required: ['createdAt', 'day', 'seen', 'count'],
+    })
+    const at = new Date('2026-10-15T08:30:00.000Z')
+    const app = makeApp({ dev: true })
+    app.get('/stamp', { response: { 200: Stamped } }, () => ({ createdAt: at, day: at, seen: at, count: 42n }))
+    const res = await app.inject('GET', '/stamp')
+    assert.equal(res.status, 200, res.text())
+    assert.deepEqual(res.json(), { createdAt: '2026-10-15T08:30:00.000Z', day: '2026-10-15', seen: '2026-10-15T08:30:00.000Z', count: 42 })
+  })
+
+  test('a value of the wrong type is still refused: nothing is coerced before it is judged', async () => {
+    const app = makeApp({ validation: { response: 'error' } })
+    app.get('/user', { response: { 200: Row } }, () => ({ id: 'seven', name: 'Ada', passwordHash: 'x' }))
+    const res = await app.inject('GET', '/user')
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_RESPONSE_INVALID')
+  })
+
+  test('with serialization off, the undeclared field is sent — and so it is judged', async () => {
+    const app = makeApp({ validation: { response: 'error' }, serialization: { mode: 'off' } })
+    app.get('/user', { response: { 200: Row } }, () => ({ id: 1, name: 'Ada', passwordHash: 'x' }))
+    const res = await app.inject('GET', '/user')
+    assert.equal(res.status, 500)
+    assert.equal(res.json<{ code: string }>().code, 'ZEN_RESPONSE_INVALID')
+  })
+})
+
 describe("validation.response: 'log', { sample }, 'off' (§11.5, T8)", () => {
   test("'log' reports the mismatch and serves the response", async () => {
     const { logger, lines } = recorder()

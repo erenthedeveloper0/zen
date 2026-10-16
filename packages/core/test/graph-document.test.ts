@@ -138,6 +138,25 @@ describe('serializeGraph: the graph as canonical JSON (§2.4)', () => {
     assert.equal(a.fingerprint, b.fingerprint)
   })
 
+  test('only registration origins are left out: a key the application named `origin` is part of what it is', async () => {
+    const withMeta = async (origin: string): Promise<GraphDocument> => {
+      const app = makeApp()
+      app.get('/a', { meta: { origin } }, () => ({ id: 1 }))
+      await app.ready()
+      return app.graphDocument()
+    }
+    const withSchema = async (description: string): Promise<GraphDocument> => {
+      const app = makeApp()
+      app.get('/b', { response: { 200: jsonSchema({ type: 'object', properties: { origin: { type: 'string', description } } }) } }, () => ({ origin: 'x' }))
+      await app.ready()
+      return app.graphDocument()
+    }
+    // A route's metadata is the application's data, whatever its keys are called.
+    assert.notEqual((await withMeta('internal')).fingerprint, (await withMeta('public')).fingerprint)
+    // The document carries descriptions, and one on a property named `origin` is no exception.
+    assert.notEqual((await withSchema('where it came from')).fingerprint, (await withSchema('reworded')).fingerprint)
+  })
+
   test('a contract moves with a schema and not with its description', async () => {
     const contract = async (body: unknown) => {
       const app = makeApp()

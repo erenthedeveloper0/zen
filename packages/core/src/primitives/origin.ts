@@ -34,19 +34,56 @@ export interface SourceOrigin {
  */
 const FRAMEWORK_DIRS = ['core', 'router', 'adapter-node', 'openapi', 'middleware', 'zen']
 
+/**
+ * Where the framework's own files are, read off this module's URL:
+ *
+ *   - `installed` — core was loaded from `node_modules`, so the framework is
+ *     `node_modules/@erenthedeveloper0/zen*` and nothing else;
+ *   - `repo` — loaded from this repository, whose `packages/` directory is
+ *     `root`, so the framework is `<root>{core,router,…}/{src,dist}/`;
+ *   - `unknown` — bundled, or a runtime that gives a module no file URL: any
+ *     path with one of those `packages/<name>/{src,dist}/` segments in it.
+ *
+ * Only the last guesses, and it used to be the only rule. A path containing
+ * `/packages/core/src/` is also where an application in an ordinary monorepo
+ * keeps its own code, and such an application's registrations were taken for
+ * the framework's: their origins skipped to whoever had called them, or
+ * vanished, and a development error page showed the wrong line as where it
+ * was raised.
+ */
+const LAYOUT: { readonly kind: 'installed' | 'unknown' } | { readonly kind: 'repo'; readonly root: string } = (() => {
+  try {
+    const url: unknown = import.meta.url
+    if (typeof url !== 'string' || !url.startsWith('file://')) return { kind: 'unknown' }
+    const here = filePath(url).replace(/\\/g, '/')
+    if (here.includes('/node_modules/@erenthedeveloper0/zen-core/')) return { kind: 'installed' }
+    const at = here.lastIndexOf('/packages/core/')
+    return at === -1 ? { kind: 'unknown' } : { kind: 'repo', root: here.slice(0, at + '/packages/'.length) }
+  } catch {
+    return { kind: 'unknown' }
+  }
+})()
+
 /** The one file whose frames bound a plugin's `setup` — see {@link captureOrigin}. */
 function isBootFile(file: string): boolean {
   const f = file.replace(/\\/g, '/')
-  return f.endsWith('/core/src/api/zen.ts') || f.endsWith('/core/dist/api/zen.js') ||
-    f.endsWith('/zen-core/dist/api/zen.js')
+  if (f.includes('/node_modules/@erenthedeveloper0/zen-core/')) return f.endsWith('/dist/api/zen.js')
+  if (LAYOUT.kind === 'installed') return false
+  if (LAYOUT.kind === 'repo') return f === `${LAYOUT.root}core/src/api/zen.ts` || f === `${LAYOUT.root}core/dist/api/zen.js`
+  return f.endsWith('/core/src/api/zen.ts') || f.endsWith('/core/dist/api/zen.js')
 }
 
 export function isFrameworkFile(file: string): boolean {
   const f = file.replace(/\\/g, '/')
   if (f.startsWith('node:') || f.startsWith('internal/')) return true
   if (f.includes('/node_modules/@erenthedeveloper0/zen')) return true
+  if (LAYOUT.kind === 'installed') return false
   for (const dir of FRAMEWORK_DIRS) {
-    if (f.includes(`/packages/${dir}/src/`) || f.includes(`/packages/${dir}/dist/`)) return true
+    if (LAYOUT.kind === 'repo') {
+      if (f.startsWith(`${LAYOUT.root}${dir}/src/`) || f.startsWith(`${LAYOUT.root}${dir}/dist/`)) return true
+    } else if (f.includes(`/packages/${dir}/src/`) || f.includes(`/packages/${dir}/dist/`)) {
+      return true
+    }
   }
   return false
 }
@@ -118,7 +155,7 @@ export function captureOrigin(mode: CaptureMode = 'call'): SourceOrigin | undefi
 /**
  * A frame as `pick` reads it: what its file is, and — for a V8 call site — the
  * site itself, asked for its line and column only if it is the one chosen.
- * A capture reads eight frames and returns one, so the other seven are never
+ * A capture reads six frames and returns one, so the other five are never
  * converted or placed.
  */
 interface Candidate {

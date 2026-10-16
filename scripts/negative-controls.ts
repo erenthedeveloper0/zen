@@ -1345,8 +1345,8 @@ const CONTROLS: readonly Control[] = [
   {
     name: 'fingerprint where the code sits',
     file: `${CORE}/api/graph-document.ts`,
-    find: "    if (key === 'origin') continue",
-    replace: "    if (key === 'origin-never') continue",
+    find: '  const { origin: _origin, ...rest } = record\n  return rest\n',
+    replace: "  const { origin: _origin, ...rest } = record\n  return { ...rest, origin: _origin } as Omit<T, 'origin'>\n",
     suite: 'packages/core/test/graph-document.test.ts',
     caughtBy: '"where code sits is provenance, not identity"',
   },
@@ -1539,6 +1539,40 @@ const CONTROLS: readonly Control[] = [
     replace: 'function http(status: number, code: string, defaultMessage: string) {',
     suite: 'packages/core/test/types.test.ts',
     caughtBy: '"core\'s declarations name no Node global"',
+  },
+
+  // ── a second look at 0.2.0-alpha, before its tag moved ─────────────────────
+  {
+    name: 'take a key the application named `origin` for a registration origin, and leave it out of the fingerprint',
+    file: `${CORE}/api/graph-document.ts`,
+    find: '      ...withoutOrigin(route),\n',
+    replace: '      ...withoutOrigin(route), meta: withoutOrigin({ ...route.meta, origin: null }),\n',
+    suite: 'packages/core/test/graph-document.test.ts',
+    caughtBy: '"only registration origins are left out: a key the application named `origin` is part of what it is"',
+  },
+  {
+    name: 'judge the value the handler returned instead of what the serializer sends',
+    file: `${CORE}/runtime/response-validation.ts`,
+    find: "    const result = check.schema['~standard'].validate(check.view(body.value))",
+    replace: "    const result = check.schema['~standard'].validate(body.value)",
+    suite: 'packages/core/test/response-validation.test.ts',
+    caughtBy: '"a whole row, returned for a strict schema, is served with only the declared fields"',
+  },
+  {
+    name: 'coerce the frozen query a development build hands the validator, in place',
+    file: `${CORE}/api/zen.ts`,
+    find: 'const coerce = compiled !== null && this.#opts.dev === true ? thawingCoercer(compiled) : compiled',
+    replace: 'const coerce = compiled !== null && this.#opts.dev === undefined ? thawingCoercer(compiled) : compiled',
+    suite: 'packages/core/test/context.test.ts',
+    caughtBy: '"coercion still converts in dev — ?page=2 is a number, the query is frozen once it is read"',
+  },
+  {
+    name: "take an application's own packages/core/src for the framework's",
+    file: `${CORE}/primitives/origin.ts`,
+    find: "    return at === -1 ? { kind: 'unknown' } : { kind: 'repo', root: here.slice(0, at + '/packages/'.length) }",
+    replace: "    return at === -2 ? { kind: 'repo', root: here } : { kind: 'unknown' }",
+    suite: 'packages/core/test/origins.test.ts',
+    caughtBy: `"an application's own packages/core/src is the application's: only the framework's tree is the framework"`,
   },
 ]
 

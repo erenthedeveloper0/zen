@@ -126,6 +126,37 @@ export function devFreeze<T>(value: T): T {
   return Object.freeze(value)
 }
 
+/**
+ * The coercer of a development build — `coerce`, handed a thawed copy of a
+ * frozen input.
+ *
+ * A coercer converts in place (§11.4): it owns the object the query string, the
+ * headers or a form body was just parsed into. In development that object is
+ * frozen the moment anything reads it — the validation stage reads it through
+ * the same accessor a handler does — so the conversion threw, and every route
+ * whose query declared a number answered 500 in development alone. Production
+ * freezes nothing and never builds this wrapper; there, the coercer runs on the
+ * parsed object as it always has.
+ */
+export function thawingCoercer(coerce: (value: unknown) => unknown): (value: unknown) => unknown {
+  return function thawThenCoerce(value: unknown): unknown {
+    return coerce(Object.isFrozen(value) ? thaw(value) : value)
+  }
+}
+
+/** `devFreeze`, undone on a copy: plain objects (keeping a null prototype) and arrays, all the way down. */
+function thaw(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value
+  if (Array.isArray(value)) return value.map(thaw)
+  const proto: unknown = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return value
+  const out = Object.create(proto as object | null) as Record<string, unknown>
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(out, key, { value: thaw((value as Record<string, unknown>)[key]), enumerable: true, writable: true, configurable: true })
+  }
+  return out
+}
+
 function slotArrayLiteral(count: number): string {
   // A packed array literal keeps element kind PACKED_ELEMENTS from birth;
   // `new Array(n)` starts HOLEY and never recovers.

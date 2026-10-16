@@ -877,19 +877,25 @@ const CLAIMS: Readonly<Record<string, Probe>> = {
     return verdict(fatals === 1 && statuses.every((st) => st === 500), `12 failures → ${fatals} fatal line(s)`)
   },
 
-  // §11.5 — a wrong value is refused under 'error' and served under 'off'.
+  // §11.5 — a wrong value is refused under 'error' and served under 'off'; and
+  // what is judged is what is sent: a `Date` the serializer writes as ISO text,
+  // returned beside a field the schema does not declare, is not refused.
   'response-validation': async () => {
     const User = shaped({ type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] })
+    const Stamped = shaped({ type: 'object', properties: { at: { type: 'string', format: 'date-time' } }, required: ['at'] })
     const strict = app({ validation: { response: 'error' } })
     strict.get('/u', { response: { 200: User } }, () => ({ id: 'seven' }))
+    strict.get('/t', { response: { 200: Stamped } }, () => ({ at: new Date(0), secret: 'x' }))
     const off = app()
     off.get('/u', { response: { 200: User } }, () => ({ id: 'seven' }))
     const refused = await strict.inject('GET', '/u')
+    const sent = await strict.inject('GET', '/t')
     const served = await off.inject('GET', '/u')
     const pipeline = (a: any) => a.generatedSource().find((u: any) => u.name === 'pipeline:GET_/u')?.source ?? ''
     return verdict(
-      refused.json().code === 'ZEN_RESPONSE_INVALID' && served.status === 200 && !pipeline(off).includes('validateResponse'),
-      `'error' → ${refused.json().code}; 'off' → ${served.status}, nothing emitted`,
+      refused.json().code === 'ZEN_RESPONSE_INVALID' && sent.status === 200 && sent.text() === '{"at":"1970-01-01T00:00:00.000Z"}' &&
+        served.status === 200 && !pipeline(off).includes('validateResponse'),
+      `'error' → ${refused.json().code}; a Date sent as ISO text → ${sent.status}; 'off' → ${served.status}, nothing emitted`,
     )
   },
 
