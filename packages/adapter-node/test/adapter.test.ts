@@ -4,9 +4,9 @@ import { mkdtemp, mkdir, rm, symlink, writeFile, utimes } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { request } from 'node:http'
+import { request, type IncomingHttpHeaders } from 'node:http'
 import { connect } from 'node:net'
-import type { SseChannel } from '@erenthedeveloper0/zen-core'
+import type { HeaderBag, SseChannel } from '@erenthedeveloper0/zen-core'
 import { BootError, createApp, definePlugin, NoopLogger } from '@erenthedeveloper0/zen-core'
 import { ZenRouter, parsePath } from '@erenthedeveloper0/zen-router'
 import { serve, capturingLogger, openAndDrop, delay, abortedWithin } from './helpers.ts'
@@ -519,6 +519,90 @@ describe('repeated response headers (§13.6)', () => {
       const res = await fetch(server.url)
       assert.equal(res.headers.get('vary'), 'origin, accept')
       await res.text()
+    } finally {
+      await server.close()
+    }
+  })
+})
+
+// ── §13.6, §13.7: a body in memory ──────────────────────────────────────────
+
+/** The status line, headers and body as the socket delivered them. */
+function delivered(url: string, method = 'GET'): Promise<{ status: number; reason: string; headers: IncomingHttpHeaders; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    request(url, { method }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, reason: res.statusMessage ?? '', headers: res.headers, body: Buffer.concat(chunks) }))
+      res.on('error', reject)
+    }).on('error', reject).end()
+  })
+}
+
+/** A header bag that is not the core's: any object with the shape will do (`isReply` is structural). */
+function foreignBag(init: Record<string, string>): HeaderBag {
+  const map = new Map(Object.entries(init))
+  return {
+    get: (name) => map.get(name),
+    getAll: (name) => (map.has(name) ? [map.get(name) as string] : []),
+    set: (name, value) => { map.set(name.toLowerCase(), String(value)) },
+    append: (name, value) => { map.set(name.toLowerCase(), value) },
+    has: (name) => map.has(name),
+    delete: (name) => { map.delete(name) },
+    entries: () => [...map.entries()],
+    get size() { return map.size },
+  }
+}
+
+describe('a body in memory (§13.6, §13.7)', () => {
+  it('declares the length of exactly the bytes it sends — short or long, ASCII or not', async () => {
+    const bodies: Record<string, { value: unknown; text: string }> = {}
+    const json = (value: unknown) => ({ value, text: JSON.stringify(value) })
+    bodies['/ascii'] = json({ hello: 'world' })
+    bodies['/unicode'] = json({ name: 'Ädä Lövelace 中文 😀' })
+    bodies['/long'] = json({ items: Array.from({ length: 400 }, (_, i) => `Ädä ${i}`) })
+    // A string is text/plain. A lone surrogate is written as U+FFFD, three bytes.
+    bodies['/surrogate'] = { value: 'a\ud800b', text: 'a�b' }
+    bodies['/long-text'] = { value: 'é'.repeat(3000), text: 'é'.repeat(3000) }
+    const server = await serve((app) => {
+      for (const [path, body] of Object.entries(bodies)) app.get(path, () => body.value)
+    })
+    try {
+      for (const [path, body] of Object.entries(bodies)) {
+        const res = await delivered(`${server.url}${path}`)
+        assert.equal(res.status, 200, path)
+        assert.equal(res.headers['content-length'], String(res.body.length), `${path}: Content-Length is the bytes sent`)
+        assert.ok(res.body.equals(Buffer.from(body.text)), `${path}: the body arrives intact`)
+        const head = await delivered(`${server.url}${path}`, 'HEAD')
+        assert.equal(head.headers['content-length'], String(res.body.length), `${path}: HEAD declares the GET's length`)
+        assert.equal(head.body.length, 0, `${path}: HEAD carries no body`)
+      }
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('writes a reply under a header bag the core did not build, and answers 500 for one Node refuses', async () => {
+    const server = await serve((app) => {
+      const text = (value: string) => ({ kind: 'text' as const, value, media: 'text/plain; charset=utf-8' })
+      app.get('/foreign', () => ({ status: 200, headers: foreignBag({ 'x-from': 'elsewhere' }), cookies: [], body: text('hi') }))
+      app.get('/refused', () => ({ status: 200, headers: foreignBag({ 'x-bad': 'a\u0007b' }), cookies: [], body: text('hi') }))
+    })
+    try {
+      const ok = await delivered(`${server.url}/foreign`)
+      assert.equal(ok.status, 200)
+      assert.equal(ok.headers['x-from'], 'elsewhere')
+      assert.equal(ok.headers['content-length'], '2')
+      assert.equal(ok.body.toString(), 'hi')
+
+      // Nothing of the refused reply reaches the wire, and the error reply's
+      // status line is its own: `500 Internal Server Error`, not the `OK` of a
+      // head Node gave up on half way.
+      const refused = await delivered(`${server.url}/refused`)
+      assert.equal(refused.status, 500)
+      assert.equal(refused.reason, 'Internal Server Error')
+      assert.equal(refused.headers['x-bad'], undefined)
+      assert.equal(JSON.parse(refused.body.toString()).status, 500)
     } finally {
       await server.close()
     }

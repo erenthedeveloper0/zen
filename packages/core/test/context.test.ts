@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import {
   compileContext, CodeGen, DEFAULT_CAPABILITIES, PlainContext, ZenContainer, SmallHeaderBag,
-  parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply,
+  parseQuery, parseCookies, serializeCookie, slot, prepareForWire, jsonReply, emptyReply, textReply,
   type RawRequest, type ContextEnv, type Logger,
 } from '@erenthedeveloper0/zen-core'
 import { makeApp, shaped, silentLogger, uniqueName } from './helpers.ts'
@@ -340,7 +340,52 @@ describe('egress (§13.6)', () => {
     const reply = prepareForWire(contextFor('GET'), jsonReply(JSON_BODY))
     assert.match(reply.headers.get('content-type') ?? '', /application\/json/)
     assert.equal(reply.headers.get('content-length'), JSON_BYTES)
-    assert.equal(reply.body.kind, 'bytes')
+    // §13.7 — a short body reaches the adapter as the string it was serialized to.
+    assert.equal(reply.body.kind, 'text')
+    assert.equal((reply.body as { value: string }).value, JSON.stringify(JSON_BODY))
+  })
+
+  test('counts the UTF-8 bytes of any string: multi-byte, astral, and a lone surrogate as U+FFFD', () => {
+    const ctx = contextFor('GET')
+    const lengthOf = (text: string) => prepareForWire(ctx, textReply(text)).headers.get('content-length')
+    for (const text of ['', 'a', 'é', '€', '😀', '\ud800', '\udc00', 'a\ud83db', '\ude00\ud83d', '😀\ud83d', '\u0080߿ࠀ￿']) {
+      assert.equal(lengthOf(text), String(Buffer.byteLength(text)), JSON.stringify(text))
+    }
+    // Every UTF-16 code unit, surrogates included, from a fixed seed: the same
+    // two thousand strings on every run.
+    let seed = 0x2545f491
+    const next = () => {
+      seed ^= seed << 13
+      seed ^= seed >>> 17
+      seed ^= seed << 5
+      return (seed >>> 0) / 0x100000000
+    }
+    for (let n = 0; n < 2000; n++) {
+      let text = ''
+      const units = Math.floor(next() * 12)
+      for (let i = 0; i < units; i++) text += String.fromCharCode(Math.floor(next() * 0x10000))
+      assert.equal(lengthOf(text), String(Buffer.byteLength(text)), JSON.stringify(text))
+    }
+  })
+
+  test('encodes a long body once: one boundary between string and bytes, the length exact on both sides', () => {
+    const ctx = contextFor('GET')
+    for (const unit of ['x', 'é']) {
+      let boundary = -1
+      for (let units = 1; units <= 4096; units++) {
+        const text = unit.repeat(units)
+        const reply = prepareForWire(ctx, textReply(text))
+        assert.equal(reply.headers.get('content-length'), String(Buffer.byteLength(text)), `${units} × ${unit}`)
+        if (reply.body.kind === 'bytes') {
+          if (boundary === -1) boundary = units
+          assert.ok(Buffer.from((reply.body as { value: Uint8Array }).value).equals(Buffer.from(text)), `${units} × ${unit}: the bytes`)
+        } else {
+          assert.equal(reply.body.kind, 'text')
+          assert.equal(boundary, -1, `${units} × ${unit}: a string after bytes began at ${boundary}`)
+        }
+      }
+      assert.ok(boundary > 256 && boundary < 4096, `${unit}: bytes begin at ${boundary} UTF-16 units`)
+    }
   })
 
   test('applies staged status, headers and cookies', () => {

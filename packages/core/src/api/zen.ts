@@ -2202,10 +2202,17 @@ export class ZenApp<X = {}> {
       // yields, so its deadline provably cannot have fired. §8.4's sync fast
       // path is un-timeoutable by construction — which is fine, because it is
       // also incapable of hanging.
+      //
+      // Nor is a value awaited at all: `await` on a value is still a tick and
+      // a promise, and a synchronous pipeline that then waited for one before
+      // egress would give back what §8.4 compiled away. From here to the last
+      // byte, a request that never meets a promise never yields.
       const running = compiledRoute.pipeline(ctx)
-      const reply = deadline === null || !isThenable(running)
-        ? await running
-        : await Promise.race([running, deadline.expiry])
+      const reply = !isThenable(running)
+        ? running
+        : deadline === null
+          ? await running
+          : await Promise.race([running, deadline.expiry])
 
       // The clock stops before egress on purpose: the deadline bounds stages
       // 5-9, up to handing the reply to the adapter. It does not bound the
@@ -2215,7 +2222,8 @@ export class ZenApp<X = {}> {
       // listener stays until the `finally`, so a streamed body still sees
       // `ctx.signal` abort when its client leaves.
       deadline?.settle()
-      await this.#send(ctx, conn, reply, hooks.onResponse)
+      const sent = this.#send(ctx, conn, reply, hooks.onResponse)
+      if (sent !== undefined) await sent
     } catch (error) {
       const target = ctx ?? new compiled.Ctx(raw, null, EMPTY, compiled.env, conn.signal)
       if (target.id === '') target.id = makeRequestId()
@@ -2382,17 +2390,29 @@ export class ZenApp<X = {}> {
     return current
   }
 
-  async #send(ctx: PlainContext, conn: Connection, reply: Reply, onResponse: readonly Function[]): Promise<void> {
+  /**
+   * Egress and stage 10. Synchronous for as long as everything it calls is —
+   * the adapter's write, each `onResponse` hook, the release — and a promise
+   * from the first of them that is not, so a request that meets no promise
+   * pays for none (§8.4). A throw from the write propagates to the caller
+   * either way: synchronously into the dispatcher's `try`, or as the rejection
+   * it awaits.
+   */
+  #send(ctx: PlainContext, conn: Connection, reply: Reply, onResponse: readonly Function[]): Promise<void> | undefined {
     const wire = stripBodyIfNeeded(prepareForWire(ctx, reply))
     // §7.3 — the staged metadata has just been applied, so from here a write to
     // `ctx.res` would be accepted and then discarded. It throws
     // `ZEN_REPLY_SENT` instead. One store into a field every context already
     // has, of a shared frozen object: no field, no allocation (I2).
     ctx.$stage = SEALED_STAGE
-    await conn.send(wire)
+    const sent = conn.send(wire)
+    return isThenable(sent)
+      ? sent.then(() => this.#afterSend(ctx, wire, onResponse))
+      : this.#afterSend(ctx, wire, onResponse)
+  }
 
-    // Stage 10 — after the last byte. Never able to affect the client (§9.5).
-    //
+  /** Stage 10 — after the last byte. Never able to affect the client (§9.5). */
+  #afterSend(ctx: PlainContext, wire: Reply, onResponse: readonly Function[]): Promise<void> | undefined {
     // `aborted` and `timedOut` are published here rather than polled, so a hook
     // can classify the request without touching the signal (§4.4). The two
     // together decompose the outcome: `aborted && timedOut` is a deadline we
@@ -2401,17 +2421,43 @@ export class ZenApp<X = {}> {
     // requests" and "8% of clients give up" coexist on the same dashboard.
     ctx.aborted = ctx.signal.aborted
     ctx.timedOut = ctx.$deadline !== null && ctx.$deadline.expired
-    for (const hook of onResponse) {
+    for (let i = 0; i < onResponse.length; i++) {
+      let result: unknown
       try {
-        await (hook as (c: unknown, r: Reply) => unknown)(ctx, wire)
+        result = (onResponse[i] as (c: unknown, r: Reply) => unknown)(ctx, wire)
       } catch (error) {
         this.#log.error({ err: error }, 'onResponse hook threw; ignoring')
+        continue
       }
+      // The first hook that answers with a promise is awaited, and every hook
+      // after it, in order, as they always were.
+      if (isThenable(result)) return this.#afterSendAsync(ctx, wire, onResponse, i, result)
     }
 
     // Almost every request has nothing to release, and it must not pay an
     // `await` to find that out — a call into an async function is a promise
     // and a tick on every request in the application.
+    if (ctx.$disposers === null) {
+      ctx.$disposers = SETTLED
+      return undefined
+    }
+    return this.#release(ctx)
+  }
+
+  /** {@link #afterSend} from the hook at `index`, whose result was a promise. */
+  async #afterSendAsync(ctx: PlainContext, wire: Reply, onResponse: readonly Function[], index: number, pending: Promise<unknown>): Promise<void> {
+    try {
+      await pending
+    } catch (error) {
+      this.#log.error({ err: error }, 'onResponse hook threw; ignoring')
+    }
+    for (let i = index + 1; i < onResponse.length; i++) {
+      try {
+        await (onResponse[i] as (c: unknown, r: Reply) => unknown)(ctx, wire)
+      } catch (error) {
+        this.#log.error({ err: error }, 'onResponse hook threw; ignoring')
+      }
+    }
     if (ctx.$disposers === null) ctx.$disposers = SETTLED
     else await this.#release(ctx)
   }

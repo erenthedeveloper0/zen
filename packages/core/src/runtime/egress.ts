@@ -1,9 +1,20 @@
 import type { HeaderBag, Reply } from '../contracts/reply.ts'
 import type { PlainContext } from './context.ts'
 import { MutableReply } from './reply.ts'
-import { effectiveStatus, encodeBody } from './response-engine.ts'
+import { effectiveStatus, jsonMedia, jsonText } from './response-engine.ts'
 import { serializeCookie } from './cookies.ts'
 import { SmallHeaderBag } from './headers.ts'
+import { utf8Length } from '../primitives/utf8.ts'
+
+/**
+ * The longest JSON or text body, in UTF-16 units, that egress hands to the
+ * adapter as a string rather than encoding it (§13.7). Below it, counting the
+ * bytes costs less than the encoding and the second write buffer it saves;
+ * above it, encoding wins.
+ */
+export const INLINE_TEXT_LIMIT = 512
+
+const encoder = new TextEncoder()
 
 /**
  * Egress — rfcs/0001 §4.2 stage 9, §13.6.
@@ -63,25 +74,33 @@ export function prepareForWire(ctx: PlainContext, reply: Reply): Reply {
   }
 
   // ── body encoding ───────────────────────────────────────────────────────
-  const kind = mutable.body.kind
-  if (kind === 'json' || kind === 'text') {
-    const { bytes, media } = encodeBody(mutable)
-    if (bytes !== null) {
-      if (!mutable.headers.has('content-type') && media !== null) {
-        mutable.headers.set('content-type', media)
-      }
+  // §13.7: the serializer builds one string, and a short one reaches the
+  // adapter as that string. Node writes a string body in the same write as the
+  // head; bytes go out as a second buffer beside it, which costs more than
+  // counting a short body's bytes here does. A long body is encoded once,
+  // because counting it would cost more than encoding it.
+  const body = mutable.body
+  if (body.kind === 'json' || body.kind === 'text') {
+    const text = body.kind === 'json' ? jsonText(body) : body.value
+    const media = body.kind === 'json' ? jsonMedia(body) : body.media
+    if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', media)
+    if (text.length <= INLINE_TEXT_LIMIT) {
+      mutable.headers.set('content-length', String(utf8Length(text)))
+      if (body.kind === 'json') mutable.body = { kind: 'text', value: text, media }
+    } else {
+      const bytes = encoder.encode(text)
       mutable.headers.set('content-length', String(bytes.byteLength))
-      mutable.body = { kind: 'bytes', value: bytes, media: media ?? 'application/octet-stream' }
+      mutable.body = { kind: 'bytes', value: bytes, media }
     }
-  } else if (kind === 'bytes') {
-    if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', mutable.body.media)
-    mutable.headers.set('content-length', String(mutable.body.value.byteLength))
-  } else if (kind === 'empty') {
+  } else if (body.kind === 'bytes') {
+    if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', body.media)
+    mutable.headers.set('content-length', String(body.value.byteLength))
+  } else if (body.kind === 'empty') {
     mutable.headers.delete('content-type')
     if (mutable.status !== 304) mutable.headers.set('content-length', '0')
-  } else if (kind === 'stream') {
-    if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', mutable.body.media)
-  } else if (kind === 'sse') {
+  } else if (body.kind === 'stream') {
+    if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', body.media)
+  } else if (body.kind === 'sse') {
     // `ctx.sse()` sets this already; a reply assembled by hand around a channel
     // still has to announce itself as an event stream or `EventSource` refuses it.
     if (!mutable.headers.has('content-type')) mutable.headers.set('content-type', 'text/event-stream; charset=utf-8')

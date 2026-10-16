@@ -5,6 +5,7 @@ import type { PipelineSpec, ValidatorStep } from '../compile/pipeline-compiler.t
 import type { SerializerTable } from '../compile/serializer.ts'
 import { PIPELINE_PHASES } from '../contracts/hook.ts'
 import { declaredSlots } from '../registry/slot-registry.ts'
+import { utf8Length } from '../primitives/utf8.ts'
 
 /**
  * EXPLAIN ANALYZE for HTTP — the instrumentation half (§8.5).
@@ -464,7 +465,8 @@ export async function explainRequest(
   const reply = response.reply
   const headers = [...reply.headers.entries()].length
   const body = reply.body
-  const bytes = body.kind === 'bytes' ? body.value.byteLength : null
+  // Egress sends a short body as the string it was serialized to (§13.7).
+  const bytes = body.kind === 'bytes' ? body.value.byteLength : body.kind === 'text' ? utf8Length(body.value) : null
   const explanation = { method: method.toUpperCase(), url, route, status: response.status, totalMs, deadline, events }
   return { ...explanation, text: renderExplanation(explanation, { headers, bytes }) }
 }

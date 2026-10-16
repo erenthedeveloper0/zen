@@ -217,6 +217,49 @@ describe('request-scoped disposal (§15.3, §4.2 stage 10)', () => {
     assert.deepEqual(events, ['onResponse', 'dispose 1', 'onResponse', 'dispose 2'])
   })
 
+  test('every onResponse hook runs in order, sync or async, past one that throws or rejects — and disposal waits for the last', async () => {
+    // Stage 10 is synchronous until a hook returns a promise, then awaits that
+    // hook and every one after it (§8.4, §9.5). Either way: the same order, a
+    // failing hook logged and skipped, and nothing released while a hook that
+    // may still use it is running.
+    const events: string[] = []
+    const logged: string[] = []
+    const noop = () => {}
+    const logger = {
+      level: 'trace' as const,
+      child() { return logger },
+      trace: noop, debug: noop, info: noop, warn: noop, fatal: noop,
+      error: (_fields: unknown, message?: string) => { logged.push(message ?? '') },
+    }
+    const Tx = t<{ id: number }>('stage-ten-tx')
+    const app = makeApp({ logger })
+    app.provide(Tx, { lifetime: 'scoped', factory: () => ({ id: 1 }), dispose: () => { events.push('dispose') } })
+    app.get('/', (ctx) => ({ id: ctx.resolve(Tx).id }))
+    // Registered last-first: on the way out a scope's hooks run mirrored, the
+    // last registered first (§9.3), so this runs two synchronous hooks before
+    // the first promise — the path that changes from sync to async part way.
+    app.hook('onResponse', async () => { await Promise.resolve(); events.push('async 2') })
+    app.hook('onResponse', () => { events.push('sync 2') })
+    app.hook('onResponse', async () => { events.push('rejects'); throw new Error('async failure') })
+    app.hook('onResponse', async () => { await new Promise((resolve) => setTimeout(resolve, 5)); events.push('async 1') })
+    app.hook('onResponse', () => { events.push('throws'); throw new Error('sync failure') })
+    app.hook('onResponse', () => { events.push('sync 1') })
+
+    assert.deepEqual((await app.inject('GET', '/')).json(), { id: 1 })
+    assert.deepEqual(events, ['sync 1', 'throws', 'async 1', 'rejects', 'sync 2', 'async 2', 'dispose'])
+    assert.deepEqual(logged, ['onResponse hook threw; ignoring', 'onResponse hook threw; ignoring'])
+
+    // And with only synchronous hooks, the same order and the same release.
+    events.length = 0
+    const plain = makeApp()
+    plain.provide(Tx, { lifetime: 'scoped', factory: () => ({ id: 2 }), dispose: () => { events.push('dispose') } })
+    plain.get('/', (ctx) => ({ id: ctx.resolve(Tx).id }))
+    plain.hook('onResponse', () => { events.push('sync 2') })
+    plain.hook('onResponse', () => { events.push('sync 1') })
+    assert.deepEqual((await plain.inject('GET', '/')).json(), { id: 2 })
+    assert.deepEqual(events, ['sync 1', 'sync 2', 'dispose'])
+  })
+
   test('several scoped services dispose in reverse creation order', async () => {
     const order: string[] = []
     const Conn = t<string>('scoped-conn')

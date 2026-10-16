@@ -3,10 +3,10 @@ import { createReadStream } from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type {
-  BodySource, Capabilities, Connection, Dispatch, ListenOptions, RawRequest,
+  BodySource, Capabilities, Connection, Dispatch, HeaderBag, ListenOptions, RawRequest,
   RemoteInfo, Reply, RuntimeAdapter, ServerHandle, LowercaseName, SseChannel,
 } from '@erenthedeveloper0/zen-core'
-import { Codes, PayloadTooLarge, ZenError, docsUrl } from '@erenthedeveloper0/zen-core'
+import { Codes, PayloadTooLarge, SmallHeaderBag, ZenError, docsUrl } from '@erenthedeveloper0/zen-core'
 import { planFile } from './file.ts'
 
 export { mediaTypeFor } from './file.ts'
@@ -242,8 +242,13 @@ class NodeConnection implements Connection {
     // `shutdownTimeout` on every rolling deploy. Responses whose headers are
     // still to be written get `Connection: close` in `send()`; this covers the
     // ones already on the wire.
+    //
+    // `on` rather than `once`, here and below: a response emits each of these
+    // events at most once, and `once` wraps the listener in a function that
+    // removes itself — an allocation and a removal on every request, for
+    // nothing.
     const socket = request.socket
-    response.once('finish', () => {
+    response.on('finish', () => {
       if (state.closing && !socket.destroyed) socket.end()
     })
 
@@ -260,7 +265,7 @@ class NodeConnection implements Connection {
     // The response emits `close` exactly once, when the exchange is over for
     // either reason; `writableFinished` says which. Finished means we answered.
     // Not finished means the connection went away first — the client left.
-    response.once('close', () => {
+    response.on('close', () => {
       if (!response.writableFinished) this.#controller.abort()
     })
   }
@@ -275,7 +280,7 @@ class NodeConnection implements Connection {
     return this.signal.reason
   }
 
-  async send(reply: Reply): Promise<void> {
+  send(reply: Reply): Promise<void> | void {
     const response = this.native
 
     // The exchange is already over: the client left, a streamed body failed
@@ -302,6 +307,68 @@ class NodeConnection implements Connection {
     // reply inherits the first reply's headers.
     for (const name of response.getHeaderNames()) response.removeHeader(name)
 
+    // A body already in memory, under headers the core checked as they were
+    // set, is written now and in one step: the status line and every header in
+    // a single `writeHead`, then the body. Nothing here waits, so nothing here
+    // makes a promise. Egress gave each of these bodies its `Content-Length`,
+    // which is what lets the head go first (§13.6).
+    const body = reply.body
+    if (reply.headers instanceof SmallHeaderBag) {
+      switch (body.kind) {
+        case 'empty':
+          response.writeHead(reply.status, this.#head(reply.headers))
+          response.end()
+          return
+        case 'text':
+          // One write: Node joins a string body to the head (§13.7).
+          response.writeHead(reply.status, this.#head(reply.headers))
+          response.end(body.value)
+          return
+        case 'bytes':
+          response.writeHead(reply.status, this.#head(reply.headers))
+          response.end(Buffer.from(body.value.buffer, body.value.byteOffset, body.value.byteLength))
+          return
+      }
+    }
+    return this.#sendLater(reply)
+  }
+
+  /**
+   * The headers as `writeHead`'s flat list, `[name, value, name, value, …]`:
+   * the form Node writes without first copying each header into a table of its
+   * own, as `appendHeader` does.
+   *
+   * One entry per value. `SmallHeaderBag.entries()` repeats a name once per
+   * value, and a repeated name is how the bag says "this header has several
+   * values" — a `Vary` from CORS and one from content negotiation, two
+   * subsystems that know nothing about each other, must both arrive (§13.6).
+   *
+   * Only for the core's own bag, whose every name and value was checked
+   * against the rule Node enforces when it was set: a list Node refused part
+   * way through would leave the response half-configured for the error reply
+   * that follows.
+   */
+  #head(headers: HeaderBag): string[] {
+    const closing = this.#state.closing
+    const head: string[] = []
+    for (const [name, value] of headers.entries()) {
+      // Replaced below, as `setHeader` replaces it on the other path.
+      if (closing && name === 'connection') continue
+      head.push(name, value)
+    }
+    // §4.5 step 2: shutting down, so this is the connection's last response.
+    // Node honours the header by closing the socket once the body is written.
+    if (closing) head.push('connection', 'close')
+    return head
+  }
+
+  /**
+   * Every other reply: a file, which is `stat`ed before anything is written; a
+   * stream or an event stream, which is piped; and a body under a header bag
+   * the core did not build, whose headers Node checks one at a time.
+   */
+  async #sendLater(reply: Reply): Promise<void> {
+    const response = this.native
     const body = reply.body
 
     // Everything that can fail before a byte is written happens first, so that

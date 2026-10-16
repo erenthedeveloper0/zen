@@ -228,16 +228,27 @@ export function encodeBody(reply: Reply): { bytes: Uint8Array | null; media: str
       return { bytes: encoder.encode(body.value), media: body.media }
     case 'bytes':
       return { bytes: body.value, media: body.media }
-    case 'json': {
-      const json = body.serialize ? body.serialize(body.value) : safeStringify(body.value)
-      // `media` is set only when §13.4 negotiated a representation; every other
-      // JSON response in every application takes the constant, which is the
-      // string it has always taken.
-      return { bytes: encoder.encode(json), media: body.media ?? JSON_CONTENT_TYPE }
-    }
+    case 'json':
+      return { bytes: encoder.encode(jsonText(body)), media: jsonMedia(body) }
     default:
       return { bytes: null, media: null }
   }
+}
+
+type JsonBody = Extract<Reply['body'], { kind: 'json' }>
+
+/** A JSON body as the text it is sent as: {@link encodeBody} before the encoding. */
+export function jsonText(body: JsonBody): string {
+  return body.serialize ? body.serialize(body.value) : safeStringify(body.value)
+}
+
+/**
+ * The media type a JSON body is sent as. `media` is set only when §13.4
+ * negotiated a representation; every other JSON response in every application
+ * takes the constant, which is the string it has always taken.
+ */
+export function jsonMedia(body: JsonBody): string {
+  return body.media ?? JSON_CONTENT_TYPE
 }
 
 const encoder = new TextEncoder()
