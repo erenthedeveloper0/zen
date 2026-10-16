@@ -4,7 +4,7 @@ All notable changes to Zen. The packages are versioned together; every entry
 applies to all six. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Zen is an alpha: until `1.0`, any prerelease may change the API.
 
-## [0.2.0-alpha] — 2026-10-11
+## [0.2.0-alpha] — 2026-10-16
 
 Diagnostics and contracts. The application graph becomes data you can diff,
 and every diagnostic points at the line of code it is about. Until now a boot
@@ -19,6 +19,13 @@ JSON with SHA-256 fingerprints, held to the API diff by an oracle of a thousand
 seeded schema edits.
 
 The first minor version. The packages stay on npm's `alpha` dist-tag.
+
+This version was first tagged on 2026-10-11, at `da0b76d`, and its publish was
+not approved: nothing reached npm under that tag. A second look at it
+reproduced four defects in what this release adds (**Fixed**, below), and a
+profile found where the ~20% every request paid against `node:http` went
+(**Performance**). The tag was moved to the commits that fix the four,
+together with the faster response path and corrections to the documentation.
 
 ### Added
 
@@ -161,6 +168,16 @@ The first minor version. The packages stay on npm's `alpha` dist-tag.
   gives the handler a typed second argument (`DepsOf<S>`); `RouteRecord.schema`
   is a `RouteSpec`.
 - `explainRoute()` prints a `registered` row and each step's origin.
+- **A reply that has been through egress carries a short body as `text`**
+  rather than `bytes` — an `onResponse` hook, `inject()`'s `reply`, and an
+  adapter of your own see the string. `InjectedResponse.text()` and `json()`
+  read either.
+- **A microtask a synchronous handler queues runs after egress**, not before:
+  the dispatcher no longer yields between a pipeline that returned a value and
+  the write. One that writes `ctx.res` now throws `ZEN_REPLY_SENT` inside that
+  microtask, as a write after the reply always has — which is what a promise
+  that settled any later already did. Staging belongs in the handler, or in a
+  hook.
 
 ### Fixed
 
@@ -179,6 +196,39 @@ The first minor version. The packages stay on npm's `alpha` dist-tag.
   descriptions, changed under a dependency update while no byte on the wire did.
   `0.1.0-alpha.5`'s code emits the same document as this release's, so the drift
   is the dependency's; the baseline is regenerated.
+- **As first tagged, a development build answered 500 to every request whose
+  query a schema coerces.** With `dev: true`, `GET /catalog?page=2` against
+  `z.number()` threw `Cannot assign to read only property 'page'`: development
+  deep-freezes the query it hands out (§7.3, above), and coercion converted it
+  in place. Production builds were unaffected. The coercer now works on a
+  thawed copy, in development only; the query a handler reads is still frozen,
+  and a production build compiles exactly as before.
+- **As first tagged, response validation judged the handler's value, not the
+  response.** `validation.response` refused a correct response whenever the
+  serializer would have changed it on the way out: a row with undeclared
+  fields under a strict schema — the `passwordHash` example, the reason the
+  serializer exists — and a `Date` for a string schema, which the serializer
+  writes as ISO text. In development that was a `ZEN_RESPONSE_INVALID` 500;
+  under the hardened profile in production, an error log line for every
+  correct response. The value is now put through the projection the
+  serializer applies — undeclared keys dropped as it drops them, dates and big
+  integers as it writes them — and judged as it will be sent. The claims
+  ledger's probe for the feature sends a `Date` beside an undeclared field and
+  requires the 200.
+- **As first tagged, the application fingerprint ignored every key named
+  `origin`.** `graphDocument()` left registration origins out of `fingerprint`
+  by deleting the key `origin` at any depth, so `meta: { origin: 'internal' }`
+  on a route, or a schema property named `origin`, could change without moving
+  the fingerprint. Only registration origins are left out now: the `origin` of
+  a route, handler, check, hook, middleware, collection, plugin, decoration,
+  health check, named schema and service.
+- **As first tagged, registration origins pointed past an application's own
+  `packages/core/src`.** A file was taken for the framework's when its path
+  contained `/packages/core/src/` — or the same for any of the six packages —
+  so in a monorepo with a package of its own at that path, an origin named
+  whoever called the application's registration code. The framework now
+  places its own files by where it is installed: under
+  `node_modules/@erenthedeveloper0/`, or in this repository's own tree.
 
 ### Performance
 
@@ -196,15 +246,40 @@ worktree of `0.1.0-alpha.5` run alternately with this tree.
   response schemas compile to the same serializer now share it.
 - **`graphDocument()`** costs ~37 µs a route on its first call — 378 ms and
   10.6 MB of JSON at 10,000 routes — and is kept after that.
-- **The request path is unchanged.** A plain route's generated pipeline is
-  byte-identical to `0.1.0-alpha.5`'s, every `benchmarks/request-path` gate
-  holds, and `inject()` costs ~1.18 µs in both builds, paired — after a dispatch
-  refactor made for `explainRequest()` was found adding ~60 ns and was undone.
-  Against other servers Zen is where it was: 0.79–0.83× of `node:http` on
-  every workload without I/O, Fastify 0.97–1.03×, in the release gate's run
-  (cell spreads under 7%). A paired run against `0.1.0-alpha.5` found the same
-  ~0.8× in both, though too noisy to resolve anything finer;
-  `benchmarks/results/competitors.md` has both.
+
+**The request path, profiled.** A plain route's generated pipeline is still
+byte-identical to `0.1.0-alpha.5`'s; what changed is around it. A CPU profile
+of the static-JSON workload found Zen's socket write costing half again
+node:http's: egress encoded every JSON body to bytes, so Node wrote
+the head and the body as two chunks, where a string body goes out with the
+head in one write. Three changes, each measured on its own in paired,
+alternating runs against the tree as first tagged, whose request path was
+`0.1.0-alpha.5`'s (Node 24, the load generator on the same machine):
+
+- **A short body reaches the adapter as the string it was serialized to**
+  (§13.7). A JSON or text body of at most 512 UTF-16 units keeps its string,
+  and egress counts its UTF-8 bytes for `Content-Length` instead of encoding
+  it; a longer one is encoded once, as before. The limit is where counting
+  stops paying: on plain `node:http`, counting plus a string against encoding
+  plus a buffer is +6.6% at 143 characters, +4.9% at 498, even at 999, and
+  −5.3% at 2,079.
+- **The Node adapter writes a body in memory in one synchronous step**: the
+  status line and every header in one `writeHead`, then the body — for a reply
+  under the core's own header bag, whose every value was checked when it was
+  set. Anything else takes the per-header path it always did.
+- **The dispatcher no longer awaits a value** — the pipeline's result, the
+  adapter's write, an `onResponse` hook's result (§8.4). A request that meets
+  no promise does not yield between dispatch and its last byte; the first
+  promise one does meet is awaited where it appears. `inject()` of a JSON
+  route behind ten middleware: 969 → 766 ns.
+
+Together, over a socket: 10–14% more requests a second on Annex C's
+workloads without I/O — from 0.80–0.83× of a hand-written `node:http` handler
+to 0.88–0.94×, paired — and 4% on the realistic workload, whose ~2 KB response
+is past the limit and whose 5 ms of I/O dominates. The competitor harness,
+unpaired, has Zen at 0.89–0.96× of `node:http` without I/O and 1.01× on the
+realistic workload. `inject()`: 1,180 → 765 ns a request. The four fixes above
+cost nothing measurable.
 
 ### Documentation
 
@@ -220,6 +295,20 @@ worktree of `0.1.0-alpha.5` run alternately with this tree.
   line", "The application as data"), and the test table. `docs/errors.md`: the
   three codes, and `ZEN_PARAM_TYPE_UNKNOWN` and `ZEN_DI_MISSING` as they now
   behave.
+- The second look held the documents to the code and corrected them where they
+  disagreed. ARCHITECTURE.md: I7 (issue codes have been the library's own,
+  through a mapper, since `0.1.0-alpha.5`); §5.1 (six frames); §5.2 (a
+  parameter inside a segment is a boot error); §8.4 (the dispatcher); §9.9
+  (the twin's ratio); §11's header and §11.5; §13.7; §14.2, §14.5 and §14.7
+  (only the Node adapter is built — there is no `zen build` and no Express
+  compatibility); §14.3's way out; §18.2 (measured again); §19.4 (`trustProxy`
+  is a boolean or a hop count); §20.4 (no check walks the declarations for
+  `any` — the property holds, by hand); §20.7's count; §23.1, which pointed at
+  a file outside the repository; §24.2 (`ctx.config` is a getter); Annex B's
+  two reserved codes; §30.1 and §30.3; §32's members. README: the status, the
+  counts, the layout, the competitor table and the re-measured serializer and
+  refusal figures; CONTRIBUTING's count; `ZEN_RESPONSE_INVALID` in
+  `docs/errors.md`; the middleware README's members.
 
 ### Repository
 
@@ -235,10 +324,10 @@ worktree of `0.1.0-alpha.5` run alternately with this tree.
   wrong-type value in a response — through response validation, or, in the two
   examples whose response shapes are `jsonSchema()` and cannot validate, through
   the strict serializer.
-- Tests: 1,494, from 1,285. The contract oracle: a thousand seeded schema edits per run
+- Tests: 1,508, from 1,285. The contract oracle: a thousand seeded schema edits per run
   (fifty-one seeds, 51,000 edits, checked once by hand).
-- The claims ledger: 66 claims (18 new), 2 admitted gaps. `route-origin`, `middleware-when` and `per-route-body-limit` closed and are claims now.
-- Negative controls: 177 — 33 new, one per new behaviour; four that this release's refactors had made stale were pointed at the code again. Writing them found two suites that were not load-bearing: the per-chunk body limit is unreachable through `inject()`, which always declares a length, and is now tested over a socket; `requestLog`'s skip test counted lines without checking which.
+- The claims ledger: 66 claims (18 new), 2 admitted gaps. `route-origin`, `middleware-when` and `per-route-body-limit` closed and are claims now. The `response-validation` probe sends a `Date` beside an undeclared field and requires the 200 — the first tag refused it.
+- Negative controls: 190 — 46 new, one per new behaviour; seven that this release's changes had made stale were pointed at the code again, and one new one whose suite hung rather than failed was aimed at a suite that fails. Writing them found two suites that were not load-bearing: the per-chunk body limit is unreachable through `inject()`, which always declares a length, and is now tested over a socket; `requestLog`'s skip test counted lines without checking which.
 
 ## [0.1.0-alpha.5] — 2026-10-09
 

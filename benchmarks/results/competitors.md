@@ -4,11 +4,60 @@ RFC §1.4 makes a falsifiable prediction: Zen's per-request work should be withi
 hand-written `http.createServer` handler doing the same job — *"if that is not true in
 benchmarks, the thesis has failed and we should say so."* This page says so. Every number
 below is read from the JSON files beside it, written by
-[`benchmarks/competitors/run.ts`](../competitors/run.ts).
+[`benchmarks/competitors/run.ts`](../competitors/run.ts) — except one paired run, which says
+so.
 
-## `0.2.0-alpha` — the request path did not change, as far as this run can tell
+## `0.2.0-alpha` — the response path, profiled and fixed
 
-This release added nothing to what a request runs: its features are boot-time
+`0.2.0-alpha` was first tagged on 2026-10-11 with `0.1.0-alpha.5`'s request path, and its gate
+measured what that predicts: Zen at 0.79–0.83× of `node:http` without I/O (the next section).
+That tag was never published. Before it was moved, a CPU profile of workload 1 found the cost
+every request had paid: Zen's socket write took ~5.9 µs a request against `node:http`'s ~3.9,
+because egress encoded every JSON body to bytes and Node then wrote the head and the body as two
+chunks, where a string body goes out with the head in one write. On plain `node:http` that
+difference alone is 7% (80.8k against 75.1k requests a second, paired). Three changes took it
+out — a short body stays a string, the Node adapter writes a body in memory with one
+`writeHead`, the dispatcher stops awaiting values; the CHANGELOG has each one's own number.
+
+The release gate's run, on the final tree — Node 24, five 10-second runs per cell after a
+3-second warm-up, on battery:
+
+| Workload | node-http | zen | fastify | hono | express |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1. Static JSON, no schema | 74,448 | 71,190 (0.96×) | 62,838 (0.84×) | 68,921 (0.93×) | 48,147 (0.65×) |
+| 2. JSON with a response schema | 72,200 | 65,541 (0.91×) | 75,325 (1.04×) | 68,991 (0.96×) | 47,309 (0.66×) |
+| 3. A route with 5 path params | 72,278 | 68,676 (0.95×) | 71,024 (0.98×) | 67,184 (0.93×) | 45,075 (0.62×) |
+| 4. POST + body validation (Zod), ~1 KB | 44,810 | 40,077 (0.89×) | 42,928 (0.96×) | 42,381 (0.95×) | 31,159 (0.70×) |
+| 5. 10 middleware | 71,181 | 66,837 (0.94×) | 70,826 (1.00×) | 57,308 (0.81×) | 44,678 (0.63×) |
+| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 20,120 | 20,270 (1.01×) | 20,194 (1.00×) | 21,352 (1.06×) | 18,664 (0.93×) |
+
+Some cells spread more than this method usually manages — Zen's on workload 2 by ±13.4%,
+Fastify's and Hono's on workload 3 by ±14.7% and ±16.4% — and Fastify's 0.84× on workload 1 is
+this run's outlier: it was 1.00× and 1.02× in the two runs before. `0.2.0-alpha-response-path.json`
+is the run; it names `da0b76d` "with uncommitted changes" because it ran before the commits.
+
+The measurement that resolves the change is paired: the tree as first tagged and the final tree,
+run alternately with `node:http` beside them — six rounds of six seconds per cell after a
+2-second warm-up, 128 connections, four load-generator threads, the order reversed every round:
+
+| Workload | first tag | final | change | of `node:http`, first tag → final |
+| --- | ---: | ---: | ---: | ---: |
+| 1. Static JSON, no schema | 60,500 | 69,205 | +14.4% | 0.82× → 0.94× |
+| 2. JSON with a response schema | 58,443 | 66,376 | +13.6% | 0.83× → 0.94× |
+| 3. A route with 5 path params | 57,600 | 64,935 | +12.7% | 0.83× → 0.94× |
+| 4. POST + body validation (Zod), ~1 KB | 35,851 | 39,475 | +10.1% | 0.80× → 0.88× |
+| 5. 10 middleware | 59,240 | 67,300 | +13.6% | 0.82× → 0.93× |
+| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 18,701 | 19,405 | +3.8% | 0.93× → 0.97× |
+
+The final tree was faster in six of six rounds on workloads 1–4 and in five of six on 5 and 6.
+Workload 6 sends ~2 KB, past the 512-unit limit under which a body stays a string, and spends
+5 ms in I/O. `0.2.0-alpha-paired-first-tag-vs-final.json` holds every round; unlike the rest of
+this page it was written by an alternating driver rather than `run.ts` — each round boots each
+build's `servers/zen.ts` afresh and loads it with the same autocannon settings.
+
+## `0.2.0-alpha` as first tagged — the request path did not change, as far as this run could tell
+
+As first tagged, this release added nothing to what a request runs: its features are boot-time
 (registration origins, the graph document) or emit no code unless a route asks
 for them (response validation, `check`, `inject`, conditional middleware), and a
 plain route's generated pipeline is byte-identical to `0.1.0-alpha.5`'s. It was
@@ -43,9 +92,9 @@ for `explainRequest()` was found adding ~60 ns to it and was undone.
 ones were measured before the version bump, on top of `b67d321`, so they name
 that commit "with uncommitted changes" and the version `0.1.0-alpha.5`.
 
-The release's own gate ran later, on the final tree, with Fastify beside it and
+The first tag's own gate ran later, on that tree, with Fastify beside it and
 a quieter machine — every cell's spread between 0.6% and 6.7%. It is the number
-to quote for `0.2.0-alpha`, and it is `0.1.0-alpha.5`'s: Zen at 0.79–0.83× of
+that tree measured, and it is `0.1.0-alpha.5`'s: Zen at 0.79–0.83× of
 `node:http` without I/O, Fastify at 0.97–1.03×.
 
 | Workload | node-http | zen | fastify |

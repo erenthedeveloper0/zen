@@ -409,7 +409,7 @@ client sees a generic 500, and the path is in the logs and, in development, in
 
 ## ZEN_RESPONSE_INVALID
 
-A response's value does not match the schema its status declares, and
+**500.** A response's value does not match the schema its status declares, and
 response validation is `'error'` (§11.5) — the default in development. A
 `string` where the schema says `number`, an enum member that is not one, a
 `minLength` the value falls short of. It is a 500 and is never exposed: the
@@ -417,7 +417,9 @@ client is owed a working response, not a description of the bug. The issues are
 in the log line and, in development, in the problem document's `debug.meta`.
 
 Validation runs last in the epilogue, after `after` middleware and the
-`onSerialize`/`onSend` hooks, so it judges what would actually be sent. Under
+`onSerialize`/`onSend` hooks, so it judges what would actually be sent — and as
+it would be sent: undeclared fields the serializer drops are dropped first, and
+a `Date` is judged as the ISO text the client receives. Under
 `'log'` — the hardened profile's production setting — the mismatch is logged at
 `error` with this code and the response is served; `{ sample: n }` logs one
 response in `n`; `'off'` compiles nothing for it. The compiled serializer keeps

@@ -7,7 +7,7 @@
 
 # @erenthedeveloper0/zen-middleware
 
-CORS, security headers, request ids and rate limiting for
+CORS, security headers, request ids, a request log and rate limiting for
 [Zen](https://github.com/erenthedeveloper0/zen) — built so that they run on the
 requests that matter most, which are the ones most middleware never sees.
 

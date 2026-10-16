@@ -176,8 +176,9 @@ Full reasoning, including the arguments that lost, is in [ARCHITECTURE.md](./ARC
 **Alpha — `0.2.0-alpha`.** The architecture RFC is complete; the implementation is a
 working vertical slice, published on npm's `alpha` tag for feedback. Do not put this in
 production: the API will change, and several subsystems the RFC describes are not built
-(below). What *is* built has been through two pre-release audit passes that reproduced
-each defect before fixing it, and [CHANGELOG.md](./CHANGELOG.md) lists every one.
+(below). What *is* built has been through three audit passes — two before the first
+publish, one before this release's — each reproducing a defect before fixing it, and
+[CHANGELOG.md](./CHANGELOG.md) lists every one.
 
 | Package | |
 | --- | --- |
@@ -213,7 +214,7 @@ Node today; the adapter boundary is designed for Bun, Deno and the edge
 - **Plugins**: manifests, semver dependency resolution, topological ordering, cycle/conflict/capability detection — checked against what the adapter says it can do — context decorations with type accumulation, and options validated at boot before any plugin runs, so `rateLimit({ limt: 100 })` fails with *did you mean "limit"?* <!-- claim: plugins, plugin-options, adapter-caps -->
 - **DI**: typed tokens — optional ones resolve to `undefined` — three lifetimes, request-scoped services stored in the slot array and disposed at the end of the request, boot-time cycle and captive-dependency analysis; a service or slot value implementing `Symbol.dispose` or `Symbol.asyncDispose` is released through it, with no second declaration <!-- claim: di, intrinsic-dispose, optional-tokens -->
 - Standard Schema validation with normalised issues — a missing value is `required` whatever the library calls it, and `registerIssueMapper()` reads the rest from the library's own issue codes, not its (translatable) messages — and a `params` schema checked against its path at boot; RFC 9457 error envelopes, every error class with a code of its own, an abort classified by whose it was — the request's own, an upstream that timed out (503), or the application's (500) — and a formatter that keeps failing answered by a circuit breaker rather than a `fatal` per request <!-- claim: issue-codes, validation-envelopes, params-mismatch, 503-code, abort-classification, formatter-breaker -->
-- **Response validation**: a response of the wrong value is refused with `ZEN_RESPONSE_INVALID` in development, logged under the hardened profile in production, and costs nothing — no emitted code — when off <!-- claim: response-validation -->
+- **Response validation**: a response of the wrong value is refused with `ZEN_RESPONSE_INVALID` in development, logged under the hardened profile in production, and costs nothing — no emitted code — when off. It judges the value as the serializer will send it, so a row with extra fields and a `Date` pass a strict schema the bytes on the wire satisfy <!-- claim: response-validation -->
 - **Coercion profiles**: `?page=2` is a `number` because the schema says `number` — schema-guided, so `?sku=00713` stays a string, and a source with nothing to convert emits no code <!-- claim: coercion -->
 - **Configuration**: layered resolution that keeps the *provenance* of every value, a schema-validated environment checked before any plugin's `setup` runs, typed `app.config` / `ctx.config`, and secrets that redact themselves when serialised <!-- claim: config -->
 - **Request policy is configuration**: the deadline, body limits, proxy trust, redirect allowlist and ingress limits are read from the configuration with a source each, and `zen({ profile: 'hardened' })` is a named source of production values <!-- claim: request-policy -->
@@ -254,26 +255,31 @@ both. Where a measurement came out worse than the claim, the claim was corrected
 §1.4 makes a falsifiable prediction: Zen's per-request work should be within noise of a
 hand-written `http.createServer` handler doing the same job, *"and if that is not true in
 benchmarks, the thesis has failed and we should say so."* So: it is not true yet. On Annex C's
-first six workloads (`benchmarks/competitors`), Zen serves about 0.8× of the hand-written
-baseline wherever no I/O hides the difference, where Fastify serves about 1.0×:
+first six workloads (`benchmarks/competitors`), Zen serves 0.89–0.96× of the hand-written
+baseline wherever no I/O hides the difference — up from about 0.8× before this release — where
+Fastify serves about 1.0×:
 
-| Workload — fraction of `node:http` | Zen, alpha.4 | **Zen** | Fastify | Hono | Express |
+| Workload — fraction of `node:http` | Zen, alpha.5 | **Zen** | Fastify | Hono | Express |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1. Static JSON, no schema | 0.81× | **0.82×** | 1.02× | 0.97× | 0.60× |
-| 2. JSON with a response schema | 0.83× | **0.82×** | 0.82× | 0.92× | 0.60× |
-| 3. A route with 5 path params | 0.82× | **0.79×** | 1.03× | 0.96× | 0.60× |
-| 4. POST + body validation (Zod), ~1 KB | 0.49× | **0.79×** | 0.96× | 0.93× | 0.67× |
-| 5. 10 middleware | 0.80× | **0.80×** | 0.99× | 0.83× | 0.58× |
-| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 0.94× | **0.98×** | 1.01× | 1.05× | 0.95× |
+| 1. Static JSON, no schema | 0.82× | **0.96×** | 0.84× | 0.93× | 0.65× |
+| 2. JSON with a response schema | 0.82× | **0.91×** | 1.04× | 0.96× | 0.66× |
+| 3. A route with 5 path params | 0.79× | **0.95×** | 0.98× | 0.93× | 0.62× |
+| 4. POST + body validation (Zod), ~1 KB | 0.79× | **0.89×** | 0.96× | 0.95× | 0.70× |
+| 5. 10 middleware | 0.80× | **0.94×** | 1.00× | 0.81× | 0.63× |
+| 6. Realistic: JWT, rate limit, Zod, 5 ms DB, ~2 KB out | 0.98× | **1.01×** | 1.00× | 1.06× | 0.93× |
 
-The table is `0.1.0-alpha.5`'s. The POST workload was 0.49× until that release stopped running a
-reviver over every JSON body; the same ~20% everywhere else suggests a cost every request pays
-rather than any one feature. `0.2.0-alpha` added nothing to the request path, and its release
-run measured the same: 0.79–0.83× without I/O, Fastify 0.97–1.03×.
+The table is `0.2.0-alpha`'s, from its release gate. Through `0.1.0-alpha.5` Zen sat at ~0.8× on
+every workload without I/O — the same on static JSON as through ten middleware, so a cost every
+request paid rather than any one feature (the POST workload was 0.49× until `0.1.0-alpha.5`
+stopped running a reviver over every JSON body). A profile found it on the way out: every JSON
+body was encoded to bytes and written as a second buffer beside the head, where a string goes
+out with the head in one write. Three changes to the response path took it out (CHANGELOG) —
+paired against the same tree without them, 10–14% more requests a second without I/O.
 [`benchmarks/results/competitors.md`](./benchmarks/results/competitors.md) has every cell, the
 run after each fix, and what the method is not — one laptop, 10-second runs, the load
-generator on the same machine. (Fastify's 0.82× on workload 2 is that run's outlier; re-run
-alone it measured 1.02×, and the page shows both.)
+generator on the same machine. This run was also on battery, and some cells spread ±10–16%:
+Fastify's 0.84× on workload 1 is its outlier (1.00–1.02× in the two runs before it), and Zen's
+own workload-2 cell is one of the wide ones.
 
 ### The M2 type-performance gate — passed
 
@@ -304,7 +310,7 @@ Speed is the secondary benefit, and the RFC's original "2–5× faster than `JSO
 | nested object + arrays | **1.3×** | 4.0× |
 | string-heavy (escapes) | **1.7×** | 2.2× |
 
-On *identical work* it is **1.2–2.1×**. The bigger numbers come from skipping fields, which is real but is partly doing less work rather than doing the same work faster. V8's `JSON.stringify` is a tuned C++ path; [§13.3.2](./ARCHITECTURE.md#1332-measured-throughput) has the full account, including the two measurements that changed the implementation.
+On *identical work* it is **1.2–2.1×** (Node 26; re-run on 2026-10-15, 1.2–2.2× there and 1.1–2.5× on Node 24 — the range moves with V8's own `JSON.stringify`). The bigger numbers come from skipping fields, which is real but is partly doing less work rather than doing the same work faster. V8's `JSON.stringify` is a tuned C++ path; [§13.3.2](./ARCHITECTURE.md#1332-measured-throughput) has the full account, including the two measurements that changed the implementation.
 
 ### Documentation that cannot drift
 
@@ -874,6 +880,9 @@ Measured (`node benchmarks/refusals/run.ts`, paired arms, one machine):
 | 404, no route | 10.0 µs — 5.6× a served 200 | **4.2 µs — 2.3×** |
 | 405, wrong method | 10.6 µs — 5.7× | **4.7 µs — 2.6×** |
 | 406, `Accept: application/pdf` | 17.5 µs — 9.5× | **6.4 µs — 3.6×** |
+
+Re-measured in `0.2.0-alpha`: 3.8, 4.2 and 5.1 µs — no dearer than above, and now 4.6–6.1× a served
+200, because a served request itself fell to ~0.84 µs in process.
 | 404 thrown by a handler (keeps its stack) | 15.4 µs | **10.8 µs** |
 
 The CI gate is structural, not timed: it fails if a framework refusal captures a
@@ -1034,9 +1043,9 @@ built in `0.1.0-alpha.4`.
 git clone https://github.com/erenthedeveloper0/zen.git && cd zen
 npm ci
 npm run typecheck                  # builds every package (tsc -b)
-npm test                           # 1,253 tests
+npm test                           # 1,508 tests
 node scripts/smoke.ts              # 80 checks over a real socket
-node scripts/negative-controls.ts  # break 129 things on purpose; every suite must notice
+node scripts/negative-controls.ts  # break 190 things on purpose; every suite must notice
 node scripts/claims.ts             # every "Working today" bullet, probed against the build
 node scripts/check-strata.ts       # no import in core points up a stratum
 node scripts/check-regex.ts        # no regex in framework source can backtrack without bound
@@ -1127,7 +1136,7 @@ stripping, which is unflagged from 22.18, with no bundler. The published package
 | `html.test.ts` | Every position a hole can take — escaped in content and in both quotes, a `javascript:` URL replaced in every spelling a browser accepts, a `<script src>` held to the origin, and each position escaping cannot fix refused on the first render — plus a `SafeHtml` no JSON body or borrowed prototype can forge, and the templates HTML and SVG would read differently refused. Then property suites judged by the WHATWG URL parser, a grammar for escaped text, and **parse5** — a spec-conformant HTML parser that parses 2,000 random pages, fragments nested in fragments, and reports where every value landed. None shares code with the tag |
 | `redirect.test.ts` | Paths, queries and fragments sent; every spelling that has slipped past a regex refused (`//`, `/\`, a tab, a leading space, `https:host`, userinfo); the allowlist's look-alikes refused; a malformed allowlist entry a boot error with the spelling that would match — and a real differential: the reference scanner against the WHATWG URL parser over 2,000 random targets, with its coverage asserted |
 | `url.test.ts` | A value encoded as one segment whatever it holds; a number, a bigint and a `Date` written the way their routes read them back; `.`, `..`, empty values, objects and lone surrogates refused; each way one route outranks another — a static segment, a typed parameter, anything over a wildcard — refused with the winner named; the query written in the route's own list style; reachable from a collection and a plugin. Then a property suite: 2,000 links from hostile values over a table of shadowing traps, put through the WHATWG URL parser the way a browser treats an `href` and sent to the app, which must answer on the named route with the values given — coverage asserted per kind of refusal |
-| `scripts/negative-controls.ts` | That the suites above are load-bearing. A hundred and twenty-nine known defects patched in one at a time; each must make its named suite — or, for the strata, regex and claims checks, its script — **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
+| `scripts/negative-controls.ts` | That the suites above are load-bearing. A hundred and ninety known defects patched in one at a time; each must make its named suite — or, for the strata, regex and claims checks, its script — **fail**. It caught a fuzzer asserting on a branch its generator never produced, a test aimed at a code path that could not reach the behaviour it claimed to cover, a guard proven unreachable — and a test that probed for a free port with the very call it was testing, so the defect and the probe agreed |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./.github/images/image-01.png">
@@ -1142,7 +1151,7 @@ packages/
   router/          compiled + interpreted radix routers, conflict analysis
   adapter-node/    the optimised Node path
   openapi/         AppGraph → OAS 3.1, $ref dedup, diffing, viewer
-  middleware/      cors · securityHeaders · requestId · rateLimit + the Store seam
+  middleware/      cors · securityHeaders · requestId · requestLog · rateLimit + the Store seam
   zen/             meta-package: wires core + router + adapter + middleware
 examples/
   hello-world/     routing, slots, the three middleware forms, a response schema, streaming
@@ -1156,7 +1165,8 @@ examples/
   middleware/      a browser-facing API: preflights, 429s browsers can read, pages that escape and link
   negotiation/     one resource in three representations, and the encoder seam
 benchmarks/        serializer, OpenAPI, hook, deadline, health, coercion, config,
-                   middleware, negotiation, refusal, request-path, injection and URL cost; the M2 gate
+                   middleware, negotiation, refusal, request-path, injection, URL and boot cost;
+                   the M2 gate; Zen against node:http, Fastify, Hono and Express
 scripts/           smoke test, negative controls, codegen inspectors, and release
                    tooling: version.ts, check-release.ts, check-pack.ts
 docs/errors.md     every error code — where each problem document's `type` points
