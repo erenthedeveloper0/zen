@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@erenthedeveloper0/zen": "0.2.0-alpha",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "scripts": {
     "start": "node src/main.ts",
