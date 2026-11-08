@@ -73,7 +73,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
-    "parse5": "^8.0.1",
+    "parse5": "^8.1.0",
     "typescript": "^5.9.2"
   }
 }
